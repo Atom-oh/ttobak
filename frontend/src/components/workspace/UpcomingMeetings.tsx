@@ -11,7 +11,8 @@ import { internalEventsToggleLabel, partitionCustomerEvents, readInternalEventsC
 import { SpecReqStateBadge, SpecReqTasks, type SpecReqTasksProps } from '@/components/workspace/SpecReqTasks';
 import { calendarApi } from '@/lib/api';
 import {
-  SHARING_COPY, accountLabel, orderAccountChoices, sharingActions, sharingBadge,
+  SHARING_COPY, accountLabel, applySharingOverlay, orderAccountChoices, recordSharingOverlay, sharingActions, sharingBadge,
+  type SharingOverlay,
 } from '@/lib/calendarSharing';
 
 export interface UpcomingMeetingsProps {
@@ -52,7 +53,7 @@ export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight, ac
   const specReq = useSpecReqTasks({ accountId, highlight });
   const { userId } = calendar;
   const [directory, setDirectory] = useState<CalendarShareDirectoryAccount[]>([]);
-  const [replaced, setReplaced] = useState<CalendarEvent[]>([]);
+  const [overlay, setOverlay] = useState<SharingOverlay[]>([]);
   const [sharingError, setSharingError] = useState<string | null>(null);
   useEffect(() => {
     if (!userId) return;
@@ -62,12 +63,12 @@ export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight, ac
       .catch(() => { /* Without a directory, account names fall back to IDs and assignment is hidden. */ });
     return () => controller.abort();
   }, [userId]);
-  const events = calendar.events.map(event => replaced.find(next => next.eventId === event.eventId && next.sourceId === event.sourceId) ?? event);
+  const events = applySharingOverlay(calendar.events, overlay);
   const onSharing = async (event: CalendarEvent, request: CalendarSharingRequest) => {
     setSharingError(null);
     try {
       const updated = await calendarApi.setSharing(event.sourceId, event.eventId, request, { expectedUserId: userId });
-      setReplaced(previous => [...previous.filter(item => item.eventId !== updated.eventId || item.sourceId !== updated.sourceId), updated]);
+      setOverlay(previous => recordSharingOverlay(calendar.events, previous, updated));
     } catch {
       setSharingError(SHARING_COPY.actionError);
     }

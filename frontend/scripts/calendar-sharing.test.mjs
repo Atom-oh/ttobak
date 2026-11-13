@@ -52,3 +52,22 @@ test('replaceEvent swaps by id and copy is defined once', () => {
   assert.equal(helpers.sharedByLabel(3), '3명이 공유');
   assert.ok(helpers.SHARING_COPY.assign && helpers.SHARING_COPY.unshare && helpers.SHARING_COPY.reset);
 });
+
+test('sharing overlay applies only while the replaced event object is current', () => {
+  const loaded = [event({}), event({ eventId: 'e2' })];
+  const shared = event({ shareAccountId: 'a1', sharingMode: 'account' });
+  let overlay = helpers.recordSharingOverlay(loaded, [], shared);
+  assert.equal(helpers.applySharingOverlay(loaded, overlay)[0], shared);
+  assert.equal(helpers.applySharingOverlay(loaded, overlay)[1], loaded[1]);
+  // Paging appends but keeps the loaded objects, so the response still shows.
+  const paged = [...loaded, event({ eventId: 'e3' })];
+  assert.equal(helpers.applySharingOverlay(paged, overlay)[0], shared);
+  // A reload returns new objects: the fresh row wins, even with a stale shared response.
+  const reloaded = [event({ title: 'Renamed', private: true }), event({ eventId: 'e2' })];
+  assert.equal(helpers.applySharingOverlay(reloaded, overlay)[0], reloaded[0]);
+  // A later response replaces the earlier one and drops entries no longer loaded.
+  overlay = helpers.recordSharingOverlay(reloaded, overlay, event({ title: 'Renamed', sharingMode: 'hidden' }));
+  assert.equal(overlay.length, 1);
+  assert.equal(overlay[0].base, reloaded[0]);
+  assert.equal(helpers.recordSharingOverlay(reloaded, overlay, event({ eventId: 'gone' })).length, 1);
+});

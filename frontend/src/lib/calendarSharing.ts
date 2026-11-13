@@ -61,4 +61,26 @@ export function replaceEvent(events: CalendarEvent[], next: CalendarEvent): Cale
   return events.map(event => event.eventId === next.eventId && event.sourceId === next.sourceId ? next : event);
 }
 
+/** A sharing response shown in place of the loaded event it replaced. */
+export interface SharingOverlay { base: CalendarEvent; updated: CalendarEvent }
+
+/** True when two events name the same source occurrence. */
+const sameEvent = (a: CalendarEvent, b: CalendarEvent) => a.eventId === b.eventId && a.sourceId === b.sourceId;
+
+/**
+ * Shows each sharing response only while the exact loaded event object it replaced is
+ * still current. A reload (retry, membership change, window rollover) yields new objects,
+ * so fresh server data always wins over an earlier response; paging keeps the objects.
+ */
+export function applySharingOverlay(events: CalendarEvent[], overlay: SharingOverlay[]): CalendarEvent[] {
+  return events.map(event => overlay.find(entry => entry.base === event)?.updated ?? event);
+}
+
+/** Records a response for the loaded event it answers, dropping entries no longer current. */
+export function recordSharingOverlay(events: CalendarEvent[], overlay: SharingOverlay[], updated: CalendarEvent): SharingOverlay[] {
+  const kept = overlay.filter(entry => events.includes(entry.base) && !sameEvent(entry.base, updated));
+  const base = events.find(event => sameEvent(event, updated));
+  return base ? [...kept, { base, updated }] : kept;
+}
+
 export const sharedByLabel = (count: number) => `${count}명이 공유`;
