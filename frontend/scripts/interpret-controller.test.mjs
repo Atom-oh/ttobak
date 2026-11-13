@@ -345,3 +345,47 @@ test('dispose stops a running session', async () => {
   assert.equal(h.sessions[0].stopped, true);
   assert.equal(h.calls.stopCapture, 2);
 });
+
+test('an automatic end shows stopping until the capture stopped, and cannot overwrite a newer session', async () => {
+  const gate = deferred();
+  let stops = 0;
+  const h = harness({ stopCapture: async () => { stops++; if (stops === 2) await gate.promise; } });
+  await started(h);
+  h.sessions[0].handlers.onTranscript();
+  h.timers.advance(600_000);
+  await settle();
+  assert.equal(h.state().phase, 'stopping', 'the idle stop is still waiting for the Mac app');
+  await h.controller.stop();
+  await h.controller.start();
+  await settle();
+  assert.equal(h.state().phase, 'stopping', 'Stop and Start do nothing while an end is in progress');
+  assert.equal(h.calls.startCapture, 1);
+  gate.resolve();
+  await settle();
+  assert.equal(h.state().phase, 'idle');
+  assert.equal(h.state().notice, M.idleStopped);
+  await h.controller.start();
+  await settle();
+  assert.equal(h.state().phase, 'running');
+  assert.equal(h.calls.startCapture, 2);
+});
+
+test('the reconnecting notice does not outlive the session', async () => {
+  const h = await started(harness());
+  h.sessions[0].handlers.onTranscript();
+  h.sessions[0].handlers.onUnavailable();
+  assert.equal(h.state().notice, M.reconnecting);
+  await h.controller.stop();
+  assert.equal(h.state().notice, null);
+
+  const failed = await started(harness());
+  failed.sessions[0].handlers.onTranscript();
+  failed.sessions[0].handlers.onUnavailable();
+  for (const delay of [1000, 2000, 4000]) {
+    failed.timers.advance(delay);
+    failed.sessions.at(-1).handlers.onUnavailable();
+  }
+  await settle();
+  assert.equal(failed.state().error, M.reconnectFailed);
+  assert.equal(failed.state().notice, null);
+});

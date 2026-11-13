@@ -44,7 +44,9 @@
   Nothing is written, and path-based code (status, upload, cleanup, leftover
   adoption, meeting detection) does not see it as a recording. A recording
   start stops it first; `sleep.rs` stops it at will-sleep; the updater treats
-  it as busy; it holds its own idle-sleep assertion. `stop_listening` only
+  it as busy; it holds its own idle-sleep assertion. Listening starts and
+  stops run one at a time (`listening_lifecycle`), so a stop waits for a
+  start still in flight and then stops the session it installed. `stop_listening` only
   stops capture: the zero-sample check above is a recording check and does
   not apply. The `/interpret` screen stops a session after 10 minutes with no
   recognized speech, because nothing else ends it while it keeps the Mac

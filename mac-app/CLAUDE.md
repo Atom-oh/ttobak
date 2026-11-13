@@ -172,7 +172,8 @@ ACL for every command called from the remote SPA: each command must be listed in
 - A listening session (`start_listening`) shares the recorder slot with
   recordings, so the two never capture together. It has no path and writes no
   file: it is never a recording for status, upload, cleanup, leftover adoption
-  or meeting detection. `start_recording` stops it first, `sleep.rs` stops it
+  or meeting detection. Its starts and stops are serialized, so a stop never
+  misses a start in flight. `start_recording` stops it first, `sleep.rs` stops it
   at will-sleep, and the updater treats it as busy.
 - Graceful exit finalizes capture. Force Quit/SIGKILL cannot run that callback;
   periodic WAV flush checkpoints and startup recovery limit damage instead.

@@ -290,7 +290,7 @@ export class InterpretController<Config, Entry extends InterpretEntry, Input> {
 
   /** Stop everything this run owns. Safe in any phase and safe to repeat. */
   private async end(outcome: { error?: string; notice?: string }, stopCapture: boolean): Promise<void> {
-    this.run += 1;
+    const ending = ++this.run;
     if (this.reconnectTimer !== null) this.timers.clear(this.reconnectTimer);
     this.reconnectTimer = null;
     this.clearGrace();
@@ -305,13 +305,20 @@ export class InterpretController<Config, Entry extends InterpretEntry, Input> {
     const wasCapturing = this.capturing;
     this.capturing = false;
     if (stopCapture && wasCapturing) {
+      // Until the Mac app has stopped, the screen is neither running nor
+      // idle: `stopping` keeps Stop and Start from acting on a capture that
+      // is on its way out.
+      this.update({ phase: 'stopping' });
       await this.deps.stopCapture().catch(() => undefined);
     }
+    // A newer run must never be reported idle by an older end.
+    if (this.run !== ending) return;
     this.update({
       phase: 'idle',
       startedAt: null,
+      // A progress notice such as "reconnecting" ends with the session.
+      notice: outcome.notice ?? null,
       ...(outcome.error ? { error: outcome.error } : {}),
-      ...(outcome.notice ? { notice: outcome.notice } : {}),
     });
   }
 
