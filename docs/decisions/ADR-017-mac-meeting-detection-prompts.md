@@ -28,8 +28,11 @@ without a user confirmation.
   own process is excluded and recorder locks are not held. The default input
   device's `IsRunningSomewhere` is not used: Zoom was observed capturing from a
   non-default USB microphone while that flag stayed false.
-- Input or output counts, so a listen-only participant is detected even after
-  the app or browser releases the microphone. Output-only browser audio checks
+- Input or output counts, so a listen-only participant stays detected after
+  the app or browser releases the microphone. A native app starts or resumes a
+  detection only while it captures input: its output alone is also its
+  notification and calendar reminder sounds (Zoom announced a meeting for an
+  Outlook reminder). Output-only browser audio checks
   tabs only for a browser whose tab script already succeeded in this run, so a
   video never raises the first Automation prompt.
 - Native meeting apps (Zoom including its capture host, Teams, Webex, Slack,
