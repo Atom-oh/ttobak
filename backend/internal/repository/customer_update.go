@@ -20,11 +20,20 @@ import (
 type CustomerUpdateRepository struct {
 	client    *dynamodb.Client
 	tableName string
+	// now is the clock used for TTL defaults and expired-row conditions.
+	now func() time.Time
 }
 
 // NewCustomerUpdateRepository creates a CustomerUpdateRepository.
 func NewCustomerUpdateRepository(client *dynamodb.Client, tableName string) *CustomerUpdateRepository {
-	return &CustomerUpdateRepository{client: client, tableName: tableName}
+	return &CustomerUpdateRepository{client: client, tableName: tableName, now: time.Now}
+}
+
+func (r *CustomerUpdateRepository) clock() time.Time {
+	if r.now == nil {
+		return time.Now().UTC()
+	}
+	return r.now().UTC()
 }
 
 const customerUpdateTTLAttribute = "pendingShareExpiresAt"
@@ -77,6 +86,27 @@ func isConditionFailed(err error) bool {
 func absentCondition() (expression.Expression, error) {
 	return expression.NewBuilder().
 		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).Build()
+}
+
+// absentOrExpiredCondition allows a create when the row is absent or is a TTL
+// row already past its expiry that the table sweeper has not deleted yet.
+func absentOrExpiredCondition(now time.Time) (expression.Expression, error) {
+	cond := expression.AttributeNotExists(expression.Name("PK")).
+		Or(expression.Name(customerUpdateTTLAttribute).LessThanEqual(expression.Value(now.Unix())))
+	return expression.NewBuilder().WithCondition(cond).Build()
+}
+
+func putIfAbsentOrExpired(tableName string, av map[string]types.AttributeValue, now time.Time) (*dynamodb.PutItemInput, error) {
+	cond, err := absentOrExpiredCondition(now)
+	if err != nil {
+		return nil, err
+	}
+	return &dynamodb.PutItemInput{
+		TableName: aws.String(tableName), Item: av,
+		ConditionExpression:       cond.Condition(),
+		ExpressionAttributeNames:  cond.Names(),
+		ExpressionAttributeValues: cond.Values(),
+	}, nil
 }
 
 func ttlOrDefault(expiresAt int64, now time.Time, ttl time.Duration) int64 {
@@ -224,15 +254,11 @@ func itemPutInput(tableName, userID string, it *model.UpdateItem, now time.Time)
 	} else {
 		delete(av, "sourceIds")
 	}
-	cond, err := absentCondition()
+	in, err := putIfAbsentOrExpired(tableName, av, now)
 	if err != nil {
 		return nil, fmt.Errorf("build create-item condition: %w", err)
 	}
-	return &dynamodb.PutItemInput{
-		TableName: aws.String(tableName), Item: av,
-		ConditionExpression:      cond.Condition(),
-		ExpressionAttributeNames: cond.Names(),
-	}, nil
+	return in, nil
 }
 
 // itemAddSourceExpression adds one source ID to an existing item's set.
@@ -247,7 +273,7 @@ func itemAddSourceExpression(sourceID string) (expression.Expression, error) {
 // SourceIDs set; such an item is not counted.
 func (r *CustomerUpdateRepository) PutItemsIfAbsent(ctx context.Context, userID, sourceID string, items []model.UpdateItem) (int, error) {
 	created := 0
-	now := time.Now().UTC()
+	now := r.clock()
 	for i := range items {
 		it := items[i]
 		it.SourceIDs = []string{sourceID}
@@ -295,21 +321,17 @@ func urlPendingInput(tableName, urlHash, url string, now time.Time) (*dynamodb.P
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal update url: %w", err)
 	}
-	cond, err := absentCondition()
+	in, err := putIfAbsentOrExpired(tableName, av, now)
 	if err != nil {
 		return nil, fmt.Errorf("build create-url condition: %w", err)
 	}
-	return &dynamodb.PutItemInput{
-		TableName: aws.String(tableName), Item: av,
-		ConditionExpression:      cond.Condition(),
-		ExpressionAttributeNames: cond.Names(),
-	}, nil
+	return in, nil
 }
 
 // EnsureURLPending creates the shared URL cache row as pending when absent; an
 // existing row is left unchanged.
 func (r *CustomerUpdateRepository) EnsureURLPending(ctx context.Context, urlHash, url string) error {
-	in, err := urlPendingInput(r.tableName, urlHash, url, time.Now())
+	in, err := urlPendingInput(r.tableName, urlHash, url, r.clock())
 	if err != nil {
 		return err
 	}
@@ -338,17 +360,20 @@ func (r *CustomerUpdateRepository) MarkPending(ctx context.Context, userID strin
 }
 
 func draftRow(userID string, d *model.UpdateDraft) updateDraftRow {
-	return updateDraftRow{
+	row := updateDraftRow{
 		customerUpdateKeys: customerUpdateKeys{
 			PK: model.PrefixUser + userID, SK: model.UpdateDraftSK(d.AccountID, d.URLHash), EntityType: "UPDATE_DRAFT",
 		},
 		UpdateDraft: *d,
 	}
+	row.NormalizeSlices()
+	return row
 }
 
-// PutDraftIfAbsent creates a draft; an existing (account, URL) draft returns ErrConditionFailed.
-func (r *CustomerUpdateRepository) PutDraftIfAbsent(ctx context.Context, userID string, d *model.UpdateDraft) error {
-	now := time.Now().UTC()
+// draftPutInput builds the create-if-absent write for a draft. Nil
+// opportunities and links are stored as empty lists, never NULL. The caller's
+// draft is not mutated.
+func draftPutInput(tableName, userID string, d *model.UpdateDraft, now time.Time) (*dynamodb.PutItemInput, error) {
 	row := draftRow(userID, d)
 	row.ExpiresAt = ttlOrDefault(row.ExpiresAt, now, model.UpdateDraftTTL)
 	if row.Status == "" {
@@ -356,17 +381,23 @@ func (r *CustomerUpdateRepository) PutDraftIfAbsent(ctx context.Context, userID 
 	}
 	av, err := attributevalue.MarshalMap(row)
 	if err != nil {
-		return fmt.Errorf("failed to marshal update draft: %w", err)
+		return nil, fmt.Errorf("failed to marshal update draft: %w", err)
 	}
-	cond, err := absentCondition()
+	in, err := putIfAbsentOrExpired(tableName, av, now)
 	if err != nil {
-		return fmt.Errorf("build create-draft condition: %w", err)
+		return nil, fmt.Errorf("build create-draft condition: %w", err)
 	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName), Item: av,
-		ConditionExpression:      cond.Condition(),
-		ExpressionAttributeNames: cond.Names(),
-	})
+	return in, nil
+}
+
+// PutDraftIfAbsent creates a draft; an existing, unexpired (account, URL) draft
+// returns ErrConditionFailed.
+func (r *CustomerUpdateRepository) PutDraftIfAbsent(ctx context.Context, userID string, d *model.UpdateDraft) error {
+	in, err := draftPutInput(r.tableName, userID, d, r.clock())
+	if err != nil {
+		return err
+	}
+	_, err = r.client.PutItem(ctx, in)
 	if err != nil {
 		if isConditionFailed(err) {
 			return fmt.Errorf("%w: update draft already exists", ErrConditionFailed)
@@ -449,12 +480,19 @@ func (r *CustomerUpdateRepository) ListDrafts(ctx context.Context, userID, accou
 // draftRevisionUpdate builds the optimistic update: the row must exist with
 // revision = expected, and revision becomes expected+1.
 func draftRevisionUpdate(d *model.UpdateDraft, expected int) (expression.Expression, error) {
+	opportunities, links := d.Opportunities, d.Links
+	if opportunities == nil {
+		opportunities = []model.UpdateDraftOppty{}
+	}
+	if links == nil {
+		links = []string{}
+	}
 	update := expression.Set(expression.Name("revision"), expression.Value(expected+1)).
 		Set(expression.Name("body"), expression.Value(d.Body)).
 		Set(expression.Name("editedBody"), expression.Value(d.EditedBody)).
 		Set(expression.Name("why"), expression.Value(d.Why)).
-		Set(expression.Name("opportunities"), expression.Value(d.Opportunities)).
-		Set(expression.Name("links"), expression.Value(d.Links)).
+		Set(expression.Name("opportunities"), expression.Value(opportunities)).
+		Set(expression.Name("links"), expression.Value(links)).
 		Set(expression.Name("status"), expression.Value(d.Status)).
 		Set(expression.Name("dismissReason"), expression.Value(d.DismissReason)).
 		Set(expression.Name("runId"), expression.Value(d.RunID)).

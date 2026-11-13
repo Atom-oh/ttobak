@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -195,15 +198,19 @@ func (s *CustomerUpdateService) UploadLinks(ctx context.Context, userID string, 
 	if err != nil {
 		return nil, err
 	}
-	found := false
-	for _, src := range sources {
-		if src.SourceID == req.SourceID && src.Kind == model.UpdateSourceKindSlack {
-			found = true
+	var source *model.UpdateSource
+	for i := range sources {
+		if sources[i].SourceID == req.SourceID && sources[i].Kind == model.UpdateSourceKindSlack {
+			source = &sources[i]
 			break
 		}
 	}
-	if !found {
+	if source == nil {
 		return nil, ErrNotFound
+	}
+	// A paused source accepts no links; the client must resume it first.
+	if source.Status == model.UpdateSourceDisabled {
+		return nil, ErrConflict
 	}
 
 	resp := &model.UploadUpdateLinksResponse{}
@@ -268,16 +275,24 @@ func updateExpired(expiresAt int64, now time.Time) bool {
 	return expiresAt != 0 && expiresAt <= now.Unix()
 }
 
-// ListDrafts returns one page of drafts. With an account ID the caller must be
-// a direct member; without one, drafts of accounts the caller no longer belongs
-// to are dropped (one membership check per distinct account). Drafts past
-// their expiry are dropped even if TTL deletion has not run yet.
+// ListDrafts returns one page of the caller's drafts for one account (the
+// caller must be a direct member) or for all accounts. It reads up to
+// model.MaxUpdateDraftsScan rows by following repository pages, drops drafts
+// past their expiry (even before TTL deletion) and drafts of accounts the
+// caller no longer directly belongs to (one membership check per distinct
+// account), orders open drafts first, then newest CreatedAt first (ties by
+// urlHash, then accountId), and pages that list in memory. The cursor is an
+// opaque offset; a malformed or out-of-range cursor returns ErrInvalidInput.
 func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountID string, limit int, cursor string) (*model.UpdateDraftsPage, error) {
 	if limit < 1 {
 		limit = defaultUpdateDraftLim
 	}
 	if limit > maxUpdateDraftLimit {
 		limit = maxUpdateDraftLimit
+	}
+	offset, err := decodeDraftOffset(cursor)
+	if err != nil {
+		return nil, err
 	}
 	allowed := map[string]bool{}
 	if accountID != "" {
@@ -286,13 +301,13 @@ func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountI
 		}
 		allowed[accountID] = true
 	}
-	drafts, next, err := s.repo.ListDrafts(ctx, userID, accountID, limit, cursor)
+	rows, err := s.scanDrafts(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
-	out := make([]model.UpdateDraft, 0, len(drafts))
-	for _, d := range drafts {
+	visible := make([]model.UpdateDraft, 0, len(rows))
+	for _, d := range rows {
 		if updateExpired(d.ExpiresAt, now) {
 			continue
 		}
@@ -310,10 +325,88 @@ func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountI
 			allowed[d.AccountID] = ok
 		}
 		if ok {
-			out = append(out, d)
+			d.NormalizeSlices()
+			visible = append(visible, d)
 		}
 	}
-	return &model.UpdateDraftsPage{Drafts: out, NextCursor: next}, nil
+	sortUpdateDrafts(visible)
+
+	if offset > len(visible) {
+		return nil, ErrInvalidInput
+	}
+	end := offset + limit
+	if end > len(visible) {
+		end = len(visible)
+	}
+	page := &model.UpdateDraftsPage{Drafts: append([]model.UpdateDraft{}, visible[offset:end]...)}
+	if end < len(visible) {
+		page.NextCursor = encodeDraftOffset(end)
+	}
+	return page, nil
+}
+
+// scanDrafts follows repository pages until the scope is drained or
+// model.MaxUpdateDraftsScan rows have been read.
+func (s *CustomerUpdateService) scanDrafts(ctx context.Context, userID, accountID string) ([]model.UpdateDraft, error) {
+	var out []model.UpdateDraft
+	next := ""
+	for {
+		rows, cursor, err := s.repo.ListDrafts(ctx, userID, accountID, model.MaxUpdateDraftsScan-len(out), next)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if len(out) >= model.MaxUpdateDraftsScan {
+			return out[:model.MaxUpdateDraftsScan], nil
+		}
+		if cursor == "" || cursor == next {
+			return out, nil
+		}
+		next = cursor
+	}
+}
+
+// sortUpdateDrafts orders open drafts first, then CreatedAt descending, then
+// urlHash and accountId ascending so equal timestamps order deterministically.
+func sortUpdateDrafts(drafts []model.UpdateDraft) {
+	sort.SliceStable(drafts, func(i, j int) bool {
+		a, b := drafts[i], drafts[j]
+		if ao, bo := a.Status == model.UpdateDraftNew, b.Status == model.UpdateDraftNew; ao != bo {
+			return ao
+		}
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.After(b.CreatedAt)
+		}
+		if a.URLHash != b.URLHash {
+			return a.URLHash < b.URLHash
+		}
+		return a.AccountID < b.AccountID
+	})
+}
+
+// encodeDraftOffset renders a list offset as an opaque cursor.
+func encodeDraftOffset(offset int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+}
+
+// decodeDraftOffset parses a cursor from encodeDraftOffset; "" is offset 0.
+// Anything that is not a canonical non-negative decimal returns ErrInvalidInput.
+func decodeDraftOffset(cursor string) (int, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	if len(cursor) > 16 {
+		return 0, ErrInvalidInput
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return 0, ErrInvalidInput
+	}
+	n, err := strconv.Atoi(string(raw))
+	if err != nil || n < 0 || strconv.Itoa(n) != string(raw) {
+		return 0, ErrInvalidInput
+	}
+	return n, nil
 }
 
 // PatchDraft applies one action (edit, adopt, dismiss, reopen) at the caller's
@@ -374,6 +467,7 @@ func (s *CustomerUpdateService) PatchDraft(ctx context.Context, userID, accountI
 		return nil, err
 	}
 	next.Revision = req.Revision + 1
+	next.NormalizeSlices()
 	return &next, nil
 }
 

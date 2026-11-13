@@ -1776,12 +1776,23 @@ qualify).
 | `PATCH /api/customer-updates/drafts/{accountId}/{urlHash}` | 16 KiB | updated draft |
 | `GET`/`PUT /api/accounts/{accountId}/customer-update-setting` | 1 KiB | `{ "enabled": bool }` |
 
-List routes take `limit` (default 30, max 50) and an opaque `cursor`. `urlHash`
-must match `^[0-9a-f]{64}$`. Bodies reject unknown fields; `PUT` requires
-`enabled`. Draft `PATCH` carries `action`, `body`, `reason` and the expected
-`revision`; a stale revision returns 409 `CONFLICT`. Invalid input returns 400,
-a missing user 401, `ErrForbidden` 403, `ErrNotFound` 404; other failures return
-a generic 500.
+The two draft list routes take `limit` (default 30, max 50) and an opaque
+`cursor`. The service reads up to `model.MaxUpdateDraftsScan` (1,000) of the
+caller's draft rows for the scope, drops expired drafts and drafts of accounts
+the caller is no longer a direct member of, and orders the rest open drafts
+(`status: "new"`) first, then newest `createdAt` first, ties by `urlHash`
+ascending. Pages are cut from that ordered list; the cursor encodes an offset
+into it. An absent cursor starts at the first draft; a cursor that does not
+decode to a non-negative offset, or lies beyond the list, returns 400.
+`nextCursor` is `""` on the last page. Drafts always carry `opportunities` and
+`links` as arrays (never `null`).
+
+`urlHash` must match `^[0-9a-f]{64}$`. Bodies reject unknown fields; `PUT`
+requires `enabled`. Uploading links for a paused (`disabled`) Slack source
+returns 409 `CONFLICT` before any write. Draft `PATCH` carries `action`, `body`,
+`reason` and the expected `revision`; a stale revision returns 409 `CONFLICT`.
+Invalid input returns 400, a missing user 401, `ErrForbidden` 403, `ErrNotFound`
+404; other failures return a generic 500.
 
 ### Staged summary-sharing privacy
 
