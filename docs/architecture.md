@@ -160,10 +160,12 @@ retired. Its data moves in a one-time cutover
    (Bedrock Luna for finals, Amazon Translate for interims and fallback) and relays
    text to bundled overlay pages. It never uses the server's `/api/translate`, so
    server limits and cost are not involved; credentials stay in Rust.
-   The Mac app's `/interpret` screen runs the same caption and server
-   translation path with no meeting: Rust captures without a file
-   (`start_listening`), `native-pcm-chunk` feeds Transcribe Streaming, and each
-   caption goes to `/api/translate`. Nothing is stored (ADR-024).
+   The Mac app's `/interpret` screen runs the same caption path with no
+   meeting: Rust captures without a file (`start_listening`),
+   `native-pcm-chunk` feeds Transcribe Streaming, and each recognized segment
+   goes to the caption windows' engines. The screen shows an in-memory copy of
+   those windows' lines and does not call `/api/translate`. Nothing is stored
+   (ADR-024).
 2. Upload audio to S3. EventBridge invokes the transcribe orchestrator, which uses
    configured Whisper ECS or AWS Transcribe fallback. Multipart completion and
    transcript uploads trigger summarization with concurrency/retry guards.
