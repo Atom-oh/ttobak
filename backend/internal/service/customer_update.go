@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log"
 	"regexp"
 	"sort"
 	"strconv"
@@ -32,6 +33,7 @@ type customerUpdateRepo interface {
 	PutSourceWithFeedSub(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) error
 	SetSourceStatusWithFeedSub(ctx context.Context, userID string, sourceID string, sub *model.UpdateFeedSub) error
 	DeleteSourceWithFeedSub(ctx context.Context, userID, sourceID, feedHash string) error
+	HealSourceFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error
 	GetFeedState(ctx context.Context, feedHash string) (*model.UpdateFeedState, error)
 	PutItemsIfAbsent(ctx context.Context, userID, sourceID string, items []model.UpdateItem) (int, error)
 	EnsureURLPending(ctx context.Context, urlHash, url string) error
@@ -128,6 +130,7 @@ func (s *CustomerUpdateService) AddSource(ctx context.Context, userID string, re
 			return nil, ErrInvalidInput
 		}
 		src.URL = normalized
+		src.FeedHash = hash
 		feedHash = hash
 	case model.UpdateSourceKindSlack:
 		if strings.TrimSpace(req.URL) != "" || !resummaryID.MatchString(req.LocalSourceID) {
@@ -169,11 +172,14 @@ func feedSubFor(src *model.UpdateSource, userID, feedHash string) *model.UpdateF
 	}
 }
 
-// feedHashOf returns the feed hash of a non-Slack source. A source whose stored
-// URL no longer normalizes has no registry row.
+// feedHashOf returns the feed hash of a non-Slack source: the stored one, else
+// one computed from the URL. A legacy URL that no longer normalizes has none.
 func feedHashOf(src *model.UpdateSource) (string, bool) {
 	if src.Kind == model.UpdateSourceKindSlack {
 		return "", false
+	}
+	if src.FeedHash != "" {
+		return src.FeedHash, true
 	}
 	_, hash, err := model.NormalizeUpdateURL(src.URL)
 	if err != nil {
@@ -196,7 +202,10 @@ func (s *CustomerUpdateService) findSource(ctx context.Context, userID, sourceID
 }
 
 // ListSources returns the user's sources. A non-Slack source whose feed keeps
-// failing carries the feed's last error as FeedError.
+// failing carries the feed's last error as FeedError; an unreadable feed state
+// omits it. A legacy non-Slack source (no stored feedHash) is healed: it gains
+// its registry row with its current status and its stored feedHash. Heal and
+// state-read failures are logged, not returned.
 func (s *CustomerUpdateService) ListSources(ctx context.Context, userID string) ([]model.UpdateSource, error) {
 	sources, err := s.repo.ListSources(ctx, userID, model.MaxUpdateSources)
 	if err != nil {
@@ -204,14 +213,26 @@ func (s *CustomerUpdateService) ListSources(ctx context.Context, userID string) 
 	}
 	out := make([]model.UpdateSource, len(sources))
 	copy(out, sources)
+	states := map[string]*model.UpdateFeedState{}
 	for i := range out {
 		hash, ok := feedHashOf(&out[i])
 		if !ok {
 			continue
 		}
-		state, err := s.repo.GetFeedState(ctx, hash)
-		if err != nil {
-			return nil, err
+		if out[i].FeedHash == "" {
+			sub := feedSubFor(&out[i], userID, hash)
+			if err := s.repo.HealSourceFeedSub(ctx, userID, out[i].SourceID, sub); err != nil {
+				log.Printf("customer update source heal failed feed=%s: %v", shortHash(hash), err)
+			}
+		}
+		state, read := states[hash]
+		if !read {
+			state, err = s.repo.GetFeedState(ctx, hash)
+			if err != nil {
+				log.Printf("customer update feed state read failed feed=%s: %v", shortHash(hash), err)
+				state = nil
+			}
+			states[hash] = state
 		}
 		if state != nil && state.Failures > 0 {
 			out[i].FeedError = state.LastError

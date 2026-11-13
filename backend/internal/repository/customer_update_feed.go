@@ -73,16 +73,23 @@ func putSourceWithFeedSubItems(tableName, userID string, s *model.UpdateSource, 
 }
 
 // setSourceStatusWithFeedSubItems builds the transaction that sets the source
-// status (the source row must exist) and upserts the full registry row, so a
-// source created before the registry existed gains its row. An existing
-// fannedAt is kept.
-func setSourceStatusWithFeedSubItems(tableName, userID, sourceID string, sub *model.UpdateFeedSub) ([]types.TransactWriteItem, error) {
+// status and feedHash (the source row must exist) and upserts the full registry
+// row, so a source created before the registry existed gains its row. An
+// existing fannedAt is kept. With heal, the status is left alone and the source
+// must still have sub.Status and no feedHash, so a concurrent change wins.
+func setSourceStatusWithFeedSubItems(tableName, userID, sourceID string, sub *model.UpdateFeedSub, heal bool) ([]types.TransactWriteItem, error) {
 	if err := validFeedSub(sub); err != nil {
 		return nil, err
 	}
-	srcExpr, err := expression.NewBuilder().
-		WithUpdate(expression.Set(expression.Name("status"), expression.Value(sub.Status))).
-		WithCondition(expression.AttributeExists(expression.Name("PK"))).Build()
+	srcUpdate := expression.Set(expression.Name("feedHash"), expression.Value(sub.FeedHash))
+	srcCond := expression.AttributeExists(expression.Name("PK"))
+	if heal {
+		srcCond = srcCond.And(expression.Name("status").Equal(expression.Value(sub.Status)),
+			expression.AttributeNotExists(expression.Name("feedHash")))
+	} else {
+		srcUpdate = srcUpdate.Set(expression.Name("status"), expression.Value(sub.Status))
+	}
+	srcExpr, err := expression.NewBuilder().WithUpdate(srcUpdate).WithCondition(srcCond).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build update-source expression: %w", err)
 	}
@@ -174,12 +181,26 @@ func (r *CustomerUpdateRepository) PutSourceWithFeedSub(ctx context.Context, use
 // its registry row; sub carries the new status. A missing source returns
 // ErrConditionFailed.
 func (r *CustomerUpdateRepository) SetSourceStatusWithFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error {
-	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub)
+	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub, false)
 	if err != nil {
 		return err
 	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		return transactCondition(err, "update source status with feed subscription", "update source not found")
+	}
+	return nil
+}
+
+// HealSourceFeedSub gives a legacy source (no stored feedHash) its registry row
+// and stores the feedHash, keeping the source's status (sub.Status). A source
+// that changed meanwhile returns ErrConditionFailed.
+func (r *CustomerUpdateRepository) HealSourceFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error {
+	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub, true)
+	if err != nil {
+		return err
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+		return transactCondition(err, "heal update source feed subscription", "update source changed")
 	}
 	return nil
 }
@@ -302,10 +323,38 @@ func selectFeedEntries(entries []model.UpdateFeedEntry, since time.Time, limit i
 	return out
 }
 
+// selectNewestFeedEntries is selectFeedEntries keeping the newest limit
+// entries instead of the oldest, still oldest first.
+func selectNewestFeedEntries(entries []model.UpdateFeedEntry, since time.Time, limit int) []model.UpdateFeedEntry {
+	out := selectFeedEntries(entries, since, -1)
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
+}
+
 // ListFeedEntries returns at most limit entries of a feed seen after since,
 // oldest first. Entry sort keys are not time ordered, so every ENTRY# row is
 // read (paginated) and filtered in memory.
 func (r *CustomerUpdateRepository) ListFeedEntries(ctx context.Context, feedHash string, since time.Time, limit int) ([]model.UpdateFeedEntry, error) {
+	all, err := r.queryFeedEntries(ctx, feedHash, limit)
+	if err != nil {
+		return nil, err
+	}
+	return selectFeedEntries(all, since, limit), nil
+}
+
+// ListNewestFeedEntries returns the newest limit entries of a feed seen after
+// since, oldest first.
+func (r *CustomerUpdateRepository) ListNewestFeedEntries(ctx context.Context, feedHash string, since time.Time, limit int) ([]model.UpdateFeedEntry, error) {
+	all, err := r.queryFeedEntries(ctx, feedHash, limit)
+	if err != nil {
+		return nil, err
+	}
+	return selectNewestFeedEntries(all, since, limit), nil
+}
+
+func (r *CustomerUpdateRepository) queryFeedEntries(ctx context.Context, feedHash string, limit int) ([]model.UpdateFeedEntry, error) {
 	if feedHash == "" || limit < 1 {
 		return nil, fmt.Errorf("feedHash and a positive limit are required")
 	}
@@ -333,7 +382,7 @@ func (r *CustomerUpdateRepository) ListFeedEntries(ctx context.Context, feedHash
 		}
 		all = append(all, rows...)
 		if len(res.LastEvaluatedKey) == 0 {
-			return selectFeedEntries(all, since, limit), nil
+			return all, nil
 		}
 		input.ExclusiveStartKey = res.LastEvaluatedKey
 	}

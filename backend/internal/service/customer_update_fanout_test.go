@@ -26,7 +26,11 @@ type fanoutMock struct {
 	markErr      error
 	fannedAt     map[string]time.Time // userID -> at
 	existingURLs map[string]bool
+	newestCalls  int
 }
+
+// fanoutUpdated is the collector's updatedAt in most tests.
+var fanoutUpdated = fanoutNow.Add(-time.Minute)
 
 func newFanoutMock() *fanoutMock {
 	return &fanoutMock{
@@ -59,6 +63,14 @@ func (m *fanoutMock) ListFeedEntries(_ context.Context, h string, since time.Tim
 	}
 	if len(out) > limit {
 		out = out[:limit]
+	}
+	return out, nil
+}
+func (m *fanoutMock) ListNewestFeedEntries(ctx context.Context, h string, since time.Time, limit int) ([]model.UpdateFeedEntry, error) {
+	m.newestCalls++
+	out, _ := m.ListFeedEntries(ctx, h, since, 1<<30)
+	if len(out) > limit {
+		out = out[len(out)-limit:]
 	}
 	return out, nil
 }
@@ -144,7 +156,7 @@ func TestFanout_DeliversAndRejects(t *testing.T) {
 	if len(m.marked) != 1 || len(m.pendingURLs) != 2 {
 		t.Fatalf("marked=%v pendingURLs=%v", m.marked, m.pendingURLs)
 	}
-	if !m.fannedAt["u1"].Equal(fanoutNow) {
+	if !m.fannedAt["u1"].Equal(fanoutUpdated) {
 		t.Fatalf("fannedAt = %v", m.fannedAt["u1"])
 	}
 }
@@ -191,7 +203,7 @@ func TestFanout_LostMarkerHealedOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Delivered != 0 || len(m.marked) != 1 || !m.fannedAt["u1"].Equal(fanoutNow) {
+	if st.Delivered != 0 || len(m.marked) != 1 || !m.fannedAt["u1"].Equal(fanoutUpdated) {
 		t.Fatalf("stats=%+v marked=%v fannedAt=%v", st, m.marked, m.fannedAt)
 	}
 }
@@ -215,7 +227,7 @@ func TestFanout_DisabledSubOnSameFeedGetsNothing(t *testing.T) {
 			t.Fatalf("disabled sub received item %s", k)
 		}
 	}
-	if st.Subs != 2 || st.Skipped != 1 || st.Delivered != 1 || !m.fannedAt["u2"].Equal(fanoutNow) {
+	if st.Subs != 2 || st.Skipped != 1 || st.Delivered != 1 || !m.fannedAt["u2"].Equal(fanoutUpdated) {
 		t.Fatalf("stats=%+v fannedAt=%v", st, m.fannedAt)
 	}
 }
@@ -234,7 +246,7 @@ func TestFanout_PutErrorKeepsFannedAtAndContinues(t *testing.T) {
 	if _, ok := m.fannedAt["u1"]; ok {
 		t.Fatal("failed subscription must keep FannedAt")
 	}
-	if !m.fannedAt["u2"].Equal(fanoutNow) || st.Delivered != 1 {
+	if !m.fannedAt["u2"].Equal(fanoutUpdated) || st.Delivered != 1 {
 		t.Fatalf("second sub not processed: %+v %v", st, m.fannedAt)
 	}
 }
@@ -356,10 +368,106 @@ func tieEntries(counts map[time.Time]int) []model.UpdateFeedEntry {
 func capSetup(es []model.UpdateFeedEntry) (*fanoutMock, model.UpdateFeedSub) {
 	m := newFanoutMock()
 	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	s.FannedAt = fanoutNow.Add(-24 * time.Hour) // a later delivery; the cap applies
 	m.pages[""] = []model.UpdateFeedSub{s}
 	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: fanoutNow.Add(-time.Minute)}
 	m.entries[s.FeedHash] = es
 	return m, s
+}
+
+func TestFanout_TickDuringCollectorWriteLosesNothing(t *testing.T) {
+	tOld, t0 := fanoutNow.Add(-2*time.Hour), fanoutNow.Add(-10*time.Minute)
+	m := newFanoutMock()
+	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	s.FannedAt = fanoutNow.Add(-3 * time.Hour)
+	m.pages[""] = []model.UpdateFeedSub{s}
+	// The collector started at t0 but has not written yet: state still says tOld.
+	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: tOld}
+	f := fanoutSvc(m)
+	if _, err := f.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !m.fannedAt["u1"].Equal(tOld) {
+		t.Fatalf("fannedAt = %v, want the state's updatedAt, not the tick", m.fannedAt["u1"])
+	}
+	// The collector now writes entries and state stamped t0 (< the first tick).
+	s.FannedAt = m.fannedAt["u1"]
+	m.pages[""] = []model.UpdateFeedSub{s}
+	m.entries[s.FeedHash] = []model.UpdateFeedEntry{fanoutEntry(1, t0, "https://example.com/late")}
+	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: t0}
+	st, err := f.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 1 || !m.fannedAt["u1"].Equal(t0) {
+		t.Fatalf("stats=%+v fannedAt=%v", st, m.fannedAt["u1"])
+	}
+}
+
+func TestFanout_FirstDeliveryTakesNewestFifty(t *testing.T) {
+	m := newFanoutMock()
+	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	m.pages[""] = []model.UpdateFeedSub{s}
+	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: fanoutUpdated}
+	base := fanoutNow.Add(-48 * time.Hour)
+	var es []model.UpdateFeedEntry
+	for i := 0; i < 120; i++ {
+		es = append(es, fanoutEntry(i, base.Add(time.Duration(i)*time.Minute), fmt.Sprintf("https://example.com/n%d", i)))
+	}
+	m.entries[s.FeedHash] = es
+	f := fanoutSvc(m)
+	st, err := f.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 50 || !m.existingURLs["u1|"+mustURLHash(t, "https://example.com/n119")] ||
+		m.existingURLs["u1|"+mustURLHash(t, "https://example.com/n69")] || !m.fannedAt["u1"].Equal(fanoutUpdated) {
+		t.Fatalf("stats=%+v fannedAt=%v", st, m.fannedAt["u1"])
+	}
+	s.FannedAt = m.fannedAt["u1"]
+	m.pages[""] = []model.UpdateFeedSub{s}
+	if st, err = f.Run(context.Background()); err != nil || st.Delivered != 0 || st.Skipped != 1 {
+		t.Fatalf("next tick: stats=%+v err=%v", st, err)
+	}
+}
+
+func TestFanout_ResumeAfterSixDaysReadsThreeDays(t *testing.T) {
+	m := newFanoutMock()
+	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	s.FannedAt = fanoutNow.Add(-6 * 24 * time.Hour)
+	m.pages[""] = []model.UpdateFeedSub{s}
+	m.states[s.FeedHash] = &model.UpdateFeedState{UpdatedAt: fanoutUpdated}
+	m.entries[s.FeedHash] = []model.UpdateFeedEntry{
+		fanoutEntry(1, fanoutNow.Add(-5*24*time.Hour), "https://example.com/old"),
+		fanoutEntry(2, fanoutNow.Add(-24*time.Hour), "https://example.com/new"),
+	}
+	st, err := fanoutSvc(m).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Delivered != 1 || !m.existingURLs["u1|"+mustURLHash(t, "https://example.com/new")] || m.newestCalls != 0 {
+		t.Fatalf("stats=%+v newest=%d", st, m.newestCalls)
+	}
+}
+
+func TestFanout_ZeroUpdatedAtSkipped(t *testing.T) {
+	m := newFanoutMock()
+	s := fanoutSub("feedaaaaaaaaaaaaaa", "u1")
+	m.pages[""] = []model.UpdateFeedSub{s}
+	m.states[s.FeedHash] = &model.UpdateFeedState{FeedHash: s.FeedHash}
+	st, err := fanoutSvc(m).Run(context.Background())
+	if err != nil || st.Skipped != 1 || len(m.fannedAt) != 0 {
+		t.Fatalf("stats=%+v err=%v fannedAt=%v", st, err, m.fannedAt)
+	}
+}
+
+func mustURLHash(t *testing.T, u string) string {
+	t.Helper()
+	_, h, err := model.NormalizeUpdateURL(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 
 func TestFanout_TieGroupSpanningCapStaysWhole(t *testing.T) {
@@ -381,7 +489,7 @@ func TestFanout_TieGroupSpanningCapStaysWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Delivered != 30 || !m.fannedAt["u1"].Equal(fanoutNow) {
+	if st.Delivered != 30 || !m.fannedAt["u1"].Equal(t2) {
 		t.Fatalf("tick 2: %+v fannedAt=%v", st, m.fannedAt["u1"])
 	}
 }

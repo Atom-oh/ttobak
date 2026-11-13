@@ -20,6 +20,7 @@ type fanoutRepo interface {
 	ListFeedSubs(ctx context.Context, cursor string, limit int) ([]model.UpdateFeedSub, string, error)
 	GetFeedState(ctx context.Context, feedHash string) (*model.UpdateFeedState, error)
 	ListFeedEntries(ctx context.Context, feedHash string, since time.Time, limit int) ([]model.UpdateFeedEntry, error)
+	ListNewestFeedEntries(ctx context.Context, feedHash string, since time.Time, limit int) ([]model.UpdateFeedEntry, error)
 	SetFeedSubFannedAt(ctx context.Context, sub model.UpdateFeedSub, at time.Time) error
 	PutItemsIfAbsent(ctx context.Context, userID, sourceID string, items []model.UpdateItem) (int, error)
 	EnsureURLPending(ctx context.Context, urlHash, url string) error
@@ -52,6 +53,7 @@ func NewCustomerUpdateFanout(repo fanoutRepo, now func() time.Time) *CustomerUpd
 type fanoutEntriesKey struct {
 	feedHash string
 	since    time.Time
+	newest   bool
 }
 
 // fanoutRun holds per-run caches so subscribers of one feed share reads.
@@ -109,12 +111,18 @@ func (f *CustomerUpdateFanout) feedState(ctx context.Context, run *fanoutRun, fe
 	return st, nil
 }
 
-func (f *CustomerUpdateFanout) feedEntries(ctx context.Context, run *fanoutRun, feedHash string, since time.Time) ([]model.UpdateFeedEntry, error) {
-	key := fanoutEntriesKey{feedHash, since}
+func (f *CustomerUpdateFanout) feedEntries(ctx context.Context, run *fanoutRun, feedHash string, since time.Time, newest bool) ([]model.UpdateFeedEntry, error) {
+	key := fanoutEntriesKey{feedHash, since, newest}
 	if es, ok := run.entries[key]; ok {
 		return es, nil
 	}
-	es, err := f.repo.ListFeedEntries(ctx, feedHash, since, fanoutEntryLimit+1)
+	var es []model.UpdateFeedEntry
+	var err error
+	if newest {
+		es, err = f.repo.ListNewestFeedEntries(ctx, feedHash, since, fanoutEntryLimit)
+	} else {
+		es, err = f.repo.ListFeedEntries(ctx, feedHash, since, fanoutEntryLimit+1)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -131,21 +139,27 @@ func (f *CustomerUpdateFanout) fanOneSub(ctx context.Context, run *fanoutRun, su
 	if err != nil {
 		return err
 	}
-	if state == nil || (!sub.FannedAt.IsZero() && !state.UpdatedAt.After(sub.FannedAt)) {
+	if state == nil || state.UpdatedAt.IsZero() || (!sub.FannedAt.IsZero() && !state.UpdatedAt.After(sub.FannedAt)) {
 		stats.Skipped++
 		return nil
 	}
-	since := sub.FannedAt
-	if since.IsZero() {
-		since = run.tick.Add(-fanoutInitialWindow)
+	// The collector stamps seenAt and updatedAt with its run-start time but
+	// writes them later, so the watermark is the updatedAt read before the
+	// entries, never the wall clock: entries still being written stay after it.
+	at := state.UpdatedAt.UTC()
+	window := run.tick.Add(-fanoutInitialWindow)
+	first := sub.FannedAt.IsZero()
+	since := window
+	if !first && sub.FannedAt.After(window) {
+		since = sub.FannedAt
 	}
-	entries, err := f.feedEntries(ctx, run, sub.FeedHash, since)
+	entries, err := f.feedEntries(ctx, run, sub.FeedHash, since, first)
 	if err != nil {
 		return err
 	}
 
-	at := run.tick
-	if len(entries) > fanoutEntryLimit {
+	// First delivery takes the newest fanoutEntryLimit; the older backlog is skipped.
+	if !first && len(entries) > fanoutEntryLimit {
 		var undelivered int
 		entries, at, undelivered = capEntries(entries)
 		if undelivered > 0 {

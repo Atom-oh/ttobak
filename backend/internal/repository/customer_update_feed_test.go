@@ -58,7 +58,7 @@ func TestPutSourceWithFeedSubItems(t *testing.T) {
 func TestSetSourceStatusWithFeedSubItemsUpsertsRegistry(t *testing.T) {
 	sub := feedTestSub()
 	sub.Status = model.UpdateSourceDisabled
-	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", sub)
+	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", sub, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +71,9 @@ func TestSetSourceStatusWithFeedSubItemsUpsertsRegistry(t *testing.T) {
 	}
 	if feedAttrS(t, src.Key, "SK") != "CUSRC#s1" {
 		t.Fatalf("source key = %v", src.Key)
+	}
+	if !strings.Contains(*src.UpdateExpression, ", ") || len(src.ExpressionAttributeNames) < 3 {
+		t.Fatalf("source update must set status and feedHash: %s %v", *src.UpdateExpression, src.ExpressionAttributeNames)
 	}
 	reg := items[1].Update
 	if feedAttrS(t, reg.Key, "PK") != "CUFEEDS" || feedAttrS(t, reg.Key, "SK") != "fh1#u1#s1" {
@@ -90,6 +93,28 @@ func TestSetSourceStatusWithFeedSubItemsUpsertsRegistry(t *testing.T) {
 	}
 	if !sawDisabled {
 		t.Fatalf("registry status value missing: %v", reg.ExpressionAttributeValues)
+	}
+}
+
+func TestHealSourceFeedSubItemsKeepsStatusAndRequiresLegacyRow(t *testing.T) {
+	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", feedTestSub(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := items[0].Update
+	names := map[string]bool{}
+	for _, n := range src.ExpressionAttributeNames {
+		names[n] = true
+	}
+	if !names["feedHash"] || !names["status"] {
+		t.Fatalf("names = %v", src.ExpressionAttributeNames)
+	}
+	if strings.Contains(*src.UpdateExpression, ", ") || !strings.Contains(*src.ConditionExpression, "attribute_not_exists") ||
+		!strings.Contains(*src.ConditionExpression, "=") {
+		t.Fatalf("heal must only set feedHash under status/legacy conditions: %s / %s", *src.UpdateExpression, *src.ConditionExpression)
+	}
+	if !strings.Contains(*items[1].Update.UpdateExpression, "if_not_exists") {
+		t.Fatal("heal must keep an existing fannedAt")
 	}
 }
 
@@ -164,6 +189,15 @@ func TestSelectFeedEntries(t *testing.T) {
 	}
 	if none := selectFeedEntries(entries, at(9), 10); len(none) != 0 {
 		t.Fatalf("none = %+v", none)
+	}
+}
+
+func TestSelectNewestFeedEntries(t *testing.T) {
+	at := func(m int) time.Time { return time.Date(2026, 11, 13, 9, m, 0, 0, time.UTC) }
+	entries := []model.UpdateFeedEntry{{EntryHash: "c", SeenAt: at(3)}, {EntryHash: "a", SeenAt: at(1)}, {EntryHash: "d", SeenAt: at(4)}, {EntryHash: "b", SeenAt: at(2)}}
+	got := selectNewestFeedEntries(entries, at(0), 2)
+	if len(got) != 2 || got[0].EntryHash != "c" || got[1].EntryHash != "d" {
+		t.Fatalf("got %+v", got)
 	}
 }
 

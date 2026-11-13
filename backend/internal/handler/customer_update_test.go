@@ -261,6 +261,9 @@ func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, stri
 func (r *draftListRepo) DeleteSourceWithFeedSub(context.Context, string, string, string) error {
 	return nil
 }
+func (r *draftListRepo) HealSourceFeedSub(context.Context, string, string, *model.UpdateFeedSub) error {
+	return nil
+}
 func (r *draftListRepo) GetFeedState(context.Context, string) (*model.UpdateFeedState, error) {
 	return nil, nil
 }

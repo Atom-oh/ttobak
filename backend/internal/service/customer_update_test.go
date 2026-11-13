@@ -47,6 +47,9 @@ type mockUpdateRepo struct {
 	feedStates   map[string]*model.UpdateFeedState
 	feedStateErr error
 	statusSubErr error
+	heals        []model.UpdateFeedSub
+	healErr      error
+	stateReads   int
 }
 
 func newMockUpdateRepo() *mockUpdateRepo {
@@ -95,7 +98,12 @@ func (m *mockUpdateRepo) DeleteSourceWithFeedSub(_ context.Context, _, _, feedHa
 	m.deletedFeeds = append(m.deletedFeeds, feedHash)
 	return nil
 }
+func (m *mockUpdateRepo) HealSourceFeedSub(_ context.Context, _, _ string, sub *model.UpdateFeedSub) error {
+	m.heals = append(m.heals, *sub)
+	return m.healErr
+}
 func (m *mockUpdateRepo) GetFeedState(_ context.Context, feedHash string) (*model.UpdateFeedState, error) {
+	m.stateReads++
 	if m.feedStateErr != nil {
 		return nil, m.feedStateErr
 	}
@@ -873,7 +881,7 @@ func TestCustomerUpdateAddSourceRegistersFeed(t *testing.T) {
 	}
 	sub := repo.subPuts[0]
 	if sub.FeedHash != hash || sub.URL != normalized || sub.Kind != "rss" || sub.UserID != "u1" ||
-		sub.SourceID != got.SourceID || sub.Status != model.UpdateSourceActive {
+		sub.SourceID != got.SourceID || sub.Status != model.UpdateSourceActive || repo.sources[0].FeedHash != hash {
 		t.Fatalf("sub = %+v", sub)
 	}
 
@@ -1011,8 +1019,63 @@ func TestCustomerUpdateListSourcesFeedError(t *testing.T) {
 		t.Fatal("the repository's rows must not be mutated")
 	}
 
+	// A state read failure omits feedError instead of failing the list.
 	repo.feedStateErr = errors.New("boom")
-	if _, err := newUpdateSvc(repo, &mockMembers{}).ListSources(context.Background(), "u1"); err == nil {
-		t.Fatal("feed state read failure must surface")
+	got, err = newUpdateSvc(repo, &mockMembers{}).ListSources(context.Background(), "u1")
+	if err != nil || len(got) != 4 || got[0].FeedError != "" {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestCustomerUpdateListSourcesReadsEachFeedOnce(t *testing.T) {
+	_, hash := feedTestHash(t, "https://example.com/feed")
+	repo := newMockUpdateRepo()
+	repo.sources = []model.UpdateSource{
+		{SourceID: "a", Kind: "rss", URL: "https://example.com/feed", FeedHash: hash},
+		{SourceID: "b", Kind: "site", URL: "https://example.com/feed", FeedHash: hash},
+	}
+	if _, err := newUpdateSvc(repo, &mockMembers{}).ListSources(context.Background(), "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if repo.stateReads != 1 || len(repo.heals) != 0 {
+		t.Fatalf("stateReads=%d heals=%v", repo.stateReads, repo.heals)
+	}
+}
+
+func TestCustomerUpdateListSourcesHealsLegacySources(t *testing.T) {
+	_, hash := feedTestHash(t, "https://example.com/feed")
+	repo := newMockUpdateRepo()
+	repo.sources = []model.UpdateSource{
+		{SourceID: "legacy", Kind: "rss", URL: "https://example.com/feed", Status: "disabled"},
+		{SourceID: "stored", Kind: "rss", URL: "https://example.com/other", Status: "active", FeedHash: "storedhash"},
+		{SourceID: "slack", Kind: "slack", LocalSourceID: "l", Status: "active"},
+	}
+	repo.healErr = errors.New("heal failed")
+	got, err := newUpdateSvc(repo, &mockMembers{}).ListSources(context.Background(), "u1")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("a heal failure must not fail the list: %v", err)
+	}
+	if len(repo.heals) != 1 {
+		t.Fatalf("heals = %+v", repo.heals)
+	}
+	h := repo.heals[0]
+	if h.FeedHash != hash || h.SourceID != "legacy" || h.UserID != "u1" || h.Status != "disabled" || h.URL != "https://example.com/feed" {
+		t.Fatalf("heal = %+v", h)
+	}
+}
+
+func TestCustomerUpdateStoredFeedHashUsedForDeleteAndPause(t *testing.T) {
+	repo := newMockUpdateRepo()
+	repo.sources = []model.UpdateSource{{SourceID: "src1", Kind: "rss", URL: "https://example.com/feed", Status: "active", FeedHash: "storedhash"}}
+	svc := newUpdateSvc(repo, &mockMembers{})
+	disabled := model.UpdateSourceDisabled
+	if err := svc.UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteSource(context.Background(), "u1", "src1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.statusSubs) != 1 || repo.statusSubs[0].FeedHash != "storedhash" || len(repo.deletedFeeds) != 1 || repo.deletedFeeds[0] != "storedhash" {
+		t.Fatalf("statusSubs=%+v deleted=%v", repo.statusSubs, repo.deletedFeeds)
 	}
 }

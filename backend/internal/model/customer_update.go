@@ -102,6 +102,10 @@ type UpdateSource struct {
 	Status        string    `json:"status" dynamodbav:"status"`
 	CreatedAt     time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	BackfilledAt  time.Time `json:"backfilledAt" dynamodbav:"backfilledAt"`
+	// FeedHash is the registry key of a non-Slack source, stored so a later
+	// normalization change cannot orphan its registry row. Empty marks a legacy
+	// row. It is not part of the API.
+	FeedHash string `json:"-" dynamodbav:"feedHash,omitempty"`
 	// FeedError is the feed's last fetch error while it keeps failing. It is
 	// derived when sources are listed and never stored on the source row.
 	FeedError string `json:"feedError,omitempty" dynamodbav:"-"`
