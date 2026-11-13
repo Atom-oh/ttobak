@@ -33,6 +33,8 @@ export const SPECREQ_ACTION_COPY = {
   accountUnresolved: '어카운트를 아직 확인하지 못해 요청 문구를 만들 수 없습니다. 잠시 후 다시 확인해 주세요.',
   conflict: '다른 곳에서 먼저 변경되었습니다. 최신 상태로 다시 불러왔으니 확인해 주세요.',
   failed: '변경하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  dismiss: '고객 미팅 아님',
+  dismissHint: '내부 미팅이면 눌러 주세요. 이 할 일이 목록에서 사라집니다.',
 } as const;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -45,14 +47,15 @@ export function parseSpecReqId(value: string): string | undefined {
   return UUID.test(id) && id !== NIL_UUID ? id : undefined;
 }
 
-export type SpecReqActionKind = 'copySlack' | 'markRequested' | 'pickAccount' | 'pickOwner' | 'linkSpecReq';
+export type SpecReqActionKind = 'copySlack' | 'markRequested' | 'pickAccount' | 'pickOwner' | 'linkSpecReq' | 'dismiss';
 
 /** Which actions a task offers; waiting copy is a separate flag. */
 export function taskActionKinds(task: Pick<SpecReqTaskView, 'state' | 'path'>): SpecReqActionKind[] {
   switch (task.state) {
     case 'request_needed': return ['copySlack', 'markRequested'];
-    case 'needs_account': return ['pickAccount'];
-    case 'needs_owner': return ['pickOwner'];
+    // Intake could not place these; the user may also say it is not a customer meeting.
+    case 'needs_account': return ['pickAccount', 'dismiss'];
+    case 'needs_owner': return ['pickOwner', 'dismiss'];
     case 'issue_needed': return task.path === 'mine' ? ['linkSpecReq'] : [];
     case 'requested': return task.path === 'theirs' ? ['linkSpecReq'] : [];
     default: return [];
@@ -146,6 +149,10 @@ export function SpecReqActionsView({
           onChange={event => setLink(event.target.value)} className={`${fieldClass} w-72 max-w-full`} />
         <button type="submit" disabled={pending || !link.trim()} className={buttonClass}>{copy.linkSubmit}</button>
       </form>}
+      {kinds.includes('dismiss') && <div className="flex flex-wrap items-center gap-2">
+        <button type="button" disabled={pending} onClick={() => onChange({ op: 'close' })} className={buttonClass}>{copy.dismiss}</button>
+        <span className="text-xs text-text-secondary">{copy.dismissHint}</span>
+      </div>}
       {message && <p role="alert" className="text-xs text-text-secondary">{message}</p>}
     </div>
   );
