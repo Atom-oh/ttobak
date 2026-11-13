@@ -411,7 +411,7 @@ async fn start_recording(
         let path_for_task = path.clone();
         let build = tauri::async_runtime::spawn_blocking(move || {
             audio::macos::Backend::start(
-                &path_for_task,
+                Some(&path_for_task),
                 app,
                 reservation.generation,
                 reservation.generation_counter,

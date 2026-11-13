@@ -677,7 +677,9 @@ pub mod macos {
         resources: Mutex<Option<Resources>>,
         worker: Mutex<Option<JoinHandle<()>>>,
         writer: Arc<Mutex<Option<Wav>>>,
-        path: PathBuf,
+        /// The WAV being written; `None` for a listening session, which
+        /// creates no file.
+        path: Option<PathBuf>,
         stats: Arc<Stats>,
         mic_active: AtomicBool,
         /// A failed microphone switch ended capture; stop finalizes what was
@@ -812,8 +814,11 @@ pub mod macos {
         /// `generation` / `generation_counter`: see `AudioRecorder`'s field
         /// doc comment in the parent module — lets the IOProc detect it has
         /// been superseded by a newer recording and stop acting.
+        /// `path` is the WAV to write. `None` starts a listening session:
+        /// the same capture, level and caption-PCM events, with no writer
+        /// and no file.
         pub fn start(
-            path: &Path,
+            path: Option<&Path>,
             app: AppHandle,
             generation: u64,
             generation_counter: Arc<AtomicU64>,
@@ -915,9 +920,14 @@ pub mod macos {
                 bits_per_sample: 16,
                 sample_format: SampleFormat::Int,
             };
-            let writer = WavWriter::create(path, spec)
-                .map_err(|e| AppError::Io(format!("create wav: {e}")))?;
-            let writer = Arc::new(Mutex::new(Some(writer)));
+            let writer = match path {
+                Some(path) => Some(
+                    WavWriter::create(path, spec)
+                        .map_err(|e| AppError::Io(format!("create wav: {e}")))?,
+                ),
+                None => None,
+            };
+            let writer = Arc::new(Mutex::new(writer));
             let stats = Arc::new(Stats::default());
             let (tx, rx) = sync_channel::<Vec<f32>>(QUEUE_BUFFERS);
             let worker = spawn_worker(
@@ -983,19 +993,24 @@ pub mod macos {
                 if let Ok(mut w) = writer.lock() {
                     w.take();
                 }
-                let _ = std::fs::remove_file(path);
+                if let Some(path) = path {
+                    let _ = std::fs::remove_file(path);
+                }
                 return Err(e);
             }
 
             log::info!(
-                "Core Audio capture started — rate={sample_rate}Hz layout={layout:?} mic={mic_active} path={}",
-                path.display()
+                "Core Audio capture started — rate={sample_rate}Hz layout={layout:?} mic={mic_active} {}",
+                match path {
+                    Some(path) => format!("path={}", path.display()),
+                    None => "listening (no file)".to_owned(),
+                }
             );
             Ok(Self {
                 resources: Mutex::new(Some(res)),
                 worker: Mutex::new(Some(worker)),
                 writer,
-                path: path.to_path_buf(),
+                path: path.map(Path::to_path_buf),
                 stats,
                 mic_active: AtomicBool::new(mic_active),
                 capture_lost: AtomicBool::new(false),
@@ -1226,12 +1241,16 @@ pub mod macos {
             let cb = self.stats.callbacks.load(Ordering::Relaxed);
             let sw = self.stats.samples_written.load(Ordering::Relaxed);
             let dropped = self.stats.dropped_buffers.load(Ordering::Relaxed);
-            let bytes = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+            let path = self.path.as_deref();
+            let bytes = path
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .unwrap_or(0);
             let (system_peak, mic_peak) = (self.stats.system_peak(), self.stats.mic_peak());
             log::info!(
                 "stopped capture: callbacks={cb} samples_written={sw} dropped={dropped} \
                  system_peak={system_peak:.4} mic_peak={mic_peak:.4} wav_bytes={bytes} path={}",
-                self.path.display()
+                path.map(|p| p.display().to_string()).unwrap_or_default()
             );
             if cb == 0 {
                 return Err(AppError::Backend(
@@ -1275,6 +1294,21 @@ pub mod macos {
                 ));
             }
             Ok(warnings)
+        }
+
+        /// Stop a listening session. There is no WAV to finalize, and
+        /// `diagnose` does not apply: it reports a recording that wrote no
+        /// samples as a failure, which is the normal state here.
+        pub fn stop_listening(&self) -> Result<(), AppError> {
+            let result = self.stop_capture_blocking();
+            log::info!(
+                "stopped listening: callbacks={} dropped={} system_peak={:.4} mic_peak={:.4}",
+                self.stats.callbacks.load(Ordering::Relaxed),
+                self.stats.dropped_buffers.load(Ordering::Relaxed),
+                self.stats.system_peak(),
+                self.stats.mic_peak()
+            );
+            result
         }
 
         /// Stop, THEN finalize regardless of the stop result, THEN diagnose.
