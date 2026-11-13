@@ -1,5 +1,7 @@
 'use client';
 
+import { useSyncExternalStore } from 'react';
+
 import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 
@@ -28,6 +30,16 @@ declare global {
 
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+const subscribeNever = () => () => {};
+
+/**
+ * `isTauri()` for rendering: `null` while prerendering and hydrating, so the
+ * static HTML is the same for every client, then the real answer.
+ */
+export function useIsMacApp(): boolean | null {
+  return useSyncExternalStore<boolean | null>(subscribeNever, isTauri, () => null);
 }
 
 function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -198,6 +210,38 @@ export async function getNativeCaptureLost(): Promise<boolean> {
 
 export function stopNativeRecording(): Promise<TauriStopResponse> {
   return invoke<TauriStopResponse>('stop_recording');
+}
+
+/** Shown when the installed Mac app predates live interpretation (`start_listening`). */
+export const INTERPRET_VERSION_SKEW_MESSAGE =
+  '설치된 Mac 앱 버전이 오래되어 통역 기능이 없습니다 — 앱을 업데이트해주세요.';
+
+export interface NativeListenStart {
+  /** Non-fatal capture notes, e.g. no microphone. */
+  warnings?: string[];
+  /** The microphone being heard. */
+  input?: NativeSelectedInput;
+}
+
+export interface NativeListenStop {
+  /** False when no listening session was running. */
+  stopped: boolean;
+  stop_timed_out: boolean;
+}
+
+/**
+ * Start live interpretation capture: microphone plus system audio, delivered
+ * only as `native-pcm-chunk` and `native-audio-level` events. Nothing is
+ * written to disk and no meeting is involved. Rejects while a recording is
+ * running. `inputDeviceUid` as in `startNativeRecording`.
+ */
+export function startNativeListening(inputDeviceUid?: string): Promise<NativeListenStart> {
+  return invoke<NativeListenStart>('start_listening', { inputDeviceUid: inputDeviceUid || null });
+}
+
+/** Stop live interpretation capture. Idempotent; never stops a recording. */
+export function stopNativeListening(): Promise<NativeListenStop> {
+  return invoke<NativeListenStop>('stop_listening');
 }
 
 /**
@@ -443,6 +487,21 @@ function subscribeTauriEvent<Raw, T>(
  */
 export function onNativeAudioLevel(handler: (level: number) => void): () => void {
   return subscribeTauriEvent<number, number>('native-audio-level', (v) => v, handler);
+}
+
+/** Why the Mac app ended a listening session by itself. */
+export type NativeListeningStopReason = 'system-sleep' | 'recording';
+
+/**
+ * The Mac app ended a listening session by itself: the system is going to
+ * sleep, or a recording started. Not sent for `stopNativeListening`.
+ */
+export function onNativeListeningStopped(handler: (reason: NativeListeningStopReason) => void): () => void {
+  return subscribeTauriEvent<{ reason?: string }, NativeListeningStopReason>(
+    'native-listening-stopped',
+    (payload) => (payload?.reason === 'system-sleep' ? 'system-sleep' : 'recording'),
+    handler,
+  );
 }
 
 /** Subscribe to upload progress emitted by the `upload_recording` command. */

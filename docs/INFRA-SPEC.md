@@ -555,7 +555,8 @@ PENDING placeholders.
 ## Frontend and deployment
 
 FrontendStack owns the static bucket, CloudFront SPA router, runtime config,
-signing key setup and media behavior. Static pages (including `/changelog`) and
+signing key setup and media behavior. Static pages (including `/changelog` and
+the Mac app's `/interpret`) and
 dynamic routes are mapped by knownPages;
 404 fallback alone is not the complete routing mechanism. config.json is deployed
 separately from next build. Both Chat and Live QA use its relative `wsUrl: "/ws"`;

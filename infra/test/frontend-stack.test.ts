@@ -314,6 +314,7 @@ describe('FrontendStack', () => {
       ['/meeting/abc.txt', '/meeting/_.txt'],
       ['/meeting/abc', '/meeting/_.html'],
       ['/dictionary', '/dictionary.html'],
+      ['/interpret', '/interpret.html'],
       ['/meetings', '/meetings.html'],
       ['/meetings.txt', '/meetings.txt'],
       ['/meetings/__next._tree.txt', '/meetings/__next._tree.txt'],

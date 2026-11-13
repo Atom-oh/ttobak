@@ -14,6 +14,8 @@ interface TranslationViewProps {
   debugCaptions?: boolean;
   /** Fill the parent's height instead of capping the body at 48vh. */
   fill?: boolean;
+  /** Caption text size; `large` is for the interpret-only screen. */
+  size?: 'default' | 'large';
 }
 
 const ENGINE_BADGES: Record<TranslationEngineBadge, { label: string; title: string }> = {
@@ -29,7 +31,8 @@ function statusLabel(status: TranslationEntry['status']): string {
   return '임시 자막 · 통역 중';
 }
 
-function CaptionText({ text, language, isOriginal, status }: {
+function CaptionText({ text, language, isOriginal, status, large }: {
+  large: boolean;
   text: string;
   language: string;
   isOriginal: boolean;
@@ -41,14 +44,14 @@ function CaptionText({ text, language, isOriginal, status }: {
         <span>{language === 'ko' ? '한국어' : language === 'en' ? 'English' : language.toUpperCase()}</span>
         <span>{isOriginal ? '원문' : '번역'}</span>
       </div>
-      <p lang={text ? language : 'ko'} className="whitespace-pre-wrap break-words [word-break:keep-all] text-sm leading-relaxed text-slate-900 dark:text-text-main">
+      <p lang={text ? language : 'ko'} className={`whitespace-pre-wrap break-words [word-break:keep-all] ${large ? 'text-xl' : 'text-sm'} leading-relaxed text-slate-900 dark:text-text-main`}>
         {text || (status === 'error' ? '번역하지 못했습니다.' : status === 'skipped' ? '번역 생략' : '통역 중…')}
       </p>
     </div>
   );
 }
 
-export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, debugCaptions = false, fill = false }: TranslationViewProps) {
+export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, debugCaptions = false, fill = false, size = 'default' }: TranslationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
   const bilingual = targetLang === BILINGUAL_TARGET;
@@ -139,6 +142,7 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
                           language={language}
                           isOriginal={isOriginal}
                           status={entry.status}
+                          large={size === 'large'}
                         />
                       );
                     })}

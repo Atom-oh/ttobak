@@ -29,13 +29,15 @@ interface NativeMicSelectorProps {
   onChange: (uid: string) => void;
   disabled?: boolean;
   errorId?: string;
+  /** `listen` words the control for live interpretation, where nothing is recorded. */
+  mode?: 'record' | 'listen';
 }
 
 /** Mac app System Audio mode: which microphone to mix with system audio
  * (ADR-017). "Automatic" follows the meeting app's microphone, so the
  * recording hears what Zoom/Teams/Meet hears. Hidden on app builds without
  * the device list. */
-export function NativeMicSelector({ value, onChange, disabled, errorId }: NativeMicSelectorProps) {
+export function NativeMicSelector({ value, onChange, disabled, errorId, mode = 'record' }: NativeMicSelectorProps) {
   const [devices, setDevices] = useState<NativeInputDevice[] | null>(null);
 
   useEffect(() => {
@@ -77,7 +79,7 @@ export function NativeMicSelector({ value, onChange, disabled, errorId }: Native
   return (
     <div className="flex flex-col gap-1.5 w-full max-w-xl">
       <label htmlFor="native-mic" className="text-xs font-bold text-slate-600 dark:text-text-secondary">
-        녹음할 마이크
+        {mode === 'listen' ? '들을 마이크' : '녹음할 마이크'}
       </label>
       <select
         id="native-mic"
@@ -101,7 +103,7 @@ export function NativeMicSelector({ value, onChange, disabled, errorId }: Native
         })}
       </select>
       <p className="text-xs text-slate-500 dark:text-text-muted">
-        {value === '' || selectedMissing ? autoTarget : '선택한 마이크를 시스템 소리와 함께 녹음합니다.'}
+        {value === '' || selectedMissing ? autoTarget : mode === 'listen' ? '선택한 마이크를 시스템 소리와 함께 듣습니다.' : '선택한 마이크를 시스템 소리와 함께 녹음합니다.'}
         {selectedMissing && ' (이전에 선택한 마이크가 연결되어 있지 않아 자동으로 고릅니다)'}
       </p>
     </div>

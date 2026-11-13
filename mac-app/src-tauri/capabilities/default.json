@@ -21,6 +21,8 @@
     "allow-cleanup-recording",
     "allow-release-recording-power",
     "allow-list-leftover-recordings",
+    "allow-start-listening",
+    "allow-stop-listening",
     "allow-control-ready",
     "allow-control-reply",
     "allow-control-report-state",

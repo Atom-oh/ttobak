@@ -67,7 +67,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::{AudioRecorder, StartGuard};
 use crate::error::AppError;
@@ -142,6 +142,17 @@ pub struct RecorderState {
     /// recording's protection.
     #[cfg(target_os = "macos")]
     recording_power: Mutex<power::RecordingPower<power::PowerAssertion>>,
+    /// Idle-sleep protection held while a listening session runs. Not keyed
+    /// by a path: a listening session has none and leaves nothing to upload.
+    #[cfg(target_os = "macos")]
+    listening_power: Mutex<Option<power::PowerAssertion>>,
+    /// Serializes the listening lifecycle: held for the whole of a listening
+    /// start and the whole of a listening stop. A stop therefore never misses
+    /// a start that is still in flight (it waits, then stops the session that
+    /// start installed), and a second stop waits for the first teardown
+    /// instead of finding an empty slot and letting a new capture start over
+    /// it. Never taken while holding `recorder`.
+    listening_lifecycle: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Serialize)]
@@ -391,6 +402,12 @@ async fn start_recording(
     // freeze `recording_status`, a sync main-thread command, for as long as
     // the dialog was up). Mirrors the shape `stop_recording` already uses
     // on the stop path.
+    //
+    // A recording preempts live interpretation: the listening session is
+    // stopped (or its stop has timed out) before the slot is reserved, so the
+    // two never capture together and the start does not race the page's own
+    // `stop_listening`.
+    end_listening(&app, Some("recording")).await;
     let reservation = {
         let mut rec = state.recorder.lock();
         rec.begin_start()?
@@ -411,7 +428,7 @@ async fn start_recording(
         let path_for_task = path.clone();
         let build = tauri::async_runtime::spawn_blocking(move || {
             audio::macos::Backend::start(
-                &path_for_task,
+                Some(&path_for_task),
                 app,
                 reservation.generation,
                 reservation.generation_counter,
@@ -460,6 +477,175 @@ async fn start_recording(
         // `guard` drops here and cancels the reservation.
         Err(AppError::Unsupported)
     }
+}
+
+/// Result of `start_listening`.
+#[derive(Serialize)]
+pub struct ListenStartResponse {
+    /// Non-fatal capture notes, e.g. no microphone.
+    pub warnings: Vec<String>,
+    /// The microphone being heard.
+    #[cfg(target_os = "macos")]
+    pub input: Option<audio::macos::SelectedInput>,
+}
+
+/// Result of `stop_listening`.
+#[derive(Serialize)]
+pub struct ListenStopResponse {
+    /// False when no listening session was running.
+    pub stopped: bool,
+    /// The Core Audio stop did not return within `STOP_CAPTURE_TIMEOUT`; it
+    /// finishes in the background and can no longer emit events.
+    pub stop_timed_out: bool,
+}
+
+/// Starts live interpretation capture: the same system-audio tap and
+/// microphone as a recording, feeding only the level and caption-PCM events.
+/// No file is created and nothing is registered for upload, leftover
+/// adoption or path-based status. Fails with `AlreadyRunning` while a
+/// recording or a recording start holds the capture slot.
+#[tauri::command]
+async fn start_listening(
+    input_device_uid: Option<String>,
+    state: State<'_, RecorderState>,
+    app: AppHandle,
+) -> Result<ListenStartResponse, AppError> {
+    // Held until this start has installed its session (with its power
+    // assertion) or failed: `end_listening` takes the same lock, so a stop
+    // issued meanwhile (a page reload's stop, a recording start) waits and
+    // then stops this session instead of missing it and leaving it running
+    // with no page attached.
+    let lifecycle = Arc::clone(&state.listening_lifecycle);
+    let _starting = lifecycle.lock().await;
+    // Same reservation and off-lock construction as `start_recording`.
+    let reservation = {
+        let mut rec = state.recorder.lock();
+        rec.begin_start()?
+    };
+    let guard = StartGuard::new(&state.recorder);
+
+    #[cfg(target_os = "macos")]
+    {
+        let build = tauri::async_runtime::spawn_blocking(move || {
+            audio::macos::Backend::start(
+                None,
+                app,
+                reservation.generation,
+                reservation.generation_counter,
+                input_device_uid,
+            )
+        })
+        .await;
+
+        let backend = match build {
+            Ok(Ok(backend)) => backend,
+            Ok(Err(e)) => return Err(e),
+            Err(join_err) => {
+                return Err(AppError::Backend(format!(
+                    "start_capture task panicked: {join_err}"
+                )));
+            }
+        };
+
+        let warnings = backend.start_warnings();
+        let input = backend.input();
+        state.recorder.lock().install_listening(backend);
+        guard.disarm();
+        *state.listening_power.lock() =
+            power::PowerAssertion::acquire("TTOBAK live interpretation");
+
+        Ok(ListenStartResponse { warnings, input })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&app, &reservation, &guard, &input_device_uid);
+        Err(AppError::Unsupported)
+    }
+}
+
+/// Stops live interpretation capture. Idempotent, and never stops a
+/// recording.
+#[tauri::command]
+async fn stop_listening(app: AppHandle) -> Result<ListenStopResponse, AppError> {
+    let (stopped, stop_timed_out) = end_listening(&app, None).await;
+    Ok(ListenStopResponse {
+        stopped,
+        stop_timed_out,
+    })
+}
+
+/// Ends the listening session, if one is running, and returns
+/// `(stopped, stop_timed_out)`. The handle is taken under the recorder lock
+/// and the blocking Core Audio stop runs after the lock is released, bounded
+/// by `STOP_CAPTURE_TIMEOUT`. Starts and stops are serialized, so when this
+/// returns no listening start is in flight and no listening stop is still
+/// tearing the capture down unless it timed out.
+/// `reason` is set when something other than the
+/// page ended the session (`"system-sleep"`, `"recording"`); the page is then told
+/// through `native-listening-stopped`.
+pub(crate) async fn end_listening(app: &AppHandle, reason: Option<&'static str>) -> (bool, bool) {
+    // One lifecycle step at a time: a caller that arrives during a listening
+    // start waits for it and then stops the session it installed; one that
+    // arrives during another caller's teardown waits until that finished (or
+    // timed out) and then finds nothing left to stop.
+    let lifecycle = Arc::clone(&app.state::<RecorderState>().listening_lifecycle);
+    let _stopping = lifecycle.lock().await;
+    let handle = {
+        let state = app.state::<RecorderState>();
+        let handle = state.recorder.lock().take_listening();
+        #[cfg(target_os = "macos")]
+        if handle.is_some() {
+            state.listening_power.lock().take();
+        }
+        handle
+    };
+    let Some(handle) = handle else {
+        return (false, false);
+    };
+
+    #[cfg(target_os = "macos")]
+    let stop_timed_out = {
+        let backend = handle.backend;
+        let stop = tauri::async_runtime::spawn_blocking(move || backend.stop_listening());
+        match tokio::time::timeout(STOP_CAPTURE_TIMEOUT, stop).await {
+            Ok(Ok(Ok(()))) => false,
+            Ok(Ok(Err(e))) => {
+                log::warn!("stopping the listening capture failed: {e}");
+                false
+            }
+            Ok(Err(join_err)) => {
+                log::error!("listening stop task panicked: {join_err}");
+                false
+            }
+            Err(_elapsed) => {
+                // Not cancelled: the stop finishes in the background. The
+                // generation bumped by `take_listening` already silences it.
+                log::warn!(
+                    "listening capture did not stop within {:?}",
+                    STOP_CAPTURE_TIMEOUT
+                );
+                true
+            }
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let stop_timed_out = {
+        let _ = handle;
+        false
+    };
+
+    if let Some(reason) = reason {
+        log::info!("listening session ended: {reason}");
+        if let Err(e) = app.emit_to(
+            "main",
+            "native-listening-stopped",
+            serde_json::json!({ "reason": reason }),
+        ) {
+            log::warn!("could not report the listening stop to the page: {e}");
+        }
+    }
+    (true, stop_timed_out)
 }
 
 /// Input-capable devices for the microphone picker, with the meeting apps
@@ -799,6 +985,9 @@ pub fn run() {
             finalize_warnings: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "macos")]
             recording_power: Mutex::new(power::RecordingPower::new()),
+            #[cfg(target_os = "macos")]
+            listening_power: Mutex::new(None),
+            listening_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -810,6 +999,8 @@ pub fn run() {
             cleanup_recording,
             release_recording_power,
             list_leftover_recordings,
+            start_listening,
+            stop_listening,
             control::control_ready,
             control::control_reply,
             control::control_report_state,
@@ -947,13 +1138,22 @@ pub fn run() {
                 let state = app_handle.state::<RecorderState>();
                 let handle = {
                     let mut rec = state.recorder.lock();
-                    rec.take_handle().ok()
+                    rec.take_any()
                 };
                 #[cfg(target_os = "macos")]
-                if let Some(handle) = handle {
-                    if let Err(e) = handle.backend.stop_and_finalize() {
-                        log::error!("stop_and_finalize on exit failed: {e}");
+                match handle {
+                    Some(audio::TakenSession::Recording(handle)) => {
+                        if let Err(e) = handle.backend.stop_and_finalize() {
+                            log::error!("stop_and_finalize on exit failed: {e}");
+                        }
                     }
+                    // Nothing to finalize: a listening session has no file.
+                    Some(audio::TakenSession::Listening(handle)) => {
+                        if let Err(e) = handle.backend.stop_listening() {
+                            log::error!("stop_listening on exit failed: {e}");
+                        }
+                    }
+                    None => {}
                 }
                 // A job that passed try_begin before the first kill is refused at
                 // spawn; this second pass catches one that spawned meanwhile.

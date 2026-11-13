@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { UserGuideButton } from '@/components/layout/UserGuideButton';
 import { ReleaseLink } from '@/components/layout/ReleaseLink';
-import { NAV_GROUPS, SETTINGS_ITEM } from '@/lib/navigation';
+import { SETTINGS_ITEM, navGroupsFor } from '@/lib/navigation';
+import { useIsMacApp } from '@/lib/tauri';
 
 const navItems = [
   { href: '/', icon: 'home', label: 'Home' },
@@ -35,6 +36,7 @@ function SheetLink({ href, icon, label, onNavigate }: { href: string; icon: stri
 
 /** Full menu, grouped like the desktop sidebar, opened from the 지식 tab. */
 function MenuSheet({ onClose }: { onClose: () => void }) {
+  const groups = navGroupsFor(useIsMacApp() === true);
   const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Move focus into the sheet and give it back to the opener on close.
@@ -64,7 +66,7 @@ function MenuSheet({ onClose }: { onClose: () => void }) {
         className="fixed left-0 right-0 bottom-0 z-30 max-h-[80vh] overflow-y-auto rounded-t-2xl bg-white dark:bg-background-dark px-4 pt-4 pb-28 flex flex-col gap-4 shadow-2xl lg:hidden"
       >
         <div aria-hidden="true" className="self-center w-10 h-1 rounded-full bg-slate-300 dark:bg-white/20" />
-        {NAV_GROUPS.map((group) => (
+        {groups.map((group) => (
           <div key={group.name || 'top'} className="flex flex-col gap-1.5">
             {group.name && <SheetGroupLabel name={group.name} />}
             <div className="flex flex-wrap gap-1.5">

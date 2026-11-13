@@ -25,10 +25,39 @@ pub struct RecordingSnapshot {
     pub elapsed_ms: u64,
     /// A failed microphone switch stopped capture of the running recording.
     pub capture_lost: bool,
+    /// A listening session (live interpretation) is running: capture with no
+    /// file. It is never a recording: `recording` is false and `path` is
+    /// `None`, so upload, leftover, status and detection code ignores it.
+    pub listening: bool,
 }
 
-pub struct AudioRecorder {
-    inner: Option<RecordingHandle>,
+/// What the recorder needs from a capture backend. A trait so the slot's
+/// recording/listening rules are unit tested without Core Audio.
+pub trait CaptureBackend {
+    fn capture_lost(&self) -> bool;
+}
+
+/// The capture backend of this platform's build.
+#[cfg(target_os = "macos")]
+pub type PlatformBackend = macos::Backend;
+#[cfg(not(target_os = "macos"))]
+pub type PlatformBackend = NoBackend;
+
+/// Placeholder backend for builds without capture.
+#[cfg(not(target_os = "macos"))]
+pub struct NoBackend;
+
+#[cfg(not(target_os = "macos"))]
+impl CaptureBackend for NoBackend {
+    fn capture_lost(&self) -> bool {
+        false
+    }
+}
+
+/// The one capture slot. It holds a recording (a WAV path) or a listening
+/// session (no path), never both, so the two cannot capture at once.
+pub struct AudioRecorder<B = PlatformBackend> {
+    inner: Option<Session<B>>,
     /// True from `begin_start()` until `install()`/`cancel_start()` — the
     /// window during which a *reservation* exists but `inner` is still
     /// `None` because the blocking backend construction (see `begin_start`'s
@@ -59,15 +88,43 @@ pub struct StartReservation {
     pub generation_counter: Arc<AtomicU64>,
 }
 
-pub struct RecordingHandle {
-    pub path: PathBuf,
-    pub started_at: Instant,
-    #[cfg(target_os = "macos")]
-    pub backend: Arc<macos::Backend>,
+/// The session in the slot; `path` is `None` for a listening session.
+struct Session<B> {
+    path: Option<PathBuf>,
+    started_at: Instant,
+    backend: Arc<B>,
 }
 
-impl AudioRecorder {
+/// A recording taken out of the slot by `take_handle`.
+pub struct RecordingHandle<B = PlatformBackend> {
+    pub path: PathBuf,
+    pub started_at: Instant,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub backend: Arc<B>,
+}
+
+/// A listening session taken out of the slot. It has no path: nothing was
+/// written.
+pub struct ListeningHandle<B = PlatformBackend> {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub backend: Arc<B>,
+}
+
+/// Whatever `take_any` found in the slot.
+pub enum TakenSession<B = PlatformBackend> {
+    Recording(RecordingHandle<B>),
+    Listening(ListeningHandle<B>),
+}
+
+impl AudioRecorder<PlatformBackend> {
     pub fn new() -> Self {
+        Self::empty()
+    }
+}
+
+impl<B: CaptureBackend> AudioRecorder<B> {
+    /// An idle recorder for any backend type (`new` fixes the platform's).
+    pub fn empty() -> Self {
         Self {
             inner: None,
             starting: false,
@@ -83,19 +140,18 @@ impl AudioRecorder {
     pub fn snapshot(&self) -> RecordingSnapshot {
         match &self.inner {
             Some(h) => RecordingSnapshot {
-                recording: true,
-                path: Some(h.path.clone()),
+                recording: h.path.is_some(),
+                path: h.path.clone(),
                 elapsed_ms: h.started_at.elapsed().as_millis() as u64,
-                #[cfg(target_os = "macos")]
-                capture_lost: h.backend.capture_lost(),
-                #[cfg(not(target_os = "macos"))]
-                capture_lost: false,
+                capture_lost: h.path.is_some() && h.backend.capture_lost(),
+                listening: h.path.is_none(),
             },
             None => RecordingSnapshot {
                 recording: false,
                 path: None,
                 elapsed_ms: 0,
                 capture_lost: false,
+                listening: false,
             },
         }
     }
@@ -137,21 +193,35 @@ impl AudioRecorder {
     /// `cfg(target_os = "macos")` block, hence the dead_code allowance on
     /// other targets (same convention as `interleave_planes`).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub fn install(&mut self, path: PathBuf, #[cfg(target_os = "macos")] backend: macos::Backend) {
-        self.inner = Some(RecordingHandle {
+    pub fn install(&mut self, path: PathBuf, backend: B) {
+        self.install_session(Some(path), backend);
+    }
+
+    /// Complete a `begin_start()` reservation with a listening session: the
+    /// same capture, no file.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn install_listening(&mut self, backend: B) {
+        self.install_session(None, backend);
+    }
+
+    fn install_session(&mut self, path: Option<PathBuf>, backend: B) {
+        self.inner = Some(Session {
             path,
             started_at: Instant::now(),
-            #[cfg(target_os = "macos")]
             backend: Arc::new(backend),
         });
         self.starting = false;
     }
 
     /// The running recording's backend, for a microphone switch that runs
-    /// its blocking Core Audio calls after this lock is released.
-    #[cfg(target_os = "macos")]
-    pub fn backend(&self) -> Option<Arc<macos::Backend>> {
-        self.inner.as_ref().map(|h| Arc::clone(&h.backend))
+    /// its blocking Core Audio calls after this lock is released. `None`
+    /// while listening: switching the microphone is a recording feature.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn backend(&self) -> Option<Arc<B>> {
+        self.inner
+            .as_ref()
+            .filter(|h| h.path.is_some())
+            .map(|h| Arc::clone(&h.backend))
     }
 
     /// Release a `begin_start()` reservation without installing a recording
@@ -170,8 +240,35 @@ impl AudioRecorder {
     /// command that needs `RecorderState.recorder` (e.g. `recording_status`,
     /// which — unlike `stop_recording`/`start_recording`/`cleanup_recording`
     /// — runs as a *sync* Tauri command on the app's main thread).
-    pub fn take_handle(&mut self) -> Result<RecordingHandle, AppError> {
-        let handle = self.inner.take().ok_or(AppError::NotRunning)?;
+    ///
+    /// A listening session is not a recording: it stays in the slot and this
+    /// returns `NotRunning`.
+    pub fn take_handle(&mut self) -> Result<RecordingHandle<B>, AppError> {
+        if self.inner.as_ref().is_none_or(|h| h.path.is_none()) {
+            return Err(AppError::NotRunning);
+        }
+        match self.take_any() {
+            Some(TakenSession::Recording(handle)) => Ok(handle),
+            _ => Err(AppError::NotRunning),
+        }
+    }
+
+    /// Take the running listening session out of the slot, if there is one.
+    /// A recording stays where it is. Like `take_handle`, this does not stop
+    /// capture: the caller does that off the lock.
+    pub fn take_listening(&mut self) -> Option<ListeningHandle<B>> {
+        if self.inner.as_ref().is_none_or(|h| h.path.is_some()) {
+            return None;
+        }
+        match self.take_any() {
+            Some(TakenSession::Listening(handle)) => Some(handle),
+            _ => None,
+        }
+    }
+
+    /// Take whatever session is in the slot (app exit).
+    pub fn take_any(&mut self) -> Option<TakenSession<B>> {
+        let session = self.inner.take()?;
         // Bump the generation at stop-REQUEST time, not just at next start:
         // the capture callbacks check it before appending samples/emitting
         // events, so a stop that wedges past STOP_CAPTURE_TIMEOUT stops
@@ -179,11 +276,17 @@ impl AudioRecorder {
         // silently capturing until the next recording begins. (Everything
         // up to this instant is already in the WAV; the pending finalize
         // only flushes and closes it.)
-        {
-            use std::sync::atomic::Ordering;
-            self.generation.fetch_add(1, Ordering::SeqCst);
-        }
-        Ok(handle)
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        Some(match session.path {
+            Some(path) => TakenSession::Recording(RecordingHandle {
+                path,
+                started_at: session.started_at,
+                backend: session.backend,
+            }),
+            None => TakenSession::Listening(ListeningHandle {
+                backend: session.backend,
+            }),
+        })
     }
 }
 
@@ -574,7 +677,9 @@ pub mod macos {
         resources: Mutex<Option<Resources>>,
         worker: Mutex<Option<JoinHandle<()>>>,
         writer: Arc<Mutex<Option<Wav>>>,
-        path: PathBuf,
+        /// The WAV being written; `None` for a listening session, which
+        /// creates no file.
+        path: Option<PathBuf>,
         stats: Arc<Stats>,
         mic_active: AtomicBool,
         /// A failed microphone switch ended capture; stop finalizes what was
@@ -698,17 +803,22 @@ pub mod macos {
         log::error!("leaking probe aggregate {probe} until the app quits");
     }
 
-    impl Backend {
+    impl super::CaptureBackend for Backend {
         /// Whether a failed microphone switch stopped capture.
-        pub fn capture_lost(&self) -> bool {
+        fn capture_lost(&self) -> bool {
             self.capture_lost.load(Ordering::Relaxed)
         }
+    }
 
+    impl Backend {
         /// `generation` / `generation_counter`: see `AudioRecorder`'s field
         /// doc comment in the parent module — lets the IOProc detect it has
         /// been superseded by a newer recording and stop acting.
+        /// `path` is the WAV to write. `None` starts a listening session:
+        /// the same capture, level and caption-PCM events, with no writer
+        /// and no file.
         pub fn start(
-            path: &Path,
+            path: Option<&Path>,
             app: AppHandle,
             generation: u64,
             generation_counter: Arc<AtomicU64>,
@@ -810,9 +920,14 @@ pub mod macos {
                 bits_per_sample: 16,
                 sample_format: SampleFormat::Int,
             };
-            let writer = WavWriter::create(path, spec)
-                .map_err(|e| AppError::Io(format!("create wav: {e}")))?;
-            let writer = Arc::new(Mutex::new(Some(writer)));
+            let writer = match path {
+                Some(path) => Some(
+                    WavWriter::create(path, spec)
+                        .map_err(|e| AppError::Io(format!("create wav: {e}")))?,
+                ),
+                None => None,
+            };
+            let writer = Arc::new(Mutex::new(writer));
             let stats = Arc::new(Stats::default());
             let (tx, rx) = sync_channel::<Vec<f32>>(QUEUE_BUFFERS);
             let worker = spawn_worker(
@@ -878,19 +993,24 @@ pub mod macos {
                 if let Ok(mut w) = writer.lock() {
                     w.take();
                 }
-                let _ = std::fs::remove_file(path);
+                if let Some(path) = path {
+                    let _ = std::fs::remove_file(path);
+                }
                 return Err(e);
             }
 
             log::info!(
-                "Core Audio capture started — rate={sample_rate}Hz layout={layout:?} mic={mic_active} path={}",
-                path.display()
+                "Core Audio capture started — rate={sample_rate}Hz layout={layout:?} mic={mic_active} {}",
+                match path {
+                    Some(path) => format!("path={}", path.display()),
+                    None => "listening (no file)".to_owned(),
+                }
             );
             Ok(Self {
                 resources: Mutex::new(Some(res)),
                 worker: Mutex::new(Some(worker)),
                 writer,
-                path: path.to_path_buf(),
+                path: path.map(Path::to_path_buf),
                 stats,
                 mic_active: AtomicBool::new(mic_active),
                 capture_lost: AtomicBool::new(false),
@@ -1121,12 +1241,16 @@ pub mod macos {
             let cb = self.stats.callbacks.load(Ordering::Relaxed);
             let sw = self.stats.samples_written.load(Ordering::Relaxed);
             let dropped = self.stats.dropped_buffers.load(Ordering::Relaxed);
-            let bytes = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+            let path = self.path.as_deref();
+            let bytes = path
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .unwrap_or(0);
             let (system_peak, mic_peak) = (self.stats.system_peak(), self.stats.mic_peak());
             log::info!(
                 "stopped capture: callbacks={cb} samples_written={sw} dropped={dropped} \
                  system_peak={system_peak:.4} mic_peak={mic_peak:.4} wav_bytes={bytes} path={}",
-                self.path.display()
+                path.map(|p| p.display().to_string()).unwrap_or_default()
             );
             if cb == 0 {
                 return Err(AppError::Backend(
@@ -1170,6 +1294,21 @@ pub mod macos {
                 ));
             }
             Ok(warnings)
+        }
+
+        /// Stop a listening session. There is no WAV to finalize, and
+        /// `diagnose` does not apply: it reports a recording that wrote no
+        /// samples as a failure, which is the normal state here.
+        pub fn stop_listening(&self) -> Result<(), AppError> {
+            let result = self.stop_capture_blocking();
+            log::info!(
+                "stopped listening: callbacks={} dropped={} system_peak={:.4} mic_peak={:.4}",
+                self.stats.callbacks.load(Ordering::Relaxed),
+                self.stats.dropped_buffers.load(Ordering::Relaxed),
+                self.stats.system_peak(),
+                self.stats.mic_peak()
+            );
+            result
         }
 
         /// Stop, THEN finalize regardless of the stop result, THEN diagnose.
@@ -1960,6 +2099,75 @@ mod tests {
             recorder.lock().begin_start().is_ok(),
             "drop must cancel the reservation"
         );
+    }
+
+    // --- Listening sessions (no path, no file) -----------------------------
+
+    struct FakeBackend;
+    impl CaptureBackend for FakeBackend {
+        fn capture_lost(&self) -> bool {
+            false
+        }
+    }
+
+    fn listening_recorder() -> AudioRecorder<FakeBackend> {
+        let mut r = AudioRecorder::<FakeBackend>::empty();
+        r.begin_start().unwrap();
+        r.install_listening(FakeBackend);
+        r
+    }
+
+    #[test]
+    fn listening_session_is_not_a_recording() {
+        let r = listening_recorder();
+        let s = r.snapshot();
+        assert!(s.listening && !s.recording && s.path.is_none() && !s.capture_lost);
+        assert!(!r.is_starting());
+        assert!(r.backend().is_none());
+    }
+
+    #[test]
+    fn stop_recording_cannot_take_a_listening_session() {
+        let mut r = listening_recorder();
+        assert!(matches!(r.take_handle(), Err(AppError::NotRunning)));
+        assert!(r.snapshot().listening);
+        assert!(r.take_listening().is_some());
+        assert!(!r.snapshot().listening);
+    }
+
+    #[test]
+    fn stop_listening_cannot_take_a_recording() {
+        let mut r = AudioRecorder::<FakeBackend>::empty();
+        r.begin_start().unwrap();
+        r.install(PathBuf::from("/tmp/x.wav"), FakeBackend);
+        assert!(r.take_listening().is_none());
+        assert!(r.snapshot().recording && !r.snapshot().listening);
+        assert!(r.backend().is_some());
+        assert!(r.take_handle().is_ok());
+    }
+
+    #[test]
+    fn listening_and_recording_are_mutually_exclusive() {
+        let mut r = listening_recorder();
+        assert!(matches!(r.begin_start(), Err(AppError::AlreadyRunning)));
+        let before = r.generation.load(Ordering::SeqCst);
+        r.take_listening();
+        // The stop itself supersedes the capture, before any next start.
+        assert_eq!(r.generation.load(Ordering::SeqCst), before + 1);
+        assert_eq!(r.begin_start().unwrap().generation, before + 2);
+    }
+
+    #[test]
+    fn take_any_takes_either_kind() {
+        let mut r = AudioRecorder::<FakeBackend>::empty();
+        assert!(r.take_any().is_none());
+        r.begin_start().unwrap();
+        r.install_listening(FakeBackend);
+        assert!(matches!(r.take_any(), Some(TakenSession::Listening(_))));
+        r.begin_start().unwrap();
+        r.install(PathBuf::from("/tmp/x.wav"), FakeBackend);
+        assert!(matches!(r.take_any(), Some(TakenSession::Recording(_))));
+        assert!(r.take_any().is_none());
     }
 
     /// `control::app_busy` counts a start reservation as busy.

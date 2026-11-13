@@ -12,6 +12,8 @@ const COMMANDS: &[&str] = &[
     "cleanup_recording",
     "release_recording_power",
     "list_leftover_recordings",
+    "start_listening",
+    "stop_listening",
     "control_ready",
     "control_reply",
     "control_report_state",

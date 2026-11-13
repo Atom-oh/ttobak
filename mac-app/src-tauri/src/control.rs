@@ -276,7 +276,9 @@ pub fn app_busy(app: &AppHandle) -> bool {
     // A start reservation counts too: capture begins once it completes.
     let native_recording = {
         let rec = recorder.recorder.lock();
-        rec.snapshot().recording || rec.is_starting()
+        let snapshot = rec.snapshot();
+        // Live interpretation is capture too: an update must not interrupt it.
+        snapshot.recording || snapshot.listening || rec.is_starting()
     };
     let finalizing = recorder.finalizing.lock().len();
     let uploads = recorder

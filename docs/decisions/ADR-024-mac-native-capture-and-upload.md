@@ -38,6 +38,19 @@
   certify a finished WAV.
 - Zero callbacks or zero samples are hard errors; other problems are returned
   as warnings.
+- Live interpretation without a meeting (2026-11-13) is a listening session:
+  `start_listening` runs the same capture with no WAV writer and no path. It
+  shares the one recorder slot, so it never captures alongside a recording.
+  Nothing is written, and path-based code (status, upload, cleanup, leftover
+  adoption, meeting detection) does not see it as a recording. A recording
+  start stops it first; `sleep.rs` stops it at will-sleep; the updater treats
+  it as busy; it holds its own idle-sleep assertion. Listening starts and
+  stops run one at a time (`listening_lifecycle`), so a stop waits for a
+  start still in flight and then stops the session it installed. `stop_listening` only
+  stops capture: the zero-sample check above is a recording check and does
+  not apply. The `/interpret` screen stops a session after 10 minutes with no
+  recognized speech, because nothing else ends it while it keeps the Mac
+  awake and streams to Transcribe, which the translation limits do not cover.
 
 ### Upload
 
@@ -110,6 +123,9 @@
 - Force Quit cannot finalize a recording; the five-second flush limits the
   loss.
 - The system tap can capture unrelated sounds; it excludes only the app itself.
+- A listening session has no unit coverage beyond the recorder slot rules:
+  preemption by a recording, the sleep stop and the absence of any file need a
+  real Mac to verify.
 - A Bluetooth headset used as input may switch to a lower-quality profile.
 - Before recording, the web app probes the upload command with an empty path
   to catch a version mismatch with the app. The probe relies on path
