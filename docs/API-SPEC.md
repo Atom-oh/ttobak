@@ -94,7 +94,10 @@ Personal reads omit a revoked association; an inaccessible Account-filtered read
 Owner event views also carry `sharingMode` (`auto`, `account` or `hidden`) and,
 when present, `shareAccountId`, `shareEvidence`, `candidateAccountIds` and
 `private`. `shareAccountId` and `shareEvidence` reflect the stored granted share
-only; a hidden, `Private`-vetoed or collision-dropped event has none. `Private`
+only; a vetoed or collision-dropped event has none. A hidden override that
+was stored while its share change failed still reports the granted share,
+and members can read the event until a retried unshare or the next sync
+applies it. `Private`
 beats an `account` override. A shared event is visible to direct Account members only; any sharer's
 veto hides the meeting from the Account calendar. `AccountCalendarEvent` contains
 `meetingKey`, `title`, `startsAt`, `endsAt`, `timeZone`, `isAllDay`, optional

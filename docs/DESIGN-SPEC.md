@@ -443,7 +443,9 @@ expiry drop it. It is never persisted and does not authorize reads.
 
 Calendar sharing (`src/lib/calendarSharing.ts` owns the pure helpers and the Korean copy
 `SHARING_COPY`): owner event cards show a badge (shared with the resolved account name and an
-evidence tooltip of title/location/attendee domain, candidate, or private) and actions. Assign opens a
+evidence tooltip of title/location/attendee domain, candidate, or private) and actions. A granted
+share (`shareAccountId`) always shows as shared with unshare available, even under a hidden override
+or `Private` that has not taken effect yet. Assign opens a
 picker of direct-membership accounts from the share directory, candidates first; unshare sets mode
 hidden; back to automatic sets mode auto. Each action disables its buttons while pending, replaces the
 event with the response, and shows an alert on failure. The Account Meetings tab renders

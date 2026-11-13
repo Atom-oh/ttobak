@@ -20,10 +20,13 @@ test('badge classifies shared, candidate, private and none', () => {
     { kind: 'shared', accountId: 'a1', evidence: ['title', 'domain'] });
   assert.deepEqual(plain(helpers.sharingBadge(event({ shareAccountId: 'a1' }))), { kind: 'shared', accountId: 'a1', evidence: [] });
   assert.deepEqual(plain(helpers.sharingBadge(event({ candidateAccountIds: ['a2'] }))), { kind: 'candidate' });
-  assert.deepEqual(plain(helpers.sharingBadge(event({ private: true, shareAccountId: 'a1' }))), { kind: 'private' });
+  assert.deepEqual(plain(helpers.sharingBadge(event({ private: true }))), { kind: 'private' });
+  // A granted share stays visible until it is actually removed.
+  assert.deepEqual(plain(helpers.sharingBadge(event({ private: true, shareAccountId: 'a1' }))), { kind: 'shared', accountId: 'a1', evidence: [] });
   assert.deepEqual(plain(helpers.sharingBadge(event({}))), { kind: 'none' });
   assert.deepEqual(plain(helpers.sharingBadge(event({ sharingMode: 'hidden', candidateAccountIds: ['a2'] }))), { kind: 'none' });
-  assert.deepEqual(plain(helpers.sharingBadge(event({ sharingMode: 'hidden', shareAccountId: 'a1', shareEvidence: ['domain'] }))), { kind: 'none' });
+  assert.deepEqual(plain(helpers.sharingBadge(event({ sharingMode: 'hidden', shareAccountId: 'a1', shareEvidence: ['domain'] }))),
+    { kind: 'shared', accountId: 'a1', evidence: ['domain'] });
 });
 
 test('actions follow badge kind and manual mode', () => {
@@ -34,6 +37,8 @@ test('actions follow badge kind and manual mode', () => {
   assert.deepEqual(plain(helpers.sharingActions(event({ sharingMode: 'hidden' }), direct)), ['assign', 'reset']);
   assert.deepEqual(plain(helpers.sharingActions(event({ sharingMode: 'account', shareAccountId: 'a1' }), direct)), ['unshare', 'reset']);
   assert.deepEqual(plain(helpers.sharingActions(event({ private: true, sharingMode: 'hidden' }), direct)), ['reset']);
+  // A hidden override whose share change failed keeps unshare so the owner can retry.
+  assert.deepEqual(plain(helpers.sharingActions(event({ sharingMode: 'hidden', shareAccountId: 'a1' }), direct)), ['unshare', 'reset']);
   assert.deepEqual(plain(helpers.sharingActions(event({}), [])), []);
 });
 

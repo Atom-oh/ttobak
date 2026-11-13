@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import type { CalendarEvent, CalendarShareDirectoryAccount, CalendarSharingRequest, CalendarSourceStatus } from '@/types/calendar';
 import { useCalendarEvents, useCalendarWindow } from '@/hooks/useCalendarEvents';
@@ -64,11 +64,14 @@ export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight, ac
     return () => controller.abort();
   }, [userId]);
   const events = applySharingOverlay(calendar.events, overlay);
+  // The response may arrive after a page loads; record it against the events current then.
+  const loadedEvents = useRef(calendar.events);
+  useEffect(() => { loadedEvents.current = calendar.events; }, [calendar.events]);
   const onSharing = async (event: CalendarEvent, request: CalendarSharingRequest) => {
     setSharingError(null);
     try {
       const updated = await calendarApi.setSharing(event.sourceId, event.eventId, request, { expectedUserId: userId });
-      setOverlay(previous => recordSharingOverlay(calendar.events, previous, updated));
+      setOverlay(previous => recordSharingOverlay(loadedEvents.current, previous, updated));
     } catch {
       setSharingError(SHARING_COPY.actionError);
     }

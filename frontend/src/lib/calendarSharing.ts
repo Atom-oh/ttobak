@@ -28,10 +28,11 @@ export type SharingAction = 'assign' | 'unshare' | 'reset';
 export interface SharingBadge { kind: 'shared' | 'candidate' | 'private' | 'none'; accountId?: string; evidence?: string[] }
 
 export function sharingBadge(event: CalendarEvent): SharingBadge {
-  if (event.private) return { kind: 'private' };
-  // Hidden never reads as shared, even if a stale payload still names an account.
-  if (event.sharingMode === 'hidden') return { kind: 'none' };
+  // shareAccountId is the stored granted share, so members can read the event: show it
+  // (and offer unshare) even when a hidden override or Private has not taken effect yet.
   if (event.shareAccountId) return { kind: 'shared', accountId: event.shareAccountId, evidence: event.shareEvidence ?? [] };
+  if (event.private) return { kind: 'private' };
+  if (event.sharingMode === 'hidden') return { kind: 'none' };
   if (event.candidateAccountIds?.length) return { kind: 'candidate' };
   return { kind: 'none' };
 }
