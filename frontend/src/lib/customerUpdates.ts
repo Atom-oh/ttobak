@@ -108,6 +108,17 @@ export const COPY = {
   'drafts.toggle': '이 고객의 초안 받기',
   'drafts.empty': '아직 초안이 없습니다. 설정에서 소스를 등록하면 관련 있는 소식만 초안으로 쌓입니다.',
   'drafts.more': '더 보기',
+  'card.save': '저장',
+  'card.cancel': '취소',
+  'card.reopen': '다시 열기',
+  'card.copied': '복사했어요',
+  'card.copyFailed': '복사하지 못했습니다.',
+  'card.actionFailed': '처리하지 못했습니다. 다시 시도해 주세요.',
+  'card.bodyLabel': '초안 내용',
+  'drafts.loadFailed': '초안을 불러오지 못했습니다.',
+  'drafts.settingFailed': '설정을 바꾸지 못했습니다.',
+  'drafts.title': '고객 초안',
+  'drafts.pageHint': '관련 있는 고객 소식으로 만든 초안을 고객별로 모아 보여드려요.',
   'mac.links.setupLabel': 'Slack 링크',
   'mac.links.busy': '이미 수집 중',
   'mac.links.load': '채널 불러오기',
@@ -152,6 +163,43 @@ export function groupDraftsByDay(drafts: UpdateDraft[]): { day: string; drafts: 
     else groups.push({ day, drafts: [draft] });
   }
   return groups;
+}
+
+/** Only https links are rendered as anchors; anything else stays plain text. */
+export function isHttpsUrl(url: string): boolean {
+  return typeof url === 'string' && url.startsWith('https://');
+}
+
+/** Splits drafts into the open ones (`new`) and the handled ones (adopted or dismissed). */
+export function splitHandledDrafts(drafts: UpdateDraft[]): { open: UpdateDraft[]; handled: UpdateDraft[] } {
+  const open: UpdateDraft[] = [];
+  const handled: UpdateDraft[] = [];
+  for (const draft of drafts) (draft.status === 'new' ? open : handled).push(draft);
+  return { open, handled };
+}
+
+/** Groups drafts by account, keeping the order in which each account first appears. */
+export function groupDraftsByAccount(drafts: UpdateDraft[]): { accountId: string; drafts: UpdateDraft[] }[] {
+  const groups: { accountId: string; drafts: UpdateDraft[] }[] = [];
+  const index = new Map<string, number>();
+  for (const draft of drafts) {
+    const at = index.get(draft.accountId);
+    if (at === undefined) {
+      index.set(draft.accountId, groups.length);
+      groups.push({ accountId: draft.accountId, drafts: [draft] });
+    } else groups[at].drafts.push(draft);
+  }
+  return groups;
+}
+
+/** Display name for an account the page could not resolve: the id, shortened. */
+export function shortAccountId(accountId: string): string {
+  return accountId.length > 8 ? accountId.slice(0, 8) : accountId;
+}
+
+/** Replaces the draft with the same account and URL hash; other drafts are untouched. */
+export function replaceDraft(drafts: UpdateDraft[], next: UpdateDraft): UpdateDraft[] {
+  return drafts.map((d) => (d.accountId === next.accountId && d.urlHash === next.urlHash ? next : d));
 }
 
 /** Best-effort kind for a pasted URL; the user can still change it. */

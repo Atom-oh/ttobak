@@ -63,3 +63,34 @@ test('validateSourceForm requires https and a 1-100 character label', () => {
   assert.notEqual(cu.validateSourceForm('https://example.com', 'x'.repeat(101)), '');
   assert.equal(cu.validateSourceForm('https://example.com', 'x'.repeat(100)), '');
 });
+
+const mk = (accountId, urlHash, status = 'new') => ({ accountId, urlHash, status });
+
+test('isHttpsUrl accepts only https links', () => {
+  assert.equal(cu.isHttpsUrl('https://example.com/a'), true);
+  assert.equal(cu.isHttpsUrl('http://example.com/a'), false);
+  assert.equal(cu.isHttpsUrl('javascript:alert(1)'), false);
+  assert.equal(cu.isHttpsUrl(''), false);
+});
+
+test('splitHandledDrafts separates open from handled', () => {
+  const { open, handled } = plain(cu.splitHandledDrafts([mk('a', '1'), mk('a', '2', 'adopted'), mk('a', '3', 'dismissed')]));
+  assert.deepEqual(open.map((d) => d.urlHash), ['1']);
+  assert.deepEqual(handled.map((d) => d.urlHash), ['2', '3']);
+});
+
+test('groupDraftsByAccount keeps first-seen order', () => {
+  const groups = plain(cu.groupDraftsByAccount([mk('b', '1'), mk('a', '2'), mk('b', '3')]));
+  assert.deepEqual(groups.map((g) => [g.accountId, g.drafts.map((d) => d.urlHash)]), [['b', ['1', '3']], ['a', ['2']]]);
+});
+
+test('shortAccountId shortens long ids only', () => {
+  assert.equal(cu.shortAccountId('abcdef0123456789'), 'abcdef01');
+  assert.equal(cu.shortAccountId('abc'), 'abc');
+});
+
+test('replaceDraft swaps only the matching draft', () => {
+  const next = { ...mk('a', '2'), status: 'adopted' };
+  const out = plain(cu.replaceDraft([mk('a', '1'), mk('a', '2'), mk('b', '2')], next));
+  assert.deepEqual(out.map((d) => d.status), ['new', 'adopted', 'new']);
+});

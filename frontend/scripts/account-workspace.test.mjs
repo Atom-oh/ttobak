@@ -105,6 +105,7 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
     '@/components/account/AccountLinksPanel': { AccountLinksPanel: () => null },
     '@/components/account/CustomerBriefCard': { CustomerBriefCard: () => null },
     '@/components/account/AccountKB': { AccountKB: () => null },
+    '@/components/AccountDraftsTab': { AccountDraftsTab: () => null },
     '@/lib/runtimeConfig': { getRuntimeConfig: async () => ({ billingService: billing }) },
     '@/lib/billingApi': { fetchBillingAccounts: billingAccounts },
     '@/lib/upload': { uploadDocFile: upload },

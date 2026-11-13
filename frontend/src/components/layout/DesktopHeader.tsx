@@ -21,6 +21,7 @@ const pathLabels: Record<string, string> = {
   '/docs': 'Docs',
   '/billing': 'Billing',
   '/performance': 'SA Activity',
+  '/drafts': '고객 초안',
   '/changelog': '변경 내역',
 };
 

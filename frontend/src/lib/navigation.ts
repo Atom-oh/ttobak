@@ -28,6 +28,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/projects', icon: 'work', label: 'Projects' },
       { href: '/docs', icon: 'article', label: 'Docs' },
       { href: '/performance', icon: 'insights', label: 'SA Activity' },
+      // Copy key nav.drafts, kept literal so this module stays dependency-free.
+      { href: '/drafts', icon: 'edit_note', label: '고객 초안' },
     ],
   },
   {
