@@ -32178,7 +32178,7 @@ var init_claude = __esm({
       "ANTHROPIC_DEFAULT_HAIKU_MODEL"
     ];
     ENV_VALUE = /^[\x20-\x7e]{1,512}$/;
-    MIN_CLAUDE_VERSION = [2, 1, 322];
+    MIN_CLAUDE_VERSION = [2, 1, 311];
     VERSION_TIMEOUT_MS = 1e4;
     PYTHON_MANAGERS = [".pyenv", ".asdf", ".rye", ".mise", ".conda", "miniconda3", "anaconda3", "miniforge3"];
     SANDBOX_FAILURE = /sandbox required but unavailable|sandbox_required_unavailable|sandbox_exec_lost_and_required|sandbox\.failIfUnavailable/i;

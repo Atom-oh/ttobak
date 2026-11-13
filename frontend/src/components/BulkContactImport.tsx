@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { accountApi } from '@/lib/api';
 import { CONTACT_FIELDS, PEOPLE_RESOLVE_FAILED, PEOPLE_RESOLVE_RETRY, contactFromRow, isContactAccessDenied, mapContactHeaders, requestPeopleResolve, type ContactField, type ContactMapping } from '@/lib/contactImport';
 import { readContactFile } from '@/lib/contactFile';
+import { useContactFileDrop } from '@/lib/contactFileDrop';
 import { defaultDecision, groupByCompany, runBulkImport, type BulkRowResult, type CompanyGroup, type FieldConflict, type GroupDecision, type MatchAccount } from '@/lib/contactBulkImport';
 import type { ContactInput } from '@/types/meeting';
 
@@ -95,6 +96,9 @@ export function BulkContactImport({ userId }: { userId: string }) {
       setError(isContactAccessDenied(err) ? '고객사 목록을 불러올 권한이 없습니다.' : err instanceof Error ? err.message : '파일을 읽지 못했습니다.');
     }
   };
+
+  const fileDrop = useContactFileDrop({ disabled: busy, onFile: (file) => { void chooseFile(file); }, onReject: setError });
+
 
   const setDecision = (key: string, decision: GroupDecision) => setDecisions((old) => ({ ...old, [key]: decision }));
 
@@ -244,7 +248,10 @@ export function BulkContactImport({ userId }: { userId: string }) {
   return <div className="space-y-4">
     <p className="text-sm text-slate-600 dark:text-text-muted">Remember에서 내보낸 CSV 또는 .xlsx 파일을 올리면 회사명과 이메일 도메인으로 고객사를 찾아 연락처를 넣습니다. 이메일이 같거나, 이름과 전화번호(휴대폰 또는 근무처 전화)가 함께 일치하면 같은 사람으로 봅니다. 단, 양쪽에 이메일이 있고 서로 다르면 전화번호가 같아도 합치지 않습니다. 같은 사람은 비어 있는 칸만 채우고, 다른 값은 덮어쓰지 않고 변경 후보로 보여 드립니다. 내가 직접 멤버인 고객사에만 넣을 수 있습니다.</p>
     <label className="block text-sm">연락처 파일 선택 (CSV 또는 .xlsx)
-      <input type="file" accept=".csv,.xlsx" disabled={busy} className="mt-2 block w-full max-w-md cursor-pointer text-sm text-slate-600 dark:text-text-muted file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-50 dark:file:border-white/10 dark:file:bg-white/5 dark:file:text-text-main dark:hover:file:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onChange={(e) => { void chooseFile(e.target.files?.[0]); e.target.value = ''; }} />
+      <div {...fileDrop.zoneProps} data-contact-drop-zone className={`mt-2 max-w-md rounded-xl border-2 border-dashed p-3 transition-colors ${fileDrop.dragging ? 'border-primary bg-primary/5' : 'border-slate-200 dark:border-white/10'}`}>
+        <input type="file" accept=".csv,.xlsx" disabled={busy} className="block w-full max-w-md cursor-pointer text-sm text-slate-600 dark:text-text-muted file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-50 dark:file:border-white/10 dark:file:bg-white/5 dark:file:text-text-main dark:hover:file:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onChange={(e) => { void chooseFile(e.target.files?.[0]); e.target.value = ''; }} />
+        <p className="mt-2 text-xs text-slate-500 dark:text-text-muted">Remember에서 내보낸 파일을 여기로 끌어다 놓아도 됩니다.</p>
+      </div>
     </label>
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
     {resolveFailed.length > 0 && <p role="alert" className="text-sm text-amber-700">{PEOPLE_RESOLVE_FAILED}{' '}
