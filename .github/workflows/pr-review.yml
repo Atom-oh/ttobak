@@ -107,7 +107,10 @@ jobs:
             test -s "/tmp/pr-review/lenses/${lens}.txt" || { echo "::error::missing lens ${lens}"; exit 1; }
           done
 
-          if [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
+          # The specialist protocol (ROLE_REVIEW=1) prepares its own complete diff
+          # from git and enforces role-aware caps, so this prefix applies only to
+          # the legacy lens panel.
+          if [ "${ROLE_REVIEW:-0}" != "1" ] && [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
             for f in /tmp/pr-review/lenses/*.txt; do
               echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed." >> "$f"
             done
@@ -287,7 +290,7 @@ jobs:
             echo "_Synthesis: ${chair_used:-pending}_"
             echo ""
             echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
-            [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
+            [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ legacy panel: diff truncated to first 3000 lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
             echo "Workspace initialization: ${WORKSPACE_OUTCOME:-missing} · Evidence validation: ${ARTIFACT_INPUT_OUTCOME:-missing}"
