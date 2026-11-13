@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SttManager, type TranscribeStreamingConfig } from '@/lib/sttManager';
-import type { TranslationEntry } from '@/lib/liveTranslation';
+import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import {
   INTERPRET_VERSION_SKEW_MESSAGE, isCommandNotFound, isTauri, onNativeListeningStopped, onNativePcmChunk,
@@ -16,6 +16,13 @@ interface UseInterpretSessionOptions {
   targetLang: string;
   /** Translate partial captions too (opt-in, higher cost). */
   interimTranslation: boolean;
+  /**
+   * Every recognized segment, for the floating caption windows. The ID is
+   * unique within one interpretation run, across caption reconnects.
+   */
+  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
+  /** Third recognition language chosen for the caption windows, read when a caption session starts. */
+  getExtraLanguage?: () => ExtraLiveLanguage | undefined;
 }
 
 type SessionState = InterpretState<TranslationEntry, NativeSelectedInput>;
@@ -58,11 +65,17 @@ async function loadTranscribeConfig(): Promise<TranscribeStreamingConfig | null>
  * `useRecordingSession`, which carries the meeting, transcript and upload
  * flow this screen must never reach.
  */
-export function useInterpretSession({ targetLang, interimTranslation }: UseInterpretSessionOptions) {
+export function useInterpretSession({ targetLang, interimTranslation, onSegment, getExtraLanguage }: UseInterpretSessionOptions) {
   const [state, setState] = useState<SessionState>(IDLE_STATE);
   const [elapsedMs, setElapsedMs] = useState(0);
   const controllerRef = useRef<Controller | null>(null);
   const optionsRef = useRef({ targetLang, interimTranslation });
+  const onSegmentRef = useRef(onSegment);
+  const getExtraLanguageRef = useRef(getExtraLanguage);
+  useEffect(() => {
+    onSegmentRef.current = onSegment;
+    getExtraLanguageRef.current = getExtraLanguage;
+  }, [onSegment, getExtraLanguage]);
 
   useEffect(() => {
     optionsRef.current.targetLang = targetLang;
@@ -77,11 +90,14 @@ export function useInterpretSession({ targetLang, interimTranslation }: UseInter
   useEffect(() => {
     if (!isTauri()) return;
     let config: Promise<TranscribeStreamingConfig | null> | null = null;
+    // Each caption session restarts its segment IDs; the prefix keeps them apart.
+    let sttSession = 0;
     const controller: Controller = new InterpretController({
       loadConfig: () => (config ??= loadTranscribeConfig().catch(() => null)),
       startCapture: startNativeListening,
       stopCapture: stopNativeListening,
       createStt: (transcribeStreamingConfig, options, handlers) => {
+        const session = ++sttSession;
         const manager = new SttManager({
           callbacks: {
             onTranscript: () => handlers.onTranscript(),
@@ -95,6 +111,9 @@ export function useInterpretSession({ targetLang, interimTranslation }: UseInter
           translationEnabled: true,
           interimTranslation: options.interimTranslation,
           transcribeStreamingConfig,
+          extraLanguage: getExtraLanguageRef.current?.(),
+          onSegment: (id, text, isFinal, languageCode) =>
+            onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode),
         });
         return {
           start: () => manager.startNative('transcribe-streaming'),
