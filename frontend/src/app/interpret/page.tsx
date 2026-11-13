@@ -7,11 +7,16 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
-import { TranslationView } from '@/components/TranslationView';
 import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { useInterpretSession } from '@/hooks/useInterpretSession';
+import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
+import { upsertCaptionLine, visibleCaptionLines } from '@/lib/interpretCaptions';
 import { INTERPRET_MESSAGES, formatElapsed } from '@/lib/interpretSession';
-import { BILINGUAL_TARGET } from '@/lib/liveTranslation';
+import {
+  DEFAULT_SPEECH_LANGUAGES, MAX_SPEECH_LANGUAGES, SPEECH_LANGUAGES, SPEECH_LANGUAGE_KEY,
+  canToggleSpeechLanguage, parseSpeechLanguages, toggleSpeechLanguage, type SpeechLanguage,
+} from '@/lib/interpretSpeechLanguage';
+import { BILINGUAL_TARGET, type TranslationEntry } from '@/lib/liveTranslation';
 import { onNativeAudioLevel, useIsMacApp } from '@/lib/tauri';
 
 /** Input level while listening. Its own component so the ~30 Hz level events do not re-render the captions. */
@@ -39,10 +44,53 @@ function LevelMeter({ active }: { active: boolean }) {
   );
 }
 
+const CAPTION_LANGUAGE_LABELS: Record<CaptionLang, string> = { ko: '한국어', en: 'English', ja: '日本語', zh: '中文' };
+
+type CaptionLines = Partial<Record<CaptionLang, TranslationEntry[]>>;
+
+/** One caption language's lines in large text; follows the newest line. */
+function CaptionColumn({ lang, lines, open }: { lang: CaptionLang; lines: TranslationEntry[]; open: boolean }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  const last = lines[lines.length - 1];
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [lines.length, last?.translated]);
+  return (
+    <section aria-label={`${CAPTION_LANGUAGE_LABELS[lang]} 자막`} className="flex min-h-0 min-w-0 flex-col rounded-2xl border border-slate-200 bg-white dark:border-white/10 dark:bg-white/5">
+      <h3 className="shrink-0 border-b border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 dark:border-white/10 dark:text-text-secondary">
+        {CAPTION_LANGUAGE_LABELS[lang]}
+      </h3>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+        {lines.map((line) => (
+          <p key={line.id} className={`text-2xl font-semibold leading-snug break-words ${line.isFinal ? 'text-slate-900 dark:text-text-main' : 'text-slate-500 dark:text-text-muted'}`}>
+            {line.translated}
+          </p>
+        ))}
+        {open && lines.length === 0 && (
+          <p className="text-sm text-slate-500 dark:text-text-muted">통역을 시작하면 여기에 자막이 쌓여요.</p>
+        )}
+        {!open && (
+          <p className="text-sm text-slate-500 dark:text-text-muted">
+            위 &quot;자막 창&quot;에서 이 언어의 창을 열면 여기에도 같은 자막이 보여요.
+          </p>
+        )}
+        <div ref={endRef} />
+      </div>
+    </section>
+  );
+}
+
 function Interpreter() {
-  const [targetLang, setTargetLang] = useState(BILINGUAL_TARGET);
-  const [interimTranslation, setInterimTranslation] = useState(false);
   const [inputUid, setInputUid] = useState(readNativeInputPreference);
+  // In-app copy of the caption windows, in memory only.
+  const [captionLines, setCaptionLines] = useState<CaptionLines>({});
+  const onCaptionEntry = useCallback((lang: CaptionLang, entry: TranslationEntry) => {
+    setCaptionLines((previous) => {
+      const lines = previous[lang] ?? [];
+      const next = upsertCaptionLine(lines, entry);
+      return next === lines ? previous : { ...previous, [lang]: next };
+    });
+  }, []);
   // The caption windows need the session's phase and the session needs their
   // segment handler; the ref breaks that cycle (as on the record page).
   const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
@@ -50,9 +98,39 @@ function Interpreter() {
   const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
     captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
   }, []);
-  const session = useInterpretSession({ targetLang, interimTranslation, onSegment, getExtraLanguage });
+  // Spoken languages: one or two of four, kept as a per-viewer preference.
+  const [speechLanguages, setSpeechLanguages] = useState<SpeechLanguage[]>(() => {
+    try {
+      return parseSpeechLanguages(window.localStorage.getItem(SPEECH_LANGUAGE_KEY));
+    } catch {
+      return [...DEFAULT_SPEECH_LANGUAGES];
+    }
+  });
+  const speechRef = useRef(speechLanguages);
+  useEffect(() => {
+    speechRef.current = speechLanguages;
+  }, [speechLanguages]);
+  const getSpeechLanguages = useCallback(() => speechRef.current, []);
+  const switchSpeechLanguage = (lang: SpeechLanguage) => {
+    const next = toggleSpeechLanguage(speechLanguages, lang);
+    setSpeechLanguages(next);
+    try {
+      window.localStorage.setItem(SPEECH_LANGUAGE_KEY, JSON.stringify(next));
+    } catch {
+      // The choice still applies to this visit.
+    }
+  };
+  const session = useInterpretSession({
+    targetLang: BILINGUAL_TARGET, interimTranslation: false, onSegment, getExtraLanguage, getSpeechLanguages,
+  });
   const idle = session.phase === 'idle';
-  const captions = useCaptionOverlay({ isRecording: !idle });
+  const captions = useCaptionOverlay({ isRecording: !idle, onEntry: onCaptionEntry });
+  const start = () => {
+    // A new run restarts the caption engines and their line order.
+    setCaptionLines({});
+    void session.start(inputUid || undefined);
+  };
+  const languages = captionLanguages(captions.view?.settings.extraLanguage ?? null);
   const { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment } = captions;
   useEffect(() => {
     captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
@@ -62,22 +140,38 @@ function Interpreter() {
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 lg:p-6">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:font-headline dark:text-text-main">실시간 통역</h2>
-        <label
-          className="ml-auto flex items-center gap-1.5 text-sm text-slate-600 dark:text-text-secondary"
-          title="말하는 도중의 문장도 번역합니다. 번역 요청이 크게 늘어납니다."
-        >
-          <input
-            type="checkbox"
-            checked={interimTranslation}
-            onChange={(event) => setInterimTranslation(event.target.checked)}
-            className="rounded border-slate-300 text-primary focus:ring-primary"
-          />
-          초안 번역 (비용↑)
-        </label>
       </div>
 
       <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
         <NativeMicSelector value={inputUid} onChange={setInputUid} disabled={!idle} mode="listen" />
+        <fieldset className="flex flex-col gap-1.5" disabled={!idle}>
+          <legend className="text-xs font-bold text-slate-600 dark:text-text-secondary">
+            말하는 언어 (최대 {MAX_SPEECH_LANGUAGES}개)
+          </legend>
+          <div className="flex min-h-10 flex-wrap items-center gap-2">
+            {SPEECH_LANGUAGES.map((item) => {
+              const on = speechLanguages.includes(item.value);
+              return (
+                <label
+                  key={item.value}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 ${on
+                    ? 'border-primary bg-primary/10 font-semibold text-primary'
+                    : 'border-slate-200 text-slate-700 dark:border-white/10 dark:text-text-secondary'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!idle || !canToggleSpeechLanguage(speechLanguages, item.value)}
+                    onChange={() => switchSpeechLanguage(item.value)}
+                    className="rounded border-slate-300 text-primary focus:ring-primary"
+                  />
+                  {item.label}
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-xs text-slate-500 dark:text-text-muted">실제로 쓰는 언어만 고르면 더 정확해요. 하나만 골라도 돼요.</p>
+        </fieldset>
         <div className="ml-auto flex items-center gap-4">
           {!idle && <LevelMeter active />}
           {!idle && (
@@ -88,7 +182,7 @@ function Interpreter() {
           {idle ? (
             <button
               type="button"
-              onClick={() => void session.start(inputUid || undefined)}
+              onClick={start}
               className="flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             >
               <span className="material-symbols-outlined text-lg" aria-hidden="true">translate</span>
@@ -135,15 +229,11 @@ function Interpreter() {
       {/* Floating caption windows for a projector or a shared screen. */}
       <CaptionOverlayPanel {...captions} isRecording={!idle} onExpandedChange={captions.setArranging} />
 
-      <div className="min-h-0 flex-1">
-        <TranslationView
-          translations={session.translations}
-          targetLang={targetLang}
-          onTargetLangChange={setTargetLang}
-          isActive={!idle}
-          fill
-          size="large"
-        />
+      {/* The same languages as the caption windows, side by side in large text. */}
+      <div className="grid min-h-0 flex-1 auto-rows-fr gap-4 md:grid-flow-col md:auto-cols-fr">
+        {languages.map((lang) => (
+          <CaptionColumn key={lang} lang={lang} lines={visibleCaptionLines(captionLines[lang] ?? [])} open={captions.openLangs.includes(lang)} />
+        ))}
       </div>
     </div>
   );

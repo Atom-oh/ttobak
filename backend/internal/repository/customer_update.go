@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -12,22 +13,28 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/sealing"
 )
 
 // CustomerUpdateRepository stores customer update sources, inbox items, shared
 // URL cache rows, drafts and per-account opt rows. Rows never log URLs, labels
-// or draft text.
+// or draft text; draft text is stored sealed.
 type CustomerUpdateRepository struct {
 	client    *dynamodb.Client
 	tableName string
 	// now is the clock used for TTL defaults and expired-row conditions.
 	now func() time.Time
+	// sealer seals draft text; nil makes draft reads and writes fail closed.
+	sealer sealing.Sealer
 }
 
 // NewCustomerUpdateRepository creates a CustomerUpdateRepository.
 func NewCustomerUpdateRepository(client *dynamodb.Client, tableName string) *CustomerUpdateRepository {
 	return &CustomerUpdateRepository{client: client, tableName: tableName, now: time.Now}
 }
+
+// SetRecordSealer sets the KMS envelope sealer for draft rows.
+func (r *CustomerUpdateRepository) SetRecordSealer(s sealing.Sealer) { r.sealer = s }
 
 func (r *CustomerUpdateRepository) clock() time.Time {
 	if r.now == nil {
@@ -52,11 +59,6 @@ type updateSourceRow struct {
 type updateItemRow struct {
 	customerUpdateKeys
 	model.UpdateItem
-}
-
-type updateDraftRow struct {
-	customerUpdateKeys
-	model.UpdateDraft
 }
 
 type updateURLRow struct {
@@ -359,23 +361,121 @@ func (r *CustomerUpdateRepository) MarkPending(ctx context.Context, userID strin
 	return nil
 }
 
-func draftRow(userID string, d *model.UpdateDraft) updateDraftRow {
-	row := updateDraftRow{
+// ErrUpdateDraftEncryptionUnavailable shares the contact sentinel: drafts hold
+// billing-derived and user-written text and fail closed without a key.
+var ErrUpdateDraftEncryptionUnavailable = ErrContactEncryptionUnavailable
+
+// ErrUpdateDraftUnreadable means one stored draft cannot be opened: it is
+// malformed, unsealed or bound to another record. It never covers a missing
+// key or a transport failure.
+var ErrUpdateDraftUnreadable = errors.New("customer update draft unreadable")
+
+// storedUpdateDraft is the at-rest form: keys, status, revision and timestamps
+// stay plaintext for conditions, listing and TTL; draft text is sealed.
+type storedUpdateDraft struct {
+	customerUpdateKeys
+	AccountID string    `dynamodbav:"accountId"`
+	URLHash   string    `dynamodbav:"urlHash"`
+	Status    string    `dynamodbav:"status"`
+	Revision  int       `dynamodbav:"revision"`
+	RunID     string    `dynamodbav:"runId"`
+	CreatedAt time.Time `dynamodbav:"createdAt"`
+	UpdatedAt time.Time `dynamodbav:"updatedAt"`
+	ExpiresAt int64     `dynamodbav:"pendingShareExpiresAt"`
+	Sealed    string    `dynamodbav:"sealed"`
+}
+
+// sealedDraftFields is the sealed JSON payload of one draft.
+type sealedDraftFields struct {
+	SourceURL     string                   `json:"sourceUrl"`
+	SourceTitle   string                   `json:"sourceTitle"`
+	Why           string                   `json:"why"`
+	Body          string                   `json:"body"`
+	EditedBody    string                   `json:"editedBody"`
+	Opportunities []model.UpdateDraftOppty `json:"opportunities"`
+	Links         []string                 `json:"links"`
+	DismissReason string                   `json:"dismissReason"`
+}
+
+func draftBinding(userID, accountID, urlHash string) map[string]string {
+	return map[string]string{"purpose": "ttobak-customer-update-draft", "userId": userID, "accountId": accountID, "urlHash": urlHash}
+}
+
+// sealDraft seals the draft's text fields bound to its owner and record.
+func sealDraft(ctx context.Context, s sealing.Sealer, userID string, d *model.UpdateDraft) (string, error) {
+	if s == nil {
+		return "", ErrUpdateDraftEncryptionUnavailable
+	}
+	c := *d
+	c.NormalizeSlices()
+	plain, err := json.Marshal(sealedDraftFields{
+		SourceURL: c.SourceURL, SourceTitle: c.SourceTitle, Why: c.Why, Body: c.Body, EditedBody: c.EditedBody,
+		Opportunities: c.Opportunities, Links: c.Links, DismissReason: c.DismissReason,
+	})
+	if err != nil {
+		return "", err
+	}
+	sealed, err := s.Seal(ctx, plain, draftBinding(userID, d.AccountID, d.URLHash))
+	if err != nil {
+		return "", sealingError(err)
+	}
+	return sealed, nil
+}
+
+// openDraft fills d's text fields from its sealed payload.
+func openDraft(ctx context.Context, s sealing.Sealer, userID string, d *model.UpdateDraft) error {
+	if d == nil || d.Sealed == "" {
+		return ErrUpdateDraftUnreadable
+	}
+	if s == nil {
+		return ErrUpdateDraftEncryptionUnavailable
+	}
+	plain, err := s.Open(ctx, d.Sealed, draftBinding(userID, d.AccountID, d.URLHash))
+	if err != nil {
+		return openingError(ErrUpdateDraftUnreadable, err)
+	}
+	var f sealedDraftFields
+	if err := json.Unmarshal(plain, &f); err != nil {
+		return fmt.Errorf("%w: %w", ErrUpdateDraftUnreadable, err)
+	}
+	d.SourceURL, d.SourceTitle, d.Why, d.Body, d.EditedBody = f.SourceURL, f.SourceTitle, f.Why, f.Body, f.EditedBody
+	d.Opportunities, d.Links, d.DismissReason = f.Opportunities, f.Links, f.DismissReason
+	d.NormalizeSlices()
+	return nil
+}
+
+// draftFromItem returns a row's metadata and sealed blob, unopened. A row
+// whose key does not match its identity keeps no sealed value, so opening it
+// reports ErrUpdateDraftUnreadable.
+func draftFromItem(userID string, item map[string]types.AttributeValue) (model.UpdateDraft, error) {
+	var row storedUpdateDraft
+	if err := attributevalue.UnmarshalMap(item, &row); err != nil {
+		return model.UpdateDraft{}, fmt.Errorf("%w: %w", ErrUpdateDraftUnreadable, err)
+	}
+	d := model.UpdateDraft{
+		AccountID: row.AccountID, URLHash: row.URLHash, Status: row.Status, Revision: row.Revision, RunID: row.RunID,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ExpiresAt: row.ExpiresAt, Sealed: row.Sealed,
+	}
+	if row.PK != model.PrefixUser+userID || row.SK != model.UpdateDraftSK(row.AccountID, row.URLHash) {
+		d.Sealed = ""
+	}
+	return d, nil
+}
+
+// draftPutInput builds the sealed create-if-absent write for a draft. The
+// caller's draft is not mutated.
+func draftPutInput(ctx context.Context, s sealing.Sealer, tableName, userID string, d *model.UpdateDraft, now time.Time) (*dynamodb.PutItemInput, error) {
+	sealed, err := sealDraft(ctx, s, userID, d)
+	if err != nil {
+		return nil, err
+	}
+	row := storedUpdateDraft{
 		customerUpdateKeys: customerUpdateKeys{
 			PK: model.PrefixUser + userID, SK: model.UpdateDraftSK(d.AccountID, d.URLHash), EntityType: "UPDATE_DRAFT",
 		},
-		UpdateDraft: *d,
+		AccountID: d.AccountID, URLHash: d.URLHash, Status: d.Status, Revision: d.Revision, RunID: d.RunID,
+		CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, ExpiresAt: ttlOrDefault(d.ExpiresAt, now, model.UpdateDraftTTL), Sealed: sealed,
 	}
-	row.NormalizeSlices()
-	return row
-}
-
-// draftPutInput builds the create-if-absent write for a draft. Nil
-// opportunities and links are stored as empty lists, never NULL. The caller's
-// draft is not mutated.
-func draftPutInput(tableName, userID string, d *model.UpdateDraft, now time.Time) (*dynamodb.PutItemInput, error) {
-	row := draftRow(userID, d)
-	row.ExpiresAt = ttlOrDefault(row.ExpiresAt, now, model.UpdateDraftTTL)
 	if row.Status == "" {
 		row.Status = model.UpdateDraftNew
 	}
@@ -393,7 +493,7 @@ func draftPutInput(tableName, userID string, d *model.UpdateDraft, now time.Time
 // PutDraftIfAbsent creates a draft; an existing, unexpired (account, URL) draft
 // returns ErrConditionFailed.
 func (r *CustomerUpdateRepository) PutDraftIfAbsent(ctx context.Context, userID string, d *model.UpdateDraft) error {
-	in, err := draftPutInput(r.tableName, userID, d, r.clock())
+	in, err := draftPutInput(ctx, r.sealer, r.tableName, userID, d, r.clock())
 	if err != nil {
 		return err
 	}
@@ -407,7 +507,7 @@ func (r *CustomerUpdateRepository) PutDraftIfAbsent(ctx context.Context, userID 
 	return nil
 }
 
-// GetDraft returns one draft, or nil when absent.
+// GetDraft returns one opened draft, or nil when absent.
 func (r *CustomerUpdateRepository) GetDraft(ctx context.Context, userID, accountID, urlHash string) (*model.UpdateDraft, error) {
 	res, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(r.tableName), Key: updateUserKey(userID, model.UpdateDraftSK(accountID, urlHash)),
@@ -418,11 +518,19 @@ func (r *CustomerUpdateRepository) GetDraft(ctx context.Context, userID, account
 	if res.Item == nil {
 		return nil, nil
 	}
-	var row updateDraftRow
-	if err := attributevalue.UnmarshalMap(res.Item, &row); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal update draft: %w", err)
+	d, err := draftFromItem(userID, res.Item)
+	if err != nil {
+		return nil, err
 	}
-	return &row.UpdateDraft, nil
+	if err := openDraft(ctx, r.sealer, userID, &d); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// OpenDraft fills a draft returned by ListDrafts with its sealed text.
+func (r *CustomerUpdateRepository) OpenDraft(ctx context.Context, userID string, d *model.UpdateDraft) error {
+	return openDraft(ctx, r.sealer, userID, d)
 }
 
 // draftListExpression builds the key condition for one account's drafts, or all
@@ -437,7 +545,8 @@ func draftListExpression(userID, accountID string) (expression.Expression, error
 			And(expression.Key("SK").BeginsWith(prefix))).Build()
 }
 
-// ListDrafts returns one page of drafts and the cursor for the next page ("" at the end).
+// ListDrafts returns one page of unopened drafts (metadata plus the sealed
+// blob; see OpenDraft) and the cursor for the next page ("" at the end).
 func (r *CustomerUpdateRepository) ListDrafts(ctx context.Context, userID, accountID string, limit int, cursor string) ([]model.UpdateDraft, string, error) {
 	if limit < 1 {
 		return nil, "", fmt.Errorf("draft limit must be positive")
@@ -460,12 +569,12 @@ func (r *CustomerUpdateRepository) ListDrafts(ctx context.Context, userID, accou
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to query update drafts: %w", err)
 		}
-		var rows []updateDraftRow
-		if err := attributevalue.UnmarshalListOfMaps(res.Items, &rows); err != nil {
-			return nil, "", fmt.Errorf("failed to unmarshal update drafts: %w", err)
-		}
-		for _, row := range rows {
-			out = append(out, row.UpdateDraft)
+		for _, item := range res.Items {
+			d, err := draftFromItem(userID, item)
+			if err != nil {
+				return nil, "", err
+			}
+			out = append(out, d)
 		}
 		if len(res.LastEvaluatedKey) == 0 {
 			return out, "", nil
@@ -478,23 +587,12 @@ func (r *CustomerUpdateRepository) ListDrafts(ctx context.Context, userID, accou
 }
 
 // draftRevisionUpdate builds the optimistic update: the row must exist with
-// revision = expected, and revision becomes expected+1.
-func draftRevisionUpdate(d *model.UpdateDraft, expected int) (expression.Expression, error) {
-	opportunities, links := d.Opportunities, d.Links
-	if opportunities == nil {
-		opportunities = []model.UpdateDraftOppty{}
-	}
-	if links == nil {
-		links = []string{}
-	}
+// revision = expected; the sealed payload is replaced and revision becomes
+// expected+1.
+func draftRevisionUpdate(d *model.UpdateDraft, expected int, sealed string) (expression.Expression, error) {
 	update := expression.Set(expression.Name("revision"), expression.Value(expected+1)).
-		Set(expression.Name("body"), expression.Value(d.Body)).
-		Set(expression.Name("editedBody"), expression.Value(d.EditedBody)).
-		Set(expression.Name("why"), expression.Value(d.Why)).
-		Set(expression.Name("opportunities"), expression.Value(opportunities)).
-		Set(expression.Name("links"), expression.Value(links)).
+		Set(expression.Name("sealed"), expression.Value(sealed)).
 		Set(expression.Name("status"), expression.Value(d.Status)).
-		Set(expression.Name("dismissReason"), expression.Value(d.DismissReason)).
 		Set(expression.Name("runId"), expression.Value(d.RunID)).
 		Set(expression.Name("updatedAt"), expression.Value(d.UpdatedAt))
 	if d.ExpiresAt != 0 {
@@ -505,10 +603,15 @@ func draftRevisionUpdate(d *model.UpdateDraft, expected int) (expression.Express
 	return expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
 }
 
-// UpdateDraftIfRevision writes the draft's mutable fields when the stored
-// revision equals expectedRevision; otherwise it returns ErrConditionFailed.
+// UpdateDraftIfRevision re-seals the full draft (d must carry its opened text)
+// when the stored revision equals expectedRevision; otherwise it returns
+// ErrConditionFailed.
 func (r *CustomerUpdateRepository) UpdateDraftIfRevision(ctx context.Context, userID string, d *model.UpdateDraft, expectedRevision int) error {
-	expr, err := draftRevisionUpdate(d, expectedRevision)
+	sealed, err := sealDraft(ctx, r.sealer, userID, d)
+	if err != nil {
+		return err
+	}
+	expr, err := draftRevisionUpdate(d, expectedRevision, sealed)
 	if err != nil {
 		return fmt.Errorf("build update-draft expression: %w", err)
 	}

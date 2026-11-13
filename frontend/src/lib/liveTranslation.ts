@@ -114,6 +114,9 @@ export function translationSourceLanguage(text: string, detectedLanguage?: strin
 /** Optional third recognition language beyond the default Korean + English. */
 export type ExtraLiveLanguage = 'zh-CN' | 'ja-JP';
 
+/** A language live captions can recognize. */
+export type LiveLanguage = 'ko-KR' | 'en-US' | ExtraLiveLanguage;
+
 export function liveLanguageOptions(extra?: ExtraLiveLanguage): string {
   return extra ? `ko-KR,en-US,${extra}` : 'ko-KR,en-US';
 }

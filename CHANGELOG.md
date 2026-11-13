@@ -13,6 +13,7 @@ manifests.
 
 ### Added
 
+- Drag and drop a Remember CSV or .xlsx export onto the contact import fields on the Account page and in Settings, in the browser and the Mac app; the Mac app's other upload drop zones now receive drops too.
 - Personalized Assistant cards and meeting-aware questions; automatic read-only answers to spoken questions, enabled by default with a separate external-search opt-in (#894).
 - Customer update drafts API, storage side only with no collector or generator yet:
   followed sources, link upload, owner-private drafts and a per-account opt-out
@@ -20,6 +21,10 @@ manifests.
 - Customer update drafts on the web: followed-source settings, an account drafts tab
   and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
   until the collector and generator ship (#958).
+
+### Changed
+
+- The SA performance report accepts Claude Code 2.1.311 or newer (was 2.1.322); 2.1.311 has the same verified sandbox settings schema.
 
 ## [1.0.0] - 2026-11-11
 

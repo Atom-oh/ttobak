@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -231,7 +233,14 @@ func TestCustomerUpdateListLimits(t *testing.T) {
 
 // draftListRepo is a minimal repository for wiring the real service; only
 // ListDrafts returns data.
-type draftListRepo struct{ drafts []model.UpdateDraft }
+type draftListRepo struct {
+	drafts  []model.UpdateDraft
+	openErr error
+}
+
+func (r *draftListRepo) OpenDraft(context.Context, string, *model.UpdateDraft) error {
+	return r.openErr
+}
 
 func (r *draftListRepo) PutSourceIfAbsent(context.Context, string, *model.UpdateSource) error {
 	return nil
@@ -289,5 +298,37 @@ func TestCustomerUpdateListDraftsBadCursorIs400(t *testing.T) {
 	rec := doCU(r, "GET", "/api/customer-updates/drafts", "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"links":[]`) || !strings.Contains(rec.Body.String(), `"nextCursor":""`) {
 		t.Fatalf("first page: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCustomerUpdateDraftSealingErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code int
+		body string
+	}{
+		{repository.ErrUpdateDraftEncryptionUnavailable, http.StatusServiceUnavailable, `"DRAFTS_UNAVAILABLE"`},
+		{fmt.Errorf("open: %w", repository.ErrUpdateDraftUnreadable), http.StatusInternalServerError, `"` + model.ErrCodeInternalError + `"`},
+	} {
+		rec := httptest.NewRecorder()
+		cuWriteServiceError(rec, tc.err)
+		if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.body) {
+			t.Errorf("%v: got %d %s", tc.err, rec.Code, rec.Body.String())
+		}
+	}
+	repo := &draftListRepo{drafts: []model.UpdateDraft{{AccountID: "a1", URLHash: "h1", Sealed: "sealed-blob"}}}
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, "u1")))
+		})
+	})
+	r.Get("/api/customer-updates/drafts", NewCustomerUpdateHandler(service.NewCustomerUpdateService(repo, allowAllMembers{}, nil)).ListDrafts)
+	if rec := doCU(r, "GET", "/api/customer-updates/drafts", ""); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "sealed") {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+	}
+	repo.openErr = repository.ErrUpdateDraftEncryptionUnavailable
+	if rec := doCU(r, "GET", "/api/customer-updates/drafts", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no key: %d %s", rec.Code, rec.Body.String())
 	}
 }

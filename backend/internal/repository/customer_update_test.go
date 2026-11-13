@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"context"
+	"encoding/base64"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -9,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/sealing"
 )
 
 // assertAbsentOrExpired checks the create condition admits an absent row or an
@@ -54,55 +58,105 @@ func TestCustomerUpdateCreatesTreatExpiredRowsAsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAbsentOrExpired(t, url, now)
-	draft, err := draftPutInput("tbl", "u1", &model.UpdateDraft{AccountID: "a1", URLHash: "h1"}, now)
+	draft, err := draftPutInput(context.Background(), draftTestSealer{}, "tbl", "u1", &model.UpdateDraft{AccountID: "a1", URLHash: "h1"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertAbsentOrExpired(t, draft, now)
 }
 
-func TestCustomerUpdateDraftPutInputStoresEmptyLists(t *testing.T) {
-	d := &model.UpdateDraft{AccountID: "a1", URLHash: "h1"}
-	in, err := draftPutInput("tbl", "u1", d, time.Unix(1000, 0))
-	if err != nil {
-		t.Fatal(err)
+// draftTestSealer is a reversible sealer that enforces the full draft binding.
+type draftTestSealer struct{}
+
+func draftTestBindingID(b map[string]string) string {
+	return b["purpose"] + "/" + b["userId"] + "/" + b["accountId"] + "/" + b["urlHash"]
+}
+
+func (draftTestSealer) Seal(_ context.Context, p []byte, b map[string]string) (string, error) {
+	return base64.StdEncoding.EncodeToString([]byte(draftTestBindingID(b) + "|" + string(p))), nil
+}
+
+func (draftTestSealer) Open(_ context.Context, sealed string, b map[string]string) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(sealed)
+	prefix := draftTestBindingID(b) + "|"
+	if err != nil || !strings.HasPrefix(string(raw), prefix) {
+		return nil, sealing.ErrInvalid
 	}
-	for _, name := range []string{"opportunities", "links"} {
-		l, ok := in.Item[name].(*types.AttributeValueMemberL)
-		if !ok || len(l.Value) != 0 {
-			t.Fatalf("%s = %#v, want empty list", name, in.Item[name])
-		}
-	}
-	if d.Opportunities != nil || d.Links != nil || d.ExpiresAt != 0 || d.Status != "" {
-		t.Fatal("input draft must not be mutated")
-	}
-	if got := in.Item["status"].(*types.AttributeValueMemberS).Value; got != model.UpdateDraftNew {
-		t.Fatalf("status = %q", got)
+	return raw[len(prefix):], nil
+}
+
+func secretDraft() *model.UpdateDraft {
+	return &model.UpdateDraft{
+		AccountID: "a1", URLHash: "h1", SourceURL: "https://example.com/secret-url", SourceTitle: "secret-title",
+		Why: "secret-why", Body: "secret-body", EditedBody: "secret-edited", DismissReason: "not_now",
+		Opportunities: []model.UpdateDraftOppty{{ProjectID: "p1", Name: "secret-oppty", Stage: "s"}},
+		Links:         []string{"https://example.com/secret-link"}, Revision: 2, RunID: "r1",
 	}
 }
 
-func TestCustomerUpdateDraftRevisionUpdateNeverWritesNull(t *testing.T) {
-	expr, err := draftRevisionUpdate(&model.UpdateDraft{AccountID: "a1", URLHash: "h"}, 0)
+func TestCustomerUpdateDraftPutInputSealsText(t *testing.T) {
+	d := secretDraft()
+	in, err := draftPutInput(context.Background(), draftTestSealer{}, "tbl", "u1", d, time.Unix(1000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	empties := 0
-	for _, v := range expr.Values() {
-		if _, ok := v.(*types.AttributeValueMemberNULL); ok {
-			t.Fatalf("NULL value written: %v", expr.Values())
+	allowed := map[string]bool{"PK": true, "SK": true, "entityType": true, "accountId": true, "urlHash": true, "status": true,
+		"revision": true, "runId": true, "createdAt": true, "updatedAt": true, "pendingShareExpiresAt": true, "sealed": true}
+	for name, v := range in.Item {
+		if !allowed[name] {
+			t.Fatalf("plaintext attribute %q stored", name)
 		}
-		if l, ok := v.(*types.AttributeValueMemberL); ok && len(l.Value) == 0 {
-			empties++
+		if s, ok := v.(*types.AttributeValueMemberS); ok && name != "sealed" && strings.Contains(s.Value, "secret") {
+			t.Fatalf("%s holds draft text", name)
 		}
 	}
-	if empties != 2 {
-		t.Fatalf("want 2 empty lists (opportunities, links), got %d: %v", empties, expr.Values())
+	if in.Item["sealed"] == nil || in.Item["status"].(*types.AttributeValueMemberS).Value != model.UpdateDraftNew {
+		t.Fatalf("item = %v", in.Item)
+	}
+	if d.ExpiresAt != 0 || d.Status != "" {
+		t.Fatal("input draft must not be mutated")
+	}
+
+	got, err := draftFromItem("u1", in.Item)
+	if err != nil || got.Body != "" || got.Sealed == "" {
+		t.Fatalf("listed draft must stay unopened: %+v %v", got, err)
+	}
+	if err := openDraft(context.Background(), draftTestSealer{}, "u1", &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != d.Body || got.EditedBody != d.EditedBody || got.Why != d.Why || got.SourceURL != d.SourceURL ||
+		got.SourceTitle != d.SourceTitle || got.DismissReason != d.DismissReason || len(got.Opportunities) != 1 || len(got.Links) != 1 || got.Revision != 2 {
+		t.Fatalf("round trip = %+v", got)
+	}
+
+	other, _ := draftFromItem("u2", in.Item)
+	if err := openDraft(context.Background(), draftTestSealer{}, "u2", &other); !errors.Is(err, ErrUpdateDraftUnreadable) {
+		t.Fatalf("row under another user: %v", err)
+	}
+	moved, _ := draftFromItem("u1", in.Item)
+	moved.URLHash = "h2"
+	if err := openDraft(context.Background(), draftTestSealer{}, "u1", &moved); !errors.Is(err, ErrUpdateDraftUnreadable) {
+		t.Fatalf("wrong binding: %v", err)
+	}
+	if err := openDraft(context.Background(), nil, "u1", &got); !errors.Is(err, ErrUpdateDraftEncryptionUnavailable) {
+		t.Fatalf("open without sealer: %v", err)
+	}
+	unsealed := model.UpdateDraft{AccountID: "a1", URLHash: "h1", Body: "plain"}
+	if err := openDraft(context.Background(), draftTestSealer{}, "u1", &unsealed); !errors.Is(err, ErrUpdateDraftUnreadable) {
+		t.Fatalf("unsealed row: %v", err)
+	}
+	if _, err := draftPutInput(context.Background(), nil, "tbl", "u1", d, time.Unix(1000, 0)); !errors.Is(err, ErrUpdateDraftEncryptionUnavailable) {
+		t.Fatalf("write without sealer: %v", err)
 	}
 }
 
 func TestCustomerUpdateDraftRevisionUpdate(t *testing.T) {
-	d := &model.UpdateDraft{AccountID: "acc1", URLHash: "h", EditedBody: "x", Status: model.UpdateDraftNew}
-	expr, err := draftRevisionUpdate(d, 4)
+	d := secretDraft()
+	sealed, err := sealDraft(context.Background(), draftTestSealer{}, "u1", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expr, err := draftRevisionUpdate(d, 4, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +164,23 @@ func TestCustomerUpdateDraftRevisionUpdate(t *testing.T) {
 		t.Fatalf("condition missing existence check: %v", expr.Condition())
 	}
 	var nums []string
+	var resealed bool
 	for _, v := range expr.Values() {
-		if n, ok := v.(*types.AttributeValueMemberN); ok {
-			nums = append(nums, n.Value)
+		switch v := v.(type) {
+		case *types.AttributeValueMemberN:
+			nums = append(nums, v.Value)
+		case *types.AttributeValueMemberS:
+			if v.Value == sealed {
+				resealed = true
+			} else if strings.Contains(v.Value, "secret") {
+				t.Fatalf("plaintext draft text written: %v", v.Value)
+			}
+		case *types.AttributeValueMemberNULL, *types.AttributeValueMemberL:
+			t.Fatalf("unexpected value %T", v)
 		}
+	}
+	if !resealed {
+		t.Fatal("sealed payload not written")
 	}
 	has := func(want string) bool {
 		for _, n := range nums {
@@ -126,14 +193,19 @@ func TestCustomerUpdateDraftRevisionUpdate(t *testing.T) {
 	if !has("4") || !has("5") {
 		t.Fatalf("expected values 4 (condition) and 5 (new revision), got %v", nums)
 	}
-	foundRevision := false
+	names := map[string]bool{}
 	for _, n := range expr.Names() {
-		if n == "revision" {
-			foundRevision = true
+		names[n] = true
+	}
+	for _, n := range []string{"revision", "sealed", "status", "updatedAt"} {
+		if !names[n] {
+			t.Fatalf("%s not referenced: %v", n, expr.Names())
 		}
 	}
-	if !foundRevision {
-		t.Fatalf("revision attribute not referenced: %v", expr.Names())
+	for _, n := range []string{"body", "editedBody", "why", "opportunities", "links", "dismissReason"} {
+		if names[n] {
+			t.Fatalf("plaintext %s written", n)
+		}
 	}
 }
 

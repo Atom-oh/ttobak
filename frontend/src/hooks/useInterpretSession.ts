@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SttManager, type TranscribeStreamingConfig } from '@/lib/sttManager';
-import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
+import type { ExtraLiveLanguage, LiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import {
   INTERPRET_VERSION_SKEW_MESSAGE, isCommandNotFound, isTauri, onNativeListeningStopped, onNativePcmChunk,
@@ -23,6 +23,8 @@ interface UseInterpretSessionOptions {
   onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
   /** Third recognition language chosen for the caption windows, read when a caption session starts. */
   getExtraLanguage?: () => ExtraLiveLanguage | undefined;
+  /** The spoken languages to recognize (one or two); read when a caption session starts. */
+  getSpeechLanguages?: () => LiveLanguage[] | undefined;
 }
 
 type SessionState = InterpretState<TranslationEntry, NativeSelectedInput>;
@@ -56,8 +58,8 @@ async function loadTranscribeConfig(): Promise<TranscribeStreamingConfig | null>
 /**
  * Live interpretation with no meeting (Mac app only). The Mac app captures
  * microphone plus system audio without writing a file (`start_listening`);
- * the PCM feeds Transcribe Streaming and each caption is translated through
- * `/api/translate`. Nothing is saved: no meeting, transcript, upload or
+ * the PCM feeds Transcribe Streaming and each recognized segment goes to
+ * the caption windows' engines (`onSegment`). Nothing is saved: no meeting, transcript, upload or
  * browser storage, and caption text is never logged here.
  *
  * The session logic lives in `lib/interpretController.ts`; this hook wires it
@@ -65,17 +67,21 @@ async function loadTranscribeConfig(): Promise<TranscribeStreamingConfig | null>
  * `useRecordingSession`, which carries the meeting, transcript and upload
  * flow this screen must never reach.
  */
-export function useInterpretSession({ targetLang, interimTranslation, onSegment, getExtraLanguage }: UseInterpretSessionOptions) {
+export function useInterpretSession({
+  targetLang, interimTranslation, onSegment, getExtraLanguage, getSpeechLanguages,
+}: UseInterpretSessionOptions) {
   const [state, setState] = useState<SessionState>(IDLE_STATE);
   const [elapsedMs, setElapsedMs] = useState(0);
   const controllerRef = useRef<Controller | null>(null);
   const optionsRef = useRef({ targetLang, interimTranslation });
   const onSegmentRef = useRef(onSegment);
   const getExtraLanguageRef = useRef(getExtraLanguage);
+  const getSpeechLanguagesRef = useRef(getSpeechLanguages);
   useEffect(() => {
     onSegmentRef.current = onSegment;
     getExtraLanguageRef.current = getExtraLanguage;
-  }, [onSegment, getExtraLanguage]);
+    getSpeechLanguagesRef.current = getSpeechLanguages;
+  }, [onSegment, getExtraLanguage, getSpeechLanguages]);
 
   useEffect(() => {
     optionsRef.current.targetLang = targetLang;
@@ -108,10 +114,13 @@ export function useInterpretSession({ targetLang, interimTranslation, onSegment,
             },
           },
           targetLang: options.targetLang,
-          translationEnabled: true,
+          // The screen shows the caption windows' own translations (the
+          // user's AWS profile); the server translation is not requested.
+          translationEnabled: false,
           interimTranslation: options.interimTranslation,
           transcribeStreamingConfig,
           extraLanguage: getExtraLanguageRef.current?.(),
+          nativeLanguages: getSpeechLanguagesRef.current?.(),
           onSegment: (id, text, isFinal, languageCode) =>
             onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode),
         });

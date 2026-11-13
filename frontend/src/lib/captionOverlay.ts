@@ -222,6 +222,8 @@ interface ControllerDeps {
   ) => Promise<TranslateResponse>;
   push: typeof pushCaption;
   onError: (code: string) => void;
+  /** Every caption update of an open window, before it is sent there (for an in-app copy). */
+  onEntry?: (lang: CaptionLang, entry: TranslationEntry) => void;
 }
 
 /** Runs one LiveTranslation engine per open caption window. */
@@ -271,6 +273,7 @@ export class CaptionOverlayController {
   }
 
   private publish(lang: CaptionLang, entry: TranslationEntry): void {
+    this.deps.onEntry?.(lang, entry);
     if (entry.status === 'skipped') return;
     // A failed translation clears its line rather than leaving a stale draft.
     if (entry.status === 'error') {

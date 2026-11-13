@@ -14,6 +14,10 @@
   capability is granted only to `https://ttobak.atomai.click`.
 - Minimum macOS is 14.2, where the process tap API exists. The screen is never
   captured.
+- The main window sets `dragDropEnabled: false`, so file drops reach the page's
+  HTML5 drop zones instead of Tauri's native drop events. `FileDropGuard` blocks
+  a file dropped outside any zone, which would otherwise navigate the WebView to
+  the local file.
 
 ### Capture
 
@@ -21,7 +25,15 @@
   app's own process. The tap and one input device run in one aggregate device
   clocked by the input, and the microphone is mixed into the recording. Without
   a chosen device the app uses the input a meeting app is using, else the
-  system default.
+  system default. The aggregate is created without tap auto-start
+  (`kAudioAggregateDeviceTapAutoStartKey` false, 2026-11-13): with auto-start,
+  Core Audio held the whole aggregate, microphone included, until some tapped
+  process played sound, so a capture started on a quiet Mac delivered nothing
+  (no IOProc callback) until then. Observed on macOS 26 in `coreaudiod`
+  ("Starting tap after waiting for writers"); with the setting off the
+  microphone IO began 34 ms after start on a quiet Mac and a later session
+  recorded a non-zero system-audio peak. Meetings hid the defect because the
+  other participants' audio starts the tap.
 - With no usable input device, capture is system audio only and start returns
   a warning.
 - The real-time IOProc only mixes and enqueues to a bounded queue; a worker

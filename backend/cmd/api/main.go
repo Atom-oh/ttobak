@@ -83,8 +83,11 @@ func init() {
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	// Account contacts are third-party personal data: envelope-encrypted with
 	// the KMS key, and unavailable (503) when it is not configured (ADR-021, contact encryption).
+	// Customer update drafts share the sealer and fail closed the same way.
+	var recordSealer sealing.Sealer
 	if sealer := sealing.NewEnvelope(kmsClient, os.Getenv("KMS_KEY_ID")); sealer != nil {
 		repo.SetRecordSealer(sealer)
+		recordSealer = sealer
 	}
 	connectorGrants := repo.ConnectorGrantResolver(os.Getenv("CONNECTOR_RESOURCE_AUDIENCE"),
 		"https://cognito-idp."+cfg.Region+".amazonaws.com/"+cognitoPoolID)
@@ -243,9 +246,10 @@ func init() {
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName, bucketName)
 	insightsService.SetAccountMemberReader(repo)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
+	customerUpdateRepo := repository.NewCustomerUpdateRepository(dynamoClient, tableName)
+	customerUpdateRepo.SetRecordSealer(recordSealer)
 	customerUpdateHandler := handler.NewCustomerUpdateHandler(service.NewCustomerUpdateService(
-		repository.NewCustomerUpdateRepository(dynamoClient, tableName),
-		service.NewDirectMemberChecker(repo), nil))
+		customerUpdateRepo, service.NewDirectMemberChecker(repo), nil))
 	sfnClient := sfn.NewFromConfig(cfg, func(o *sfn.Options) { o.TracerProvider = awsTracing })
 	accountNewsService := service.NewAccountNewsService(repo, crawlerRepo, insightsService)
 	accountNewsService.SetNewsSourceDirectory(crawlerRepo, repo)

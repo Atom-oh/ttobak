@@ -162,7 +162,7 @@ export function reportEnv(home: string, env: NodeJS.ProcessEnv): Record<string, 
  * `network.allowedDomains`, `filesystem.allowWrite/denyWrite/denyRead/allowRead`).
  * An older CLI may ignore unknown keys and run Bash unsandboxed, so it is refused.
  */
-export const MIN_CLAUDE_VERSION = [2, 1, 322] as const;
+export const MIN_CLAUDE_VERSION = [2, 1, 311] as const;
 const VERSION_TIMEOUT_MS = 10_000;
 
 /** The `claude --version` semver, or null when it cannot be read within 10 seconds. */

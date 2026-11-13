@@ -35,6 +35,8 @@ type mockUpdateRepo struct {
 	updated       *model.UpdateDraft
 	updatedExpect int
 	opt           map[string]bool
+	openCalls     int
+	openErr       map[string]error // urlHash -> OpenDraft error
 }
 
 func newMockUpdateRepo() *mockUpdateRepo {
@@ -108,6 +110,16 @@ func (m *mockUpdateRepo) ListDrafts(_ context.Context, _, _ string, limit int, c
 		next = strconv.Itoa(end)
 	}
 	return append([]model.UpdateDraft(nil), m.listed[start:end]...), next, nil
+}
+
+// OpenDraft counts opens; listed rows open to "opened:{urlHash}".
+func (m *mockUpdateRepo) OpenDraft(_ context.Context, _ string, d *model.UpdateDraft) error {
+	m.openCalls++
+	if m.openErr[d.URLHash] != nil {
+		return m.openErr[d.URLHash]
+	}
+	d.Body = "opened:" + d.URLHash
+	return nil
 }
 func (m *mockUpdateRepo) UpdateDraftIfRevision(_ context.Context, _ string, d *model.UpdateDraft, expected int) error {
 	if m.updateDrftErr != nil {
@@ -567,6 +579,29 @@ func TestCustomerUpdateListDrafts(t *testing.T) {
 		}
 		if len(page.Drafts) != 1 || page.Drafts[0].URLHash != "live" {
 			t.Fatalf("drafts = %+v", page.Drafts)
+		}
+	})
+
+	t.Run("only the returned page is opened", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		for i := 0; i < 40; i++ {
+			repo.listed = append(repo.listed, model.UpdateDraft{AccountID: "a1", URLHash: fmt.Sprintf("h%02d", i), Status: model.UpdateDraftNew, CreatedAt: at(i)})
+		}
+		repo.openErr = map[string]error{"h01": repository.ErrUpdateDraftUnreadable}
+		page, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", "a1", 5, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repo.openCalls != 5 {
+			t.Fatalf("opened %d rows, want 5", repo.openCalls)
+		}
+		// Newest first: h00, h01 (unreadable, omitted), h02, h03, h04.
+		if len(page.Drafts) != 4 || page.Drafts[0].Body != "opened:h00" || page.Drafts[1].URLHash != "h02" || page.NextCursor == "" {
+			t.Fatalf("page = %+v", page)
+		}
+		repo.openErr = map[string]error{"h00": repository.ErrUpdateDraftEncryptionUnavailable}
+		if _, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", "a1", 5, ""); !errors.Is(err, repository.ErrUpdateDraftEncryptionUnavailable) {
+			t.Fatalf("missing key: %v", err)
 		}
 	})
 
