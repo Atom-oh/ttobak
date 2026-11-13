@@ -115,8 +115,16 @@ printf '%s\n' "$IDENTITIES" | grep -i -- "$LEAF_SHA1" | grep '"TTOBAK Dev"' >/de
   die "the \"TTOBAK Dev\" certificate ($LEAF_SHA1) is not a valid signing identity in the keychain"
 
 # 2. Hosting target and the published version.
+# The CLI applies --query to each result page, so a filter like `| [0]` prints
+# one line per page (`None` on pages without the export). Keep the non-empty
+# values and require exactly one.
 export_value() {
-  aws cloudformation list-exports --query "Exports[?Name=='$1'].Value | [0]" --output text
+  local out vals
+  out="$(aws cloudformation list-exports --query "Exports[?Name=='$1'].Value" --output text)" ||
+    return 1
+  vals="$(printf '%s\n' "$out" | tr '\t' '\n' | grep -v -e '^None$' -e '^[[:space:]]*$' | sort -u || true)"
+  [[ -n "$vals" && "$vals" != *$'\n'* ]] || return 1
+  printf '%s\n' "$vals"
 }
 BUCKET="$(export_value TtobakSiteBucketName)" || die "could not read CloudFormation exports"
 DIST="$(export_value TtobakDistributionId)" || die "could not read CloudFormation exports"

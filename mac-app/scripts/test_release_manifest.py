@@ -220,7 +220,11 @@ def opt(name):
     return a[a.index(name) + 1]
 if a[:2] == ["cloudformation", "list-exports"]:
     q = opt("--query")
-    print("ttobak-site-bucket" if "TtobakSiteBucketName" in q else "ETESTDIST1")
+    # The real CLI applies --query per page: emulate three pages, one match.
+    value = "ttobak-site-bucket" if "TtobakSiteBucketName" in q else "ETESTDIST1"
+    if os.environ.get("EXPORTS_MISSING"):
+        value = ""
+    print("\n" + value + "\n")
 elif a[:2] == ["s3api", "head-object"]:
     if os.path.exists(os.path.join(s3, opt("--key"))):
         print("{}")
@@ -343,6 +347,10 @@ class ReleaseGuardTest(unittest.TestCase):
         self.write_config("0.2.0", "0.1.0", fake_pubkey())
         r, calls = self.run_release("notes")
         self.assert_refused_before_work(r, calls, "version")
+
+    def test_refuses_missing_export(self):
+        r, calls = self.run_release("notes", EXPORTS_MISSING="1")
+        self.assert_refused_before_work(r, calls, "could not read CloudFormation exports")
 
     def test_refuses_placeholder_pubkey(self):
         self.write_config("0.2.0", "0.2.0", "REPLACE_WITH_TTOBAK_UPDATER_PUBKEY")
