@@ -46,12 +46,12 @@ def _parse_date(value):
     dt = None
     try:
         dt = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, OverflowError):
         dt = None
     if dt is None:
         try:
             dt = datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -149,10 +149,16 @@ def discover_feed_url(html, base_url):
     return None
 
 
+def _normalize(parts):
+    """Lowercase scheme/host and make an empty path "/" so equal pages compare equal."""
+    return parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower(),
+                          path=parts.path or "/").geturl()
+
+
 def page_links(html, base_url):
     try:
         base_host = (urlsplit(base_url).hostname or "").lower()
-        base_page = urldefrag(base_url)[0]
+        base_page = _normalize(urlsplit(urldefrag(base_url)[0]))
     except ValueError:
         return []
     if not base_host:
@@ -170,7 +176,7 @@ def page_links(html, base_url):
             continue
         if parts.scheme.lower() != "https" or host != base_host:
             continue
-        absolute = parts._replace(scheme="https", netloc=parts.netloc.lower()).geturl()
+        absolute = _normalize(parts)
         if absolute == base_page or absolute in seen:
             continue
         seen.add(absolute)

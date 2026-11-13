@@ -61,6 +61,15 @@ class ParseFeedTest(unittest.TestCase):
             with self.assertRaises(FeedError):
                 parse_feed(text)
 
+    def test_hostile_dates_do_not_raise(self):
+        for bad in ("Mon, 10 Nov 99999999999 09:00:00 GMT", "99999999999-01-01T00:00:00Z", "0000-00-00"):
+            xml = (f"<rss><channel><item><title>t</title><link>https://e.com/a</link>"
+                   f"<pubDate>{bad}</pubDate></item></channel></rss>")
+            self.assertIsNone(parse_feed(xml)[0].published_at)
+            atom = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>t</title>'
+                    f'<link href="https://e.com/a"/><updated>{bad}</updated></entry></feed>')
+            self.assertIsNone(parse_feed(atom)[0].published_at)
+
     def test_title_capped_and_entry_cap(self):
         items = "".join(
             f"<item><title>{'x' * 400}</title><link>https://e.com/{i}</link></item>" for i in range(250))
@@ -97,6 +106,11 @@ class PageLinksTest(unittest.TestCase):
         <a href="https://sub.e.com/x">sub</a>"""
         self.assertEqual(page_links(html, "https://e.com/page"),
                          ["https://e.com/a", "https://e.com/rel/d"])
+
+    def test_excludes_self_for_bare_and_mixed_case_host(self):
+        html = '<a href="/">root</a><a href="https://e.com">bare</a><a href="/x">x</a>'
+        for base in ("https://e.com", "https://E.com/", "https://E.COM/#top"):
+            self.assertEqual(page_links(html, base), ["https://e.com/x"], base)
 
     def test_cap_and_malformed(self):
         html = "".join(f'<a href="/p{i}">x</a>' for i in range(400))
