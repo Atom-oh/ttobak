@@ -416,9 +416,18 @@ The daily parent must finish healthy sources even when another selected identity
 is invalid or a normally completed child reports a failed crawl. Invalid identities
 remain unpublishable and appear as bounded hashed failure entries within the same
 30-source/64,000-byte limits. Do not rename legacy identities or weaken native
-validation. After durable finalization, only an exact empty error array with
+validation. After durable finalization, only an exact empty `faults` array with
 boolean complete usage is a successful normal receipt; warning-only partial
-receipts remain allowed. Unknown output fails that source. Reusing a finalized or
+receipts remain allowed. Unknown output, including a receipt without `faults`,
+fails that source. Owner decision (2026-11-13): rejecting an article is the
+pipeline working, not a failed crawl. The receipt keeps every reason code in
+`errors` and repeats in `faults` only what makes the run unhealthy: discovery
+errors, failed or expired attempts, deferred outcomes, recovery without
+outcomes, and any `*_BUDGET` or `USAGE_INVALID` reason. Rejected attempts and
+rejected fetches with other reasons (relevance, validation, refused or unusable
+pages) do not fail the source. Accepted limit: a run that rejects every article
+for one systemic reason now succeeds; `docsAdded` and `errors` in the history
+row remain the evidence. Reusing a finalized or
 duplicate execution does not certify the old crawl's success.
 
 Daily delivery retains the original EventBridge timestamp, with six retries over

@@ -25,6 +25,16 @@ def _integer(value, maximum=10000000):
     return int(value)
 
 
+def _run_fault(reason):
+    """Whether a rejection reason means the run, not one article, is unhealthy.
+
+    A rejected article (not relevant, refused fetch, failed validation) is the
+    pipeline working. Budget and usage reasons stop or distort the run itself.
+    Callers treat every non-rejection outcome as a fault without asking.
+    """
+    return reason.endswith("_BUDGET") or reason == "USAGE_INVALID"
+
+
 def _aggregate_charge(value):
     # Each settled attempt can report an overrun up to the per-attempt cap.
     # A valid run total can therefore exceed the reservation-input money cap.
@@ -144,7 +154,7 @@ class NewsRuns:
         if len(attempts) != count:
             raise StateRejected("STATE_CONFLICT")
         expired, completed, published, usage = [], [], 0, {"inputTokens": 0, "outputTokens": 0}
-        warnings, errors = [], []
+        warnings, errors, faults = [], [], []
         for attempt in attempts:
             if (attempt.get("PK") != run.pk
                     or not isinstance(attempt.get("SK"), str)
@@ -171,6 +181,8 @@ class NewsRuns:
                 if not isinstance(reason, str) or not re.fullmatch(r"[A-Z0-9_]{1,64}", reason):
                     raise StateRejected("INVALID_RUN_STATE")
                 errors.append(reason)
+                if state != "REJECTED" or _run_fault(reason):
+                    faults.append(reason)
             for warning in receipt.get("fetchWarnings", []):
                 if warning not in ("CORROBORATION_DEFERRED", "CORROBORATION_UNUSABLE",
                                    "CORROBORATION_FETCH_FAILED"):
@@ -182,10 +194,12 @@ class NewsRuns:
             raise StateRejected("INVALID_RUN_STATE")
         if expired:
             errors.append("EXPIRED_ATTEMPTS")
+            faults.append("EXPIRED_ATTEMPTS")
         if not isinstance(outcomes, (list, tuple)) or len(outcomes) > 20:
             raise StateRejected("INVALID_WORKER_RESULTS")
         if recovery:
             errors.append("RECOVERED_WITHOUT_OUTCOMES")
+            faults.append("RECOVERED_WITHOUT_OUTCOMES")
         outcome_counts = {}
         for outcome in outcomes:
             if (not isinstance(outcome, dict) or outcome.get("sourceId") != run.source_id
@@ -200,6 +214,8 @@ class NewsRuns:
                 if not isinstance(reason, str) or not re.fullmatch(r"[A-Z0-9_]{1,64}", reason):
                     raise StateRejected("INVALID_WORKER_RESULTS")
                 errors.append(reason)
+                if status != "FETCH_REJECTED" or _run_fault(reason):
+                    faults.append(reason)
         diagnostics = {}
         if discovery is not None:
             if (not isinstance(discovery, dict) or discovery.get("sourceId") != run.source_id
@@ -217,6 +233,7 @@ class NewsRuns:
                 if code not in ("QUERY_TOO_LONG", "SEARCH_FAILED"):
                     raise StateRejected("INVALID_DISCOVERY_RESULT")
                 errors.append(code)
+                faults.append(code)
         timestamp = datetime.fromtimestamp(started, timezone.utc).isoformat()
         receipt = {
             "sourceId": run.source_id, "runId": run.run_id, "sourceRevision": run.revision,
@@ -224,7 +241,8 @@ class NewsRuns:
             "docsAdded": published, "docsUpdated": 0, "attemptCount": count,
             "expiredAttempts": len(expired), "unknownAttempts": unknown + len(expired),
             "chargedUsd": charged, "usageComplete": not (unknown or expired), **usage,
-            "errors": sorted(set(errors))[:20], "fetchWarnings": sorted(set(warnings)),
+            "errors": sorted(set(errors))[:20], "faults": sorted(set(faults))[:20],
+            "fetchWarnings": sorted(set(warnings)),
             "duration": (now - started) * 1000, "timestamp": timestamp,
             "workerOutcomes": outcome_counts, **diagnostics}
         operations = []
