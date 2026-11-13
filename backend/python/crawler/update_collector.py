@@ -10,6 +10,7 @@ Logs carry feedHash[:12] and counts only, never URLs, titles or user data.
 import hashlib
 import logging
 import os
+import random
 from datetime import datetime, timedelta, timezone
 
 from article_fetcher import FetchRejected, fetch_feed_document
@@ -29,7 +30,7 @@ MAX_SITE_ENTRIES = 30
 MAX_STORED_LINKS = 300
 BACKOFF_FAILURES = 5
 BACKOFF_SECONDS = 24 * 3600
-MIN_REMAINING_MS = 60000
+MIN_REMAINING_MS = 270000  # one feed can take about 250 s (retries and redirects)
 HTML_TYPES = {"text/html", "application/xhtml+xml"}
 FETCH_REASONS = {"content_type", "too_large"}
 
@@ -62,7 +63,10 @@ class FeedStore:
         self.table = table
 
     def active_feeds(self):
-        """Return {feedHash: (url, kind)} from active registry rows."""
+        """Return {feedHash: (url, kind)} from active registry rows.
+
+        When subscribers of one feed disagree on kind, ``site`` wins so the page
+        can still be followed without a feed."""
         feeds = {}
         kwargs = {"KeyConditionExpression": "PK = :pk",
                   "ExpressionAttributeValues": {":pk": PK_REGISTRY}}
@@ -70,8 +74,13 @@ class FeedStore:
             resp = self.table.query(**kwargs)
             for row in resp.get("Items", []):
                 h = row.get("feedHash")
-                if row.get("status") == "active" and h and row.get("url") and h not in feeds:
-                    feeds[h] = (row["url"], row.get("kind", "rss"))
+                if row.get("status") != "active" or not h or not row.get("url"):
+                    continue
+                kind = row.get("kind", "rss")
+                if h not in feeds:
+                    feeds[h] = (row["url"], kind)
+                elif kind == "site":
+                    feeds[h] = (feeds[h][0], "site")
             last = resp.get("LastEvaluatedKey")
             if not last:
                 return feeds
@@ -104,11 +113,11 @@ class FeedStore:
         return True
 
     def update_state(self, feed_hash, now, *, failed=False, error=None,
-                     updated=False, resolved_url=None, links=None):
+                     updated=False, resolved_url=None, links=None, drop_resolved=False):
         """Attribute-level update; never replaces the whole state item."""
         sets = {"feedHash": feed_hash, "entityType": STATE_ENTITY,
                 "lastFetchedAt": _iso(now)}
-        removes = []
+        removes = ["resolvedUrl"] if drop_resolved else []
         if updated:
             sets["updatedAt"] = _iso(now)
         if resolved_url:
@@ -177,6 +186,9 @@ def _collect(url, kind, state):
 def process_feed(store, feed_hash, url, kind, now):
     """Collect one feed. Returns (outcome, written); outcome is fetched|skipped|failed."""
     written = 0
+    # A stored resolvedUrl that fails or stops yielding a feed is dropped so the
+    # next run rediscovers from the subscription URL.
+    drop_resolved = False
     try:
         state = store.get_state(feed_hash)
         last = _parse_iso(state.get("lastFetchedAt"))
@@ -187,7 +199,9 @@ def process_feed(store, feed_hash, url, kind, now):
         if (failures >= BACKOFF_FAILURES and last is not None
                 and now - last <= timedelta(seconds=BACKOFF_SECONDS)):
             return "skipped", 0
+        drop_resolved = bool(state.get("resolvedUrl"))
         entries, links, resolved = _collect(url, kind, state)
+        drop_resolved = False
         stored = None
         if entries is not None:
             for e in recent(entries, now):
@@ -195,14 +209,17 @@ def process_feed(store, feed_hash, url, kind, now):
                     written += 1
         else:
             old = state.get("links")
-            stored = list(links)
+            stored = list(links)  # the first run records the page as the baseline
             if old is not None:
                 known = set(old)
                 current = set(links)
+                # Only links delivered now become known; the rest of the page
+                # stays new and is delivered on later runs.
                 for link in [l for l in links if l not in known][:MAX_SITE_ENTRIES]:
                     if store.put_entry(feed_hash, link, "", None, now):
                         written += 1
-                stored = links + [l for l in old if l not in current]
+                    known.add(link)
+                stored = [l for l in links if l in known] + [l for l in old if l not in current]
         store.update_state(feed_hash, now, updated=written > 0,
                            resolved_url=resolved, links=stored)
         return "fetched", written
@@ -210,18 +227,22 @@ def process_feed(store, feed_hash, url, kind, now):
         reason = exc.reason if isinstance(exc, _Failure) else "fetch"
         try:
             store.update_state(feed_hash, now, failed=True, error=reason,
-                               updated=written > 0)
+                               updated=written > 0, drop_resolved=drop_resolved)
         except Exception:
             logger.error("feed=%s state update failed", feed_hash[:12])
         logger.warning("feed=%s failed reason=%s", feed_hash[:12], reason)
         return "failed", written
 
 
-def collect(store, now, context=None):
+def collect(store, now, context=None, shuffle=random.shuffle):
+    """Collect every active feed once, in a shuffled order so feeds left over
+    when time runs short differ from run to run."""
     feeds = store.active_feeds()
     result = {"feeds": len(feeds), "fetched": 0, "entries": 0, "skipped": 0, "failed": 0}
     remaining = getattr(context, "get_remaining_time_in_millis", None)
-    for feed_hash, (url, kind) in feeds.items():
+    order = list(feeds.items())
+    shuffle(order)
+    for feed_hash, (url, kind) in order:
         if remaining is not None and remaining() < MIN_REMAINING_MS:
             result["skipped"] += 1
             continue

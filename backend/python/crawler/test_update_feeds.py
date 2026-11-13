@@ -117,6 +117,15 @@ class PageLinksTest(unittest.TestCase):
         self.assertEqual(len(page_links(html, "https://e.com/")), 300)
         self.assertEqual(page_links("<a href=<<", "https://e.com/"), [])
 
+    def test_long_urls_dropped(self):
+        long_path = "/" + "x" * 2048
+        html = f'<a href="{long_path}">x</a><a href="/ok">ok</a>'
+        self.assertEqual(page_links(html, "https://e.com/"), ["https://e.com/ok"])
+        ok = "https://e.com/" + "y" * (2048 - len("https://e.com/"))
+        feed = ("<rss><channel><item><link>https://e.com/%s</link></item>"
+                "<item><link>%s</link></item></channel></rss>") % ("x" * 2048, ok)
+        self.assertEqual([e.url for e in parse_feed(feed)], [ok])
+
 
 class RecentTest(unittest.TestCase):
     NOW = datetime(2026, 11, 13, 12, tzinfo=timezone.utc)

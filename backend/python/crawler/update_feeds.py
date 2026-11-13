@@ -15,6 +15,7 @@ FeedEntry = namedtuple("FeedEntry", "url title published_at")
 MAX_ENTRIES = 200
 MAX_TITLE = 300
 MAX_PAGE_LINKS = 300
+MAX_URL_LENGTH = 2048
 _FEED_TYPES = ("application/rss+xml", "application/atom+xml")
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _DTD_RE = re.compile(r"<!\s*(doctype|entity)", re.IGNORECASE)
@@ -30,6 +31,8 @@ def _clean_title(text):
 
 def _https_url(value):
     value = (value or "").strip()
+    if len(value) > MAX_URL_LENGTH:
+        return None
     try:
         parts = urlsplit(value)
     except ValueError:
@@ -177,7 +180,7 @@ def page_links(html, base_url):
         if parts.scheme.lower() != "https" or host != base_host:
             continue
         absolute = _normalize(parts)
-        if absolute == base_page or absolute in seen:
+        if len(absolute) > MAX_URL_LENGTH or absolute == base_page or absolute in seen:
             continue
         seen.add(absolute)
         out.append(absolute)

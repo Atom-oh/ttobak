@@ -112,8 +112,8 @@ class Ctx:
         return self.ms
 
 
-def run(table, docs, now=NOW, context=None):
-    """docs: {url: FeedDocument | Exception | callable}."""
+def run(table, docs, now=NOW, context=None, shuffle=lambda order: None):
+    """docs: {url: FeedDocument | Exception | callable}. Feed order is kept."""
     calls = []
 
     def fake(url):
@@ -123,7 +123,7 @@ def run(table, docs, now=NOW, context=None):
             raise d
         return d
     with mock.patch.object(uc, "fetch_feed_document", fake):
-        result = uc.collect(uc.FeedStore(table), now, context)
+        result = uc.collect(uc.FeedStore(table), now, context, shuffle=shuffle)
     return result, calls
 
 
@@ -209,7 +209,7 @@ class TestCollector(unittest.TestCase):
         self.assertIn("updatedAt", t.state("h1"))
         assert_no_empty_time(self, t)
 
-    def test_site_writes_at_most_30(self):
+    def test_site_writes_at_most_30_and_rest_later(self):
         t = FakeTable()
         register(t, "h1", "https://a.example/", kind="site")
         base = "https://a.example/"
@@ -217,6 +217,44 @@ class TestCollector(unittest.TestCase):
         many = doc(html(*["/p%d" % i for i in range(60)]), "text/html", base)
         result, _ = run(t, {base: many}, now=NOW + timedelta(hours=1))
         self.assertEqual(result["entries"], 30)
+        self.assertNotIn("https://a.example/p30", t.state("h1")["links"])
+        self.assertIn("https://a.example/a", t.state("h1")["links"])
+        result, _ = run(t, {base: many}, now=NOW + timedelta(hours=2))
+        self.assertEqual(result["entries"], 30)
+        self.assertEqual(len(t.entries("h1")), 60)
+        result, _ = run(t, {base: many}, now=NOW + timedelta(hours=3))
+        self.assertEqual(result["entries"], 0)
+
+    def test_site_kind_wins_when_subscribers_disagree(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/", kind="rss", user="u1")
+        register(t, "h1", "https://a.example/", kind="site", user="u2")
+        self.assertEqual(uc.FeedStore(t).active_feeds(), {"h1": ("https://a.example/", "site")})
+
+    def test_failing_resolved_url_is_dropped_then_rediscovered(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/", kind="site")
+        page = doc(html(feed="/feed.xml"), "text/html", "https://a.example/")
+        feed = doc(rss(("https://a.example/p", "P", pub(1))))
+        run(t, {"https://a.example/": page, "https://a.example/feed.xml": feed})
+        self.assertEqual(t.state("h1")["resolvedUrl"], "https://a.example/feed.xml")
+        docs = {"https://a.example/": page, "https://a.example/feed.xml": FetchRejected("HTTP_404")}
+        result, calls = run(t, docs, now=NOW + timedelta(hours=1))
+        self.assertEqual((result["failed"], calls), (1, ["https://a.example/feed.xml"]))
+        self.assertEqual(t.state("h1")["failures"], 1)
+        self.assertNotIn("resolvedUrl", t.state("h1"))
+        docs["https://a.example/feed.xml"] = feed
+        result, calls = run(t, docs, now=NOW + timedelta(hours=2))
+        self.assertEqual(calls, ["https://a.example/", "https://a.example/feed.xml"])
+        self.assertEqual(t.state("h1")["resolvedUrl"], "https://a.example/feed.xml")
+
+    def test_feed_order_is_shuffled(self):
+        t = FakeTable()
+        for i in range(3):
+            register(t, "h%d" % i, "https://a.example/%d" % i)
+        docs = {"https://a.example/%d" % i: doc(rss()) for i in range(3)}
+        _, calls = run(t, docs, shuffle=lambda order: order.reverse())
+        self.assertEqual(calls, ["https://a.example/2", "https://a.example/1", "https://a.example/0"])
 
     def test_youtube_html_without_feed_is_no_feed(self):
         t = FakeTable()
@@ -334,7 +372,7 @@ class TestCollector(unittest.TestCase):
     def test_stops_when_time_is_short(self):
         t = FakeTable()
         register(t, "h1", "https://a.example/1")
-        result, calls = run(t, {}, context=Ctx(59000))
+        result, calls = run(t, {}, context=Ctx(269999))
         self.assertEqual(calls, [])
         self.assertEqual(result["skipped"], 1)
 

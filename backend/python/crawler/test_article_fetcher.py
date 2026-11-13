@@ -356,6 +356,13 @@ class TestFeedFetch(unittest.TestCase):
         self.assertEqual(document.content_type, "application/atom+xml")
         self.assertEqual(document.text, self.ATOM)
 
+    def test_feed_accept_header_sent_and_article_unchanged(self):
+        _, opened = self.fetch_with(response(self.ATOM.encode(), **{"Content-Type": "application/atom+xml"}))
+        accept = opened.call_args.kwargs["headers"]["Accept"]
+        self.assertTrue(accept.startswith("application/rss+xml, application/atom+xml"))
+        self.assertIn("*/*;q=0.5", accept)
+        self.assertEqual(fetcher._HEADERS["Accept"], "text/html,application/xhtml+xml,text/plain")
+
     def test_utf8_xml_without_charset_header_decodes(self):
         document, _ = self.fetch_with(response(
             self.ATOM.encode(), **{"Content-Type": "application/xml"}))

@@ -53,6 +53,9 @@ _HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5",
     "Connection": "close",
 }
+_FEED_HEADERS = dict(_HEADERS, Accept=(
+    "application/rss+xml, application/atom+xml, application/xml;q=0.9, "
+    "text/xml;q=0.9, text/html;q=0.8, */*;q=0.5"))
 # No application imports, user code, shell, or inherited Python search path.
 # The child emits at most 33 bounded getaddrinfo records. subprocess.run kills
 # and reaps it on timeout, so stalled DNS cannot accumulate warm-worker threads.
@@ -493,15 +496,16 @@ def normalize_html(html, url):
 
 
 def _fetch_text(url, *, https_only, allowed_types, type_reason="UNSUPPORTED_CONTENT_TYPE",
-                max_decoded=MAX_DECODED_BYTES, size_reason="BODY_TOO_LARGE"):
+                max_decoded=MAX_DECODED_BYTES, size_reason="BODY_TOO_LARGE", headers=None):
     """Shared validated transport: returns (final_url, content_type, decoded text)."""
     deadline = time.monotonic() + MAX_ATTEMPT_SECONDS
     current = url
+    request = {} if headers is None else {"headers": headers}
     for redirect in range(MAX_REDIRECTS + 1):
         if https_only and urlsplit(current).scheme != "https":
             raise FetchRejected("INSECURE_REDIRECT")
         parsed, answers = _target(current, deadline)
-        connection, response = _open_response(parsed, answers, deadline)
+        connection, response = _open_response(parsed, answers, deadline, **request)
         try:
             if response.status in _REDIRECT_CODES:
                 location = response.headers.get("Location")
@@ -546,7 +550,7 @@ def _fetch_once(url, *, https_only=False):
 def _fetch_feed_once(url):
     current, content_type, text = _fetch_text(
         url, https_only=True, allowed_types=FEED_CONTENT_TYPES, type_reason="content_type",
-        max_decoded=MAX_FEED_BYTES, size_reason="too_large")
+        max_decoded=MAX_FEED_BYTES, size_reason="too_large", headers=_FEED_HEADERS)
     return FeedDocument(current, content_type, text)
 
 
