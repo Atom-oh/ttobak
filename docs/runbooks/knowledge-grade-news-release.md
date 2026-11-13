@@ -303,9 +303,11 @@ the duplicate catch accepts that observed name and the older suffix-free name.
 A failed child is recorded without skipping later sources, and the parent fails
 after all selected sources have been attempted. Successful task execution alone
 is insufficient: a finalized `COMPLETED` or `PARTIAL` receipt must have the exact
-empty `errors` array and boolean `usageComplete=true`. Nonempty errors such as
-`SEARCH_FAILED`, incomplete usage and unknown outputs fail that source after
-durable finalization. Warning-only partial results and valid empty results remain
+empty `faults` array and boolean `usageComplete=true`. Nonempty faults such as
+`SEARCH_FAILED`, incomplete usage and unknown outputs (including a receipt
+without `faults`) fail that source after durable finalization. Per-article
+rejection codes appear only in `errors` and do not fail the source (ADR-004,
+2026-11-13). Warning-only partial results and valid empty results remain
 successful. The short `FINALIZED` result and duplicate-start catch mean reuse of
 an existing execution, not proof that its historical crawl succeeded. Inspect the
 original history and child/parent failure or timeout alarms on replay.
