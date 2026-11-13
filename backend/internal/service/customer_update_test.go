@@ -18,6 +18,7 @@ type mockUpdateRepo struct {
 	drafts        map[string]*model.UpdateDraft
 	listed        []model.UpdateDraft
 	ensureCalls   int
+	ensureErr     error
 	markCalls     int
 	putSourceErr  error
 	updateSrcErr  error
@@ -57,7 +58,7 @@ func (m *mockUpdateRepo) PutItemsIfAbsent(_ context.Context, _, _ string, items 
 }
 func (m *mockUpdateRepo) EnsureURLPending(context.Context, string, string) error {
 	m.ensureCalls++
-	return nil
+	return m.ensureErr
 }
 func (m *mockUpdateRepo) MarkPending(context.Context, string) error { m.markCalls++; return nil }
 func (m *mockUpdateRepo) GetDraft(_ context.Context, _, accountID, urlHash string) (*model.UpdateDraft, error) {
@@ -252,8 +253,24 @@ func TestCustomerUpdateUploadLinks(t *testing.T) {
 		if resp.Accepted != 2 || resp.Duplicate != 1 || resp.Rejected != 1 {
 			t.Fatalf("resp = %+v", resp)
 		}
-		if repo.ensureCalls != 2 || repo.markCalls != 1 {
-			t.Fatalf("ensure=%d mark=%d, want 2 and 1", repo.ensureCalls, repo.markCalls)
+		if repo.ensureCalls != 3 || repo.markCalls != 1 {
+			t.Fatalf("ensure=%d mark=%d, want 3 and 1", repo.ensureCalls, repo.markCalls)
+		}
+	})
+
+	t.Run("ensure failure writes no item and does not mark pending", func(t *testing.T) {
+		repo := newMockUpdateRepo()
+		repo.sources = []model.UpdateSource{slack}
+		repo.ensureErr = errors.New("ensure failed")
+		_, err := newUpdateSvc(repo, &mockMembers{}).UploadLinks(context.Background(), "u1",
+			&model.UploadUpdateLinksRequest{SourceID: "slack1", Links: []model.UpdateUploadLink{
+				{URL: "https://example.com/a"}, {URL: "https://example.com/b"},
+			}})
+		if !errors.Is(err, repo.ensureErr) {
+			t.Fatalf("err = %v, want ensure error", err)
+		}
+		if len(repo.items) != 0 || repo.markCalls != 0 || repo.ensureCalls != 1 {
+			t.Fatalf("items=%d mark=%d ensure=%d", len(repo.items), repo.markCalls, repo.ensureCalls)
 		}
 	})
 

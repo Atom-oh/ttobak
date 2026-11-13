@@ -224,6 +224,12 @@ func (s *CustomerUpdateService) UploadLinks(ctx context.Context, userID string, 
 		if t, perr := time.Parse(time.RFC3339, link.SeenAt); perr == nil && !t.After(now) {
 			item.FirstSeenAt = t.UTC()
 		}
+		// Write the shared URL row before the inbox item: it is an idempotent
+		// put-if-absent, so a retry can never leave an item without its URL row.
+		// An orphan URL row is harmless and expires by TTL.
+		if err := s.repo.EnsureURLPending(ctx, hash, normalized); err != nil {
+			return nil, err
+		}
 		// One item per call so the created count identifies which links are new.
 		created, err := s.repo.PutItemsIfAbsent(ctx, userID, req.SourceID, []model.UpdateItem{item})
 		if err != nil {
@@ -232,9 +238,6 @@ func (s *CustomerUpdateService) UploadLinks(ctx context.Context, userID string, 
 		if created == 0 {
 			resp.Duplicate++
 			continue
-		}
-		if err := s.repo.EnsureURLPending(ctx, hash, normalized); err != nil {
-			return nil, err
 		}
 		resp.Accepted++
 	}
