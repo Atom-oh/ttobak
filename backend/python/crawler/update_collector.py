@@ -176,13 +176,17 @@ def _collect(url, kind, state):
 
 def process_feed(store, feed_hash, url, kind, now):
     """Collect one feed. Returns (outcome, written); outcome is fetched|skipped|failed."""
-    state = store.get_state(feed_hash)
-    last = _parse_iso(state.get("lastFetchedAt"))
-    if (int(state.get("failures", 0)) >= BACKOFF_FAILURES and last is not None
-            and now - last <= timedelta(seconds=BACKOFF_SECONDS)):
-        return "skipped", 0
     written = 0
     try:
+        state = store.get_state(feed_hash)
+        last = _parse_iso(state.get("lastFetchedAt"))
+        try:
+            failures = int(state.get("failures", 0))
+        except (TypeError, ValueError):
+            failures = 0
+        if (failures >= BACKOFF_FAILURES and last is not None
+                and now - last <= timedelta(seconds=BACKOFF_SECONDS)):
+            return "skipped", 0
         entries, links, resolved = _collect(url, kind, state)
         stored = None
         if entries is not None:
@@ -221,7 +225,11 @@ def collect(store, now, context=None):
         if remaining is not None and remaining() < MIN_REMAINING_MS:
             result["skipped"] += 1
             continue
-        outcome, written = process_feed(store, feed_hash, url, kind, now)
+        try:
+            outcome, written = process_feed(store, feed_hash, url, kind, now)
+        except Exception:  # last-resort containment; never stop the loop
+            logger.error("feed=%s unexpected error", feed_hash[:12])
+            outcome, written = "failed", 0
         result[outcome] += 1
         result["entries"] += written
     return result

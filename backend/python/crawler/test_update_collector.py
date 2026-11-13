@@ -286,6 +286,51 @@ class TestCollector(unittest.TestCase):
         self.assertEqual(result["fetched"], 1)
         self.assertEqual(t.state("h1")["lastError"], "fetch")
 
+    def test_state_read_failure_is_contained_to_that_feed(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/1")
+        register(t, "h2", "https://a.example/2")
+        real = t.get_item
+
+        def flaky(Key):
+            if Key["PK"] == "CUFEED#h1":
+                raise RuntimeError("throttled")
+            return real(Key)
+        t.get_item = flaky
+        result, calls = run(t, {"https://a.example/2": doc(rss())})
+        self.assertEqual(calls, ["https://a.example/2"])
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["fetched"], 1)
+
+    def test_malformed_state_values_do_not_abort(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/1")
+        register(t, "h2", "https://a.example/2")
+        t.rows[("CUFEED#h1", "STATE")] = {"PK": "CUFEED#h1", "SK": "STATE",
+                                          "failures": "abc", "lastFetchedAt": "garbage"}
+        t.rows[("CUFEED#h2", "STATE")] = {"PK": "CUFEED#h2", "SK": "STATE",
+                                          "failures": 9, "lastFetchedAt": 12345}
+        docs = {"https://a.example/1": doc(rss()), "https://a.example/2": doc(rss())}
+        result, _ = run(t, docs)
+        self.assertEqual(result["fetched"], 2)
+
+    def test_failure_write_throttled_is_contained(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/1")
+        register(t, "h2", "https://a.example/2")
+        real = t.update_item
+
+        def flaky(Key, **kw):
+            if Key["PK"] == "CUFEED#h1":
+                raise RuntimeError("throttled")
+            return real(Key, **kw)
+        t.update_item = flaky
+        docs = {"https://a.example/1": FetchRejected("TIMEOUT"),
+                "https://a.example/2": doc(rss())}
+        result, _ = run(t, docs)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["fetched"], 1)
+
     def test_stops_when_time_is_short(self):
         t = FakeTable()
         register(t, "h1", "https://a.example/1")
