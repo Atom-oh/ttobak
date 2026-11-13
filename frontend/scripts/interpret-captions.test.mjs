@@ -8,10 +8,10 @@ const source = readFileSync(new URL('../src/lib/interpretCaptions.ts', import.me
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
 const loaded = { exports: {} };
 vm.runInNewContext(outputText, { module: loaded, exports: loaded.exports });
-const { upsertCaptionLine, MAX_CAPTION_LINES } = loaded.exports;
+const { upsertCaptionLine, visibleCaptionLines, MAX_CAPTION_LINES } = loaded.exports;
 
 const line = (id, translated, status = 'complete', order = 0) => ({ id, order, original: `o${id}`, translated, status });
-const texts = (lines) => Array.from(lines, (item) => item.translated);
+const texts = (lines) => Array.from(visibleCaptionLines(lines), (item) => item.translated);
 
 test('a draft is replaced in place by its later version', () => {
   let lines = upsertCaptionLine([], line('a', 'fir', 'pending'));
@@ -23,7 +23,16 @@ test('a draft is replaced in place by its later version', () => {
 test('a final waiting for its translation keeps the shown draft', () => {
   const start = [line('a', 'draft', 'pending')];
   assert.equal(upsertCaptionLine(start, line('a', '', 'pending')), start);
-  assert.equal(upsertCaptionLine(start, line('c', '', 'pending')), start, 'no text yet adds nothing');
+  assert.deepEqual(texts(upsertCaptionLine(start, line('c', '', 'pending'))), ['draft'], 'a placeholder is not shown');
+});
+
+test('finals whose translations finish out of order still read in speaking order', () => {
+  let lines = upsertCaptionLine([], line('a', '', 'pending'));
+  lines = upsertCaptionLine(lines, line('b', '', 'pending'));
+  lines = upsertCaptionLine(lines, line('b', 'second'));
+  assert.deepEqual(texts(lines), ['second']);
+  lines = upsertCaptionLine(lines, line('a', 'first'));
+  assert.deepEqual(texts(lines), ['first', 'second']);
 });
 
 test('skipped and failed lines are removed', () => {

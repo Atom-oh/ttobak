@@ -10,7 +10,7 @@ import { NativeMicSelector, readNativeInputPreference } from '@/components/recor
 import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { useInterpretSession } from '@/hooks/useInterpretSession';
 import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
-import { upsertCaptionLine } from '@/lib/interpretCaptions';
+import { upsertCaptionLine, visibleCaptionLines } from '@/lib/interpretCaptions';
 import { INTERPRET_MESSAGES, formatElapsed } from '@/lib/interpretSession';
 import { BILINGUAL_TARGET, type TranslationEntry } from '@/lib/liveTranslation';
 import { onNativeAudioLevel, useIsMacApp } from '@/lib/tauri';
@@ -62,9 +62,12 @@ function CaptionColumn({ lang, lines, open }: { lang: CaptionLang; lines: Transl
             {line.translated}
           </p>
         ))}
-        {lines.length === 0 && (
+        {open && lines.length === 0 && (
+          <p className="text-sm text-slate-500 dark:text-text-muted">통역을 시작하면 여기에 자막이 쌓여요.</p>
+        )}
+        {!open && (
           <p className="text-sm text-slate-500 dark:text-text-muted">
-            {open ? '통역을 시작하면 여기에 자막이 쌓여요.' : '위 "자막 창"에서 이 언어의 창을 열면 여기에도 같은 자막이 보여요.'}
+            위 &quot;자막 창&quot;에서 이 언어의 창을 열면 여기에도 같은 자막이 보여요.
           </p>
         )}
         <div ref={endRef} />
@@ -173,7 +176,7 @@ function Interpreter() {
       {/* The same languages as the caption windows, side by side in large text. */}
       <div className="grid min-h-0 flex-1 auto-rows-fr gap-4 md:grid-flow-col md:auto-cols-fr">
         {languages.map((lang) => (
-          <CaptionColumn key={lang} lang={lang} lines={captionLines[lang] ?? []} open={captions.openLangs.includes(lang)} />
+          <CaptionColumn key={lang} lang={lang} lines={visibleCaptionLines(captionLines[lang] ?? [])} open={captions.openLangs.includes(lang)} />
         ))}
       </div>
     </div>
