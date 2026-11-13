@@ -63,11 +63,14 @@ function fixture(context) {
     react: harness.react,
     '@/components/auth/AuthProvider': { useAuth: () => auth },
     '@/lib/api': {
-      calendarApi: Object.fromEntries(['events', 'sources'].map(kind => [kind, (query, request) => {
-        const pending = deferred();
-        calls.push({ kind, query, request, ...pending });
-        return pending.promise;
-      }])),
+      calendarApi: {
+        ...Object.fromEntries(['events', 'sources'].map(kind => [kind, (query, request) => {
+          const pending = deferred();
+          calls.push({ kind, query, request, ...pending });
+          return pending.promise;
+        }])),
+        shareDirectory: () => Promise.resolve({ accounts: [] }),
+      },
     },
   };
   const load = loader(dependencies, {
@@ -458,7 +461,7 @@ function markup(props = {}, storage = expandedInternal) {
   const load = loader({
     react: React, 'react/jsx-runtime': jsxRuntime,
     'next/link': { default: ({ children, ...attributes }) => React.createElement('a', attributes, children) },
-    '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {}, '@/components/workspace/SpecReqTaskActions': {},
+    '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {}, '@/components/workspace/SpecReqTaskActions': {}, '@/lib/api': { calendarApi: {} },
   }, storage ? { window: { localStorage: storage } } : {});
   const { UpcomingMeetings } = load('@/components/workspace/UpcomingMeetings');
   return renderToStaticMarkup(React.createElement(UpcomingMeetings, {
@@ -508,7 +511,7 @@ test('next and ongoing events overlap seven days; all-day separate, local times 
   assert.match(output, /원본 시간대: Asia\/Seoul/);
   assert.match(output, /&lt;script&gt;synthetic&lt;\/script&gt;/);
   assert.ok(output.indexOf('synthetic') < output.indexOf('Synthetic later'));
-  assert.match(output, /어카운트 연결로 공유되지 않습니다/);
+  assert.match(output, /어카운트 연결은 분류만 하며/);
 });
 
 test('never synced, unavailable, failed, partial and stale remain distinct', () => {

@@ -442,6 +442,18 @@ Concurrent callers share one load, and the Account list paints the last loaded
 list before an expired entry reloads. Account mutations, session grant bootstrap, sign-out and session
 expiry drop it. It is never persisted and does not authorize reads.
 
+Calendar sharing (`src/lib/calendarSharing.ts` owns the pure helpers and the Korean copy
+`SHARING_COPY`): owner event cards show a badge (shared with the resolved account name and an
+evidence tooltip of title/location/attendee domain, candidate, or private) and actions. A granted
+share (`shareAccountId`) always shows as shared with unshare available, even under a hidden override
+or `Private` that has not taken effect yet. Assign opens a
+picker of direct-membership accounts from the share directory, candidates first; unshare sets mode
+hidden; back to automatic sets mode auto. Each action disables its buttons while pending, replaces the
+event with the response, and shows an alert on failure. The Account Meetings tab renders
+`AccountSchedule`, which reads only the account calendar route (never personal events), lists
+deduplicated shared events with a shared-by count, and pages on demand with a load-more button until the
+cursor is null.
+
 Direct members also get an Account **Events** tab (labelled in Korean in the UI): upcoming events by
 default and past events (descending, bounded at the time the list opened so its
 cursor stays valid), with create, edit and delete. Attendees come from the
@@ -957,6 +969,7 @@ row and shows reload copy.
 | `request_needed` | Copy the Slack request (also shown in a read-only field) and "I sent it" (`markRequested`). |
 | `needs_account` | Account picker over my accounts (`pickAccount`); waiting copy once an account is set. |
 | `needs_owner` | Owner picker over the account's direct `SA`/`SSA` members with a user ID, excluding me and pending members (`pickOwner`). |
+| `needs_account`, `needs_owner` | Also "not a customer meeting" (`close`): the task leaves the list, and intake neither recreates nor reclassifies a closed task. |
 | mine `issue_needed`, theirs `requested` | SpecReq ID input accepting a UUID (`linkSpecReq`). |
 
 A linked SpecReq shows its ID in a code element with a copy button; there is no known SpecReq page URL, so no link is rendered. When the account cannot be resolved, the copy button stays disabled and a hint explains why. The Slack

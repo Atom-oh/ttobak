@@ -1,14 +1,19 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import type { CalendarEvent, CalendarSourceStatus } from '@/types/calendar';
+import type { CalendarEvent, CalendarShareDirectoryAccount, CalendarSharingRequest, CalendarSourceStatus } from '@/types/calendar';
 import { useCalendarEvents, useCalendarWindow } from '@/hooks/useCalendarEvents';
 import { useSpecReqTasks, type SpecReqTasksState } from '@/hooks/useSpecReqTasks';
 import type { SpecReqTaskView } from '@/types/specreqTask';
 import type { AccountSummary } from '@/types/meeting';
 import { internalEventsToggleLabel, partitionCustomerEvents, readInternalEventsCollapsed, writeInternalEventsCollapsed } from '@/lib/calendarDisplay';
 import { SpecReqStateBadge, SpecReqTasks, type SpecReqTasksProps } from '@/components/workspace/SpecReqTasks';
+import { calendarApi } from '@/lib/api';
+import {
+  SHARING_COPY, accountLabel, applySharingOverlay, orderAccountChoices, recordSharingOverlay, sharingActions, sharingBadge,
+  type SharingOverlay,
+} from '@/lib/calendarSharing';
 
 export interface UpcomingMeetingsProps {
   events: CalendarEvent[];
@@ -32,6 +37,10 @@ export interface UpcomingMeetingsProps {
   onRetryTasks?: () => void;
   onTransitionTask?: SpecReqTasksProps['onTransition'];
   highlight?: string;
+  /** Direct-membership accounts; enables owner sharing badges and actions. */
+  directory?: CalendarShareDirectoryAccount[];
+  onSharing?: (event: CalendarEvent, request: CalendarSharingRequest) => Promise<void>;
+  sharingError?: string | null;
   /** Accounts the caller already loaded; customer events show their names. */
   accounts?: AccountSummary[];
 }
@@ -42,9 +51,35 @@ export function PrivateUpcomingMeetings({ accountId, onAccessLost, highlight, ac
   const { now, window } = useCalendarWindow();
   const calendar = useCalendarEvents({ ...window, accountId, onAccessLost });
   const specReq = useSpecReqTasks({ accountId, highlight });
-  return <UpcomingMeetings {...calendar} now={now} window={window} onRetry={calendar.retry}
+  const { userId } = calendar;
+  const [directory, setDirectory] = useState<CalendarShareDirectoryAccount[]>([]);
+  const [overlay, setOverlay] = useState<SharingOverlay[]>([]);
+  const [sharingError, setSharingError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!userId) return;
+    const controller = new AbortController();
+    calendarApi.shareDirectory({ signal: controller.signal, expectedUserId: userId })
+      .then(result => setDirectory(result.accounts))
+      .catch(() => { /* Without a directory, account names fall back to IDs and assignment is hidden. */ });
+    return () => controller.abort();
+  }, [userId]);
+  const events = applySharingOverlay(calendar.events, overlay);
+  // The response may arrive after a page loads; record it against the events current then.
+  const loadedEvents = useRef(calendar.events);
+  useEffect(() => { loadedEvents.current = calendar.events; }, [calendar.events]);
+  const onSharing = async (event: CalendarEvent, request: CalendarSharingRequest) => {
+    setSharingError(null);
+    try {
+      const updated = await calendarApi.setSharing(event.sourceId, event.eventId, request, { expectedUserId: userId });
+      setOverlay(previous => recordSharingOverlay(loadedEvents.current, previous, updated));
+    } catch {
+      setSharingError(SHARING_COPY.actionError);
+    }
+  };
+  return <UpcomingMeetings {...calendar} events={events} now={now} window={window} onRetry={calendar.retry}
     onLoadMore={calendar.loadMore} onLoadMoreSources={calendar.loadMoreSources}
-    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} tasksPartial={specReq.partial} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight} accounts={accounts} />;
+    accountId={accountId} tasks={specReq.tasks} tasksState={specReq.state} tasksPartial={specReq.partial} onRetryTasks={specReq.retry} onTransitionTask={specReq.transition} highlight={highlight} accounts={accounts}
+    directory={directory} onSharing={userId ? onSharing : undefined} sharingError={sharingError} />;
 }
 
 function localTime(value: string): string {
@@ -62,7 +97,48 @@ function completionStatus(source: CalendarSourceStatus, now: number, from: numbe
   return { current, stale, covered };
 }
 
-function EventCard({ event, now, warning, task, accountName }: { event: CalendarEvent; now: number; warning: boolean; task?: SpecReqTaskView; accountName?: string }) {
+function SharingControls({ event, directory, onSharing }: {
+  event: CalendarEvent; directory: CalendarShareDirectoryAccount[];
+  onSharing: (event: CalendarEvent, request: CalendarSharingRequest) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const badge = sharingBadge(event);
+  const actions = sharingActions(event, directory.map(account => account.accountId));
+  const run = async (request: CalendarSharingRequest) => {
+    setPending(true);
+    try { await onSharing(event, request); setPicking(false); } finally { setPending(false); }
+  };
+  const evidence = (badge.evidence ?? []).map(kind => SHARING_COPY.evidence[kind] ?? kind).join(' · ');
+  const buttonClass = 'rounded-lg border border-border-subtle px-3 py-1.5 text-xs text-primary focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40';
+  const choices = orderAccountChoices(directory, event.candidateAccountIds);
+  const candidates = new Set(event.candidateAccountIds ?? []);
+  return <div className="mt-3 space-y-2">
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      {badge.kind === 'shared' && <span className="rounded-full bg-primary/10 px-2 py-0.5 font-semibold text-primary" title={evidence || undefined}>
+        {SHARING_COPY.shared} · {accountLabel(directory, badge.accountId!)}</span>}
+      {badge.kind === 'candidate' && <span className="rounded-full bg-primary/5 px-2 py-0.5 text-text-secondary">{SHARING_COPY.candidate}</span>}
+      {badge.kind === 'private' && <span className="rounded-full bg-primary/5 px-2 py-0.5 text-text-muted">{SHARING_COPY.private}</span>}
+      {actions.includes('assign') && <button type="button" disabled={pending} aria-expanded={picking} onClick={() => setPicking(value => !value)} className={buttonClass}>{SHARING_COPY.assign}</button>}
+      {actions.includes('unshare') && <button type="button" disabled={pending} onClick={() => void run({ mode: 'hidden' })} className={buttonClass}>{SHARING_COPY.unshare}</button>}
+      {actions.includes('reset') && <button type="button" disabled={pending} onClick={() => void run({ mode: 'auto' })} className={buttonClass}>{SHARING_COPY.reset}</button>}
+    </div>
+    {picking && <div role="group" aria-label={SHARING_COPY.pickerTitle} className="flex flex-wrap gap-2">
+      {!choices.length && <p className="text-xs text-text-muted">{SHARING_COPY.pickerEmpty}</p>}
+      {choices.map(account => <button key={account.accountId} type="button" disabled={pending}
+        onClick={() => void run({ mode: 'account', accountId: account.accountId })} className={buttonClass}>
+        {account.name}{candidates.has(account.accountId) ? ` · ${SHARING_COPY.pickerCandidates}` : ''}
+      </button>)}
+      <button type="button" onClick={() => setPicking(false)} className={buttonClass}>{SHARING_COPY.cancel}</button>
+    </div>}
+  </div>;
+}
+
+function EventCard({ event, now, warning, task, accountName, directory, onSharing }: {
+  event: CalendarEvent; now: number; warning: boolean; task?: SpecReqTaskView; accountName?: string;
+  directory?: CalendarShareDirectoryAccount[];
+  onSharing?: (event: CalendarEvent, request: CalendarSharingRequest) => Promise<void>;
+}) {
   return (
     <article className="min-w-0 rounded-xl border border-border-subtle bg-surface p-4">
       <div className="flex flex-wrap items-center gap-2 text-xs text-primary">
@@ -79,6 +155,7 @@ function EventCard({ event, now, warning, task, accountName }: { event: Calendar
       </p>
       <p className="mt-1 break-words text-xs text-text-muted">원본 시간대: {event.timeZone}</p>
       {event.location && <p className="mt-2 break-words text-sm text-text-secondary">{event.location}</p>}
+      {directory && onSharing && <SharingControls event={event} directory={directory} onSharing={onSharing} />}
     </article>
   );
 }
@@ -108,7 +185,7 @@ function AgendaEvents({ events, label, renderEvent }: {
 
 export function UpcomingMeetings({ events, sources, state, onRetry, now, window: queryWindow,
   nextCursor, sourcesNextCursor, onLoadMore, onLoadMoreSources, isLoadingMore, isLoadingSources,
-  eventsError, sourcesError, accountId, tasks, tasksState, tasksPartial, onRetryTasks, onTransitionTask, highlight, accounts }: UpcomingMeetingsProps) {
+  eventsError, sourcesError, accountId, tasks, tasksState, tasksPartial, onRetryTasks, onTransitionTask, highlight, accounts, directory, onSharing, sharingError }: UpcomingMeetingsProps) {
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     if (now || state !== 'ready') return;
@@ -144,7 +221,8 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
   const renderEvent = (event: CalendarEvent) => {
     const status = statuses.get(event.sourceId);
     return <EventCard key={event.eventId} event={event} now={timestamp} warning={!status || !status.current || status.stale || !status.covered}
-      task={taskByEvent.get(event.eventId)} accountName={grouped && event.accountId ? accountNames.get(event.accountId) : undefined} />;
+      task={taskByEvent.get(event.eventId)} accountName={grouped && event.accountId ? accountNames.get(event.accountId) : undefined}
+      directory={directory} onSharing={onSharing} />;
   };
   const allDaySection = allDay.length > 0 && <div className="space-y-3">
     <h3 className="pt-3 text-sm font-semibold text-text-main">종일 일정</h3>
@@ -158,7 +236,7 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
         <div className="p-5 sm:p-6">
           <p className="mb-4 text-xs font-semibold text-primary">내 Outlook 일정</p>
           <h2 className="text-xl font-bold text-text-main">다음 미팅</h2>
-          <p className="mt-2 text-sm text-text-secondary">나에게 동기화된 개인 일정입니다. 어카운트 연결로 공유되지 않습니다.</p>
+          <p className="mt-2 text-sm text-text-secondary">{SHARING_COPY.personalNote}</p>
           {state === 'setup' && <div className="py-6">
             <h3 className="text-lg font-semibold text-text-main">Outlook 일정을 연결해 보세요.</h3>
             <p className="mt-3 max-w-prose text-sm leading-6 text-text-secondary">
@@ -227,6 +305,7 @@ export function UpcomingMeetings({ events, sources, state, onRetry, now, window:
                 </div>}
               </div>}
             </>}
+            {sharingError && <p role="alert" className="text-sm text-error">{sharingError}</p>}
             {eventsError && <p role="alert" className="text-sm text-text-secondary">추가 일정을 불러오지 못했습니다. 불러온 일정은 유지됩니다.</p>}
             {nextCursor && <div className="space-y-2 text-sm text-text-secondary">
               <p>추가 일정 페이지가 있습니다. 불러온 일정만 표시합니다.</p>

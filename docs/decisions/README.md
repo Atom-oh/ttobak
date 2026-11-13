@@ -45,6 +45,7 @@ record file is numbered outside 001 to 030 or when two files share a number.
 | [ADR-023](ADR-023-sa-performance-data-residency.md) | SA performance data residency; the former ADR-068, renumbered |
 | [ADR-024](ADR-024-mac-native-capture-and-upload.md) | Mac native capture and upload; absorbs the Mac parts of the former ADR-006 and the former ADR-046 (Core Audio tap and microphone) |
 | [ADR-025](ADR-025-projects-and-invitations.md) | Projects, relations and invitations; absorbs the former ADR-044 (project invitations and session bootstrap) |
+| [ADR-026](ADR-026-account-shared-calendar.md) | Account-shared calendar: direct-member visibility, one-veto rule, sharing overrides and excluded consumers |
 | [ADR-027](ADR-027-edge-delivery-and-origin-proof.md) | Edge delivery: signed media URLs and the origin proof; absorbs the former ADR-050 (versioned HTTP origin proof rotation) |
 | [ADR-028](ADR-028-qa-search-indexing-and-sources.md) | QA: web search, note indexing and current-source answers; absorbs the former ADR-038 (canonical note indexing) and ADR-042 (current-source QA and history) |
 | [ADR-029](ADR-029-note-provenance-and-sharing-safety.md) | Note provenance and sharing safety; merges the former ADR-049 (summary sharing source provenance), ADR-059 (owner-approved account sharing) and ADR-070 (shareable-by-default note provenance) under a freed number |

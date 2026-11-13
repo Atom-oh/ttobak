@@ -59,6 +59,7 @@ function markup(props = {}) {
     react: React, 'react/jsx-runtime': jsxRuntime,
     'next/link': { default: ({ children, ...attributes }) => React.createElement('a', attributes, children) },
     '@/hooks/useCalendarEvents': {}, '@/hooks/useSpecReqTasks': {}, '@/components/workspace/SpecReqTaskActions': {},
+    '@/lib/api': { calendarApi: {} },
   });
   const { UpcomingMeetings } = load('@/components/workspace/UpcomingMeetings');
   return renderToStaticMarkup(React.createElement(UpcomingMeetings, {
@@ -216,11 +217,12 @@ test('actions per state', () => {
   const copy = actionsLoad()('@/components/workspace/SpecReqTaskActions').SPECREQ_ACTION_COPY;
   const labels = {
     copy: copy.copySlack, sent: copy.markRequested, account: copy.accountSubmit, owner: copy.ownerSubmit, link: copy.linkSubmit,
+    dismiss: copy.dismiss,
   };
   const cases = [
     [{ state: 'request_needed', path: 'theirs' }, ['copy', 'sent']],
-    [{ state: 'needs_account' }, ['account']],
-    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner'], [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }]],
+    [{ state: 'needs_account' }, ['account', 'dismiss']],
+    [{ state: 'needs_owner', accountId: 'acct-1' }, ['owner', 'dismiss'], [{ userId: 'u1', role: 'SA', email: 'u1@amazon.com' }]],
     [{ state: 'issue_needed', path: 'mine' }, ['link']],
     [{ state: 'issue_needed', path: 'theirs' }, []],
     [{ state: 'requested', path: 'theirs' }, ['link']],
