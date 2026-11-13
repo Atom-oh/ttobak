@@ -146,6 +146,11 @@ pub struct RecorderState {
     /// by a path: a listening session has none and leaves nothing to upload.
     #[cfg(target_os = "macos")]
     listening_power: Mutex<Option<power::PowerAssertion>>,
+    /// Held for the whole of a listening stop, so a second `end_listening`
+    /// (a recording start arriving while the page's own stop is tearing the
+    /// capture down) waits for that teardown instead of finding an empty slot
+    /// and starting a new capture over it.
+    listening_stop: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Serialize)]
@@ -564,10 +569,17 @@ async fn stop_listening(app: AppHandle) -> Result<ListenStopResponse, AppError> 
 /// Ends the listening session, if one is running, and returns
 /// `(stopped, stop_timed_out)`. The handle is taken under the recorder lock
 /// and the blocking Core Audio stop runs after the lock is released, bounded
-/// by `STOP_CAPTURE_TIMEOUT`. `reason` is set when something other than the
+/// by `STOP_CAPTURE_TIMEOUT`. Calls are serialized, so when this returns no
+/// listening stop is still tearing the capture down unless it timed out.
+/// `reason` is set when something other than the
 /// page ended the session (`"system-sleep"`, `"recording"`); the page is then told
 /// through `native-listening-stopped`.
 pub(crate) async fn end_listening(app: &AppHandle, reason: Option<&'static str>) -> (bool, bool) {
+    // One stop at a time: a caller that arrives during another caller's
+    // teardown waits here until it finished (or timed out), then finds
+    // nothing left to stop.
+    let stop_lock = Arc::clone(&app.state::<RecorderState>().listening_stop);
+    let _stopping = stop_lock.lock().await;
     let handle = {
         let state = app.state::<RecorderState>();
         let handle = state.recorder.lock().take_listening();
@@ -964,6 +976,7 @@ pub fn run() {
             recording_power: Mutex::new(power::RecordingPower::new()),
             #[cfg(target_os = "macos")]
             listening_power: Mutex::new(None),
+            listening_stop: Arc::new(tokio::sync::Mutex::new(())),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,

@@ -17,6 +17,8 @@ export const INTERPRET_MESSAGES = {
   reconnectFailed: '실시간 자막 연결이 끊어져 통역을 멈췄습니다. 네트워크를 확인한 뒤 다시 시작해 주세요.',
   unavailable: '실시간 자막을 사용할 수 없어 통역을 시작할 수 없습니다 (AWS 인증/연결 필요).',
   macOnly: '통역 전용 모드는 Mac 앱에서만 사용할 수 있습니다.',
+  /** Followed by `: <cause>`. */
+  startFailed: '통역을 시작하지 못했습니다',
 } as const;
 
 /** Hands out the reconnect delays in order, then `null` once they are used up. */
