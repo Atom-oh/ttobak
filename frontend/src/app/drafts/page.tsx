@@ -9,8 +9,10 @@ import { accountApi, customerUpdatesApi } from '@/lib/api';
 import {
   COPY,
   appendDraftPage,
+  draftStatusChanged,
   groupDraftsByAccount,
   loadDraftPages,
+  loadMoreAfterStatusChange,
   normalizeDraft,
   normalizeDraftsPage,
   replaceDraft,
@@ -33,27 +35,35 @@ export default function DraftsPage() {
   const [names, setNames] = useState<Map<string, string>>(new Map());
   // Pages loaded so far, so a reload after a conflict keeps what the user had open.
   const pagesLoaded = useRef(1);
+  // Only the latest list request applies; a status change makes the offset cursor stale.
+  const generation = useRef(0);
+  const statusChanged = useRef(false);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace('/');
   }, [isLoading, isAuthenticated, router]);
 
+  const fetchPage = useCallback(
+    (cursor: string | undefined) => customerUpdatesApi.listDrafts(cursor, { expectedUserId: userId }),
+    [userId],
+  );
+
   const reload = useCallback(async () => {
+    const gen = ++generation.current;
     setError('');
     try {
-      const result = await loadDraftPages(
-        (cursor) => customerUpdatesApi.listDrafts(cursor, { expectedUserId: userId }),
-        pagesLoaded.current,
-      );
+      const result = await loadDraftPages(fetchPage, pagesLoaded.current);
+      if (gen !== generation.current) return;
       pagesLoaded.current = result.pages;
+      statusChanged.current = false;
       setDrafts(result.drafts);
       setNextCursor(result.nextCursor);
     } catch {
-      setError(COPY['drafts.loadFailed']);
+      if (gen === generation.current) setError(COPY['drafts.loadFailed']);
     } finally {
-      setLoading(false);
+      if (gen === generation.current) setLoading(false);
     }
-  }, [userId]);
+  }, [fetchPage]);
 
   useEffect(() => {
     if (!userId) return;
@@ -76,21 +86,35 @@ export default function DraftsPage() {
   }, [userId, membershipRevision]);
 
   const loadMore = async () => {
+    const gen = ++generation.current;
     setMoreBusy(true);
     setError('');
     try {
-      const page = normalizeDraftsPage(await customerUpdatesApi.listDrafts(nextCursor, { expectedUserId: userId }));
-      setDrafts((prev) => appendDraftPage(prev, page.drafts));
-      setNextCursor(page.nextCursor);
-      pagesLoaded.current += 1;
+      if (statusChanged.current) {
+        const result = await loadMoreAfterStatusChange(fetchPage, drafts);
+        if (gen !== generation.current) return;
+        statusChanged.current = false;
+        pagesLoaded.current = result.pages;
+        setDrafts(result.drafts);
+        setNextCursor(result.nextCursor);
+      } else {
+        const page = normalizeDraftsPage(await fetchPage(nextCursor));
+        if (gen !== generation.current) return;
+        setDrafts((prev) => appendDraftPage(prev, page.drafts));
+        setNextCursor(page.nextCursor);
+        pagesLoaded.current += 1;
+      }
     } catch {
-      setError(COPY['drafts.loadFailed']);
+      if (gen === generation.current) setError(COPY['drafts.loadFailed']);
     } finally {
       setMoreBusy(false);
     }
   };
 
-  const onChanged = (next: UpdateDraft) => setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
+  const onChanged = (next: UpdateDraft) => {
+    if (draftStatusChanged(drafts, next)) statusChanged.current = true;
+    setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
+  };
   const { open, handled } = useMemo(() => splitHandledDrafts(drafts), [drafts]);
   const groups = useMemo(() => groupDraftsByAccount(open), [open]);
   const nameOf = (accountId: string) => names.get(accountId) || shortAccountId(accountId);

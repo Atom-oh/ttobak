@@ -6,6 +6,7 @@ import {
   COPY,
   DISMISS_REASON_LABELS,
   draftCopyText,
+  editSaveRevision,
   isHttpsUrl,
   type DismissReason,
   type PatchUpdateDraftInput,
@@ -28,11 +29,16 @@ interface Props {
   onChanged: (draft: UpdateDraft) => void;
   /** Called after a 409 so the owner of the list can reload this account's drafts. */
   onConflict: (accountId: string) => void;
+  /** Called after a 403 when the owner of the list handles lost access. */
+  onAccessLost?: () => void;
 }
 
-export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConflict }: Props) {
+export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConflict, onAccessLost }: Props) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
+  // The revision the edit started from; after a 409 the next explicit save targets the latest one.
+  const [baseRevision, setBaseRevision] = useState(0);
+  const [editConflict, setEditConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [copyState, setCopyState] = useState<'' | 'copied' | 'failed'>('');
@@ -59,18 +65,22 @@ export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConfl
   const handled = draft.status !== 'new';
   const shownBody = draftCopyText(draft);
 
-  const run = async (input: Omit<PatchUpdateDraftInput, 'revision'>): Promise<boolean> => {
+  const run = async (input: Omit<PatchUpdateDraftInput, 'revision'>, revision = draft.revision): Promise<boolean> => {
     setBusy(true);
     setMessage('');
     try {
-      const next = await customerUpdatesApi.patchDraft(draft.accountId, draft.urlHash, { ...input, revision: draft.revision });
+      const next = await customerUpdatesApi.patchDraft(draft.accountId, draft.urlHash, { ...input, revision });
       onChanged(next);
       return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setEditing(false);
+        // An edit keeps the user's text; saving again is the explicit retry.
+        if (input.action === 'edit') setEditConflict(true);
+        else setEditing(false);
         setMessage(COPY['card.conflict']);
         onConflict(draft.accountId);
+      } else if (err instanceof ApiError && err.status === 403 && onAccessLost) {
+        onAccessLost();
       } else {
         setMessage(COPY['card.actionFailed']);
       }
@@ -94,12 +104,22 @@ export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConfl
 
   const startEdit = () => {
     setText(shownBody);
+    setBaseRevision(draft.revision);
+    setEditConflict(false);
     setMessage('');
     setEditing(true);
   };
 
   const saveEdit = async () => {
-    if (await run({ action: 'edit', body: text })) setEditing(false);
+    const revision = editSaveRevision(baseRevision, draft.revision, editConflict);
+    setBaseRevision(revision);
+    setEditConflict(false);
+    if (await run({ action: 'edit', body: text }, revision)) setEditing(false);
+  };
+
+  const cancelEdit = () => {
+    setEditConflict(false);
+    setEditing(false);
   };
 
   const dismiss = async (reason: DismissReason) => {
@@ -178,7 +198,7 @@ export function CustomerUpdateDraftCard({ draft, accountName, onChanged, onConfl
             <button type="button" className={PRIMARY_CLASS} disabled={busy || text.trim() === ''} onClick={saveEdit}>
               {COPY['card.save']}
             </button>
-            <button type="button" className={BUTTON_CLASS} disabled={busy} onClick={() => setEditing(false)}>
+            <button type="button" className={BUTTON_CLASS} disabled={busy} onClick={cancelEdit}>
               {COPY['card.cancel']}
             </button>
           </>

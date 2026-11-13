@@ -145,3 +145,68 @@ test('sourceAddErrorMessage maps statuses to Korean copy only', () => {
   assert.equal(cu.sourceAddErrorMessage(null), cu.COPY['settings.sources.actionFailed']);
   assert.notEqual(cu.COPY['settings.sources.actionFailed'], cu.COPY['settings.sources.loadFailed']);
 });
+
+// Simulates the server: open drafts first, then newest first, paged by numeric offset.
+function fakeServer(drafts, pageSize) {
+  const order = () => [...drafts].sort((a, b) => (a.status === 'new' ? 0 : 1) - (b.status === 'new' ? 0 : 1) || b.createdAt.localeCompare(a.createdAt));
+  return async (cursor) => {
+    const offset = Number(cursor ?? 0);
+    const end = offset + pageSize;
+    const all = order();
+    return { drafts: all.slice(offset, end).map((d) => ({ ...d })), nextCursor: end < all.length ? String(end) : '' };
+  };
+}
+
+test('More after a status change re-reads so the 31st draft appears exactly once', async () => {
+  const stored = Array.from({ length: 31 }, (_, i) => ({ ...mk('a', `d${String(i).padStart(2, '0')}`), createdAt: `2026-10-${String(31 - i).padStart(2, '0')}T00:00:00Z` }));
+  const fetchPage = fakeServer(stored, 30);
+  const first = cu.normalizeDraftsPage(await fetchPage(undefined));
+  assert.equal(first.drafts.length, 30);
+  // Adopt the first shown draft: the server moves it to the end of its order.
+  stored[0].status = 'adopted';
+  const adopted = { ...first.drafts[0], status: 'adopted' };
+  assert.equal(cu.draftStatusChanged(first.drafts, adopted), true);
+  assert.equal(cu.draftStatusChanged(first.drafts, first.drafts[1]), false);
+  const shown = cu.replaceDraft(first.drafts, adopted);
+
+  // The stale offset cursor loses d30.
+  const stale = cu.appendDraftPage(shown, cu.normalizeDraftsPage(await fetchPage(first.nextCursor)).drafts);
+  assert.equal(stale.some((d) => d.urlHash === 'd30'), false);
+
+  const calls = [];
+  const result = plain(await cu.loadMoreAfterStatusChange(async (c) => { calls.push(c ?? ''); return fetchPage(c); }, shown));
+  const keys = result.drafts.map((d) => d.urlHash);
+  assert.deepEqual(calls, ['', '30']);
+  assert.equal(keys.length, 31);
+  assert.equal(new Set(keys).size, 31);
+  assert.deepEqual(keys.slice(0, 30), shown.map((d) => d.urlHash));
+  assert.equal(keys[30], 'd30');
+  assert.equal(result.drafts[0].status, 'adopted');
+  assert.deepEqual([result.nextCursor, result.pages], ['', 2]);
+});
+
+test('mergeRereadDrafts refreshes shown drafts in place and appends new ones', () => {
+  const out = plain(cu.mergeRereadDrafts([mk('a', '1'), mk('a', '2')], [mk('a', '2', 'dismissed'), mk('a', '3'), mk('a', '1')]));
+  assert.deepEqual(out.map((d) => [d.urlHash, d.status]), [['1', 'new'], ['2', 'dismissed'], ['3', 'new']]);
+});
+
+test('editSaveRevision submits the base revision until a conflict is acknowledged', () => {
+  assert.equal(cu.editSaveRevision(3, 5, false), 3);
+  assert.equal(cu.editSaveRevision(3, 5, true), 5);
+});
+
+test('cards save edits from their base revision and lists apply only the latest request', () => {
+  const read = (path) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+  const card = read('components/CustomerUpdateDraftCard.tsx');
+  assert.match(card, /setBaseRevision\(draft\.revision\)/);
+  assert.match(card, /editSaveRevision\(baseRevision, draft\.revision, editConflict\)/);
+  assert.match(card, /input\.action === 'edit'\) setEditConflict\(true\)/);
+  assert.match(card, /status === 403 && onAccessLost/);
+  assert.match(read('components/AccountDraftsTab.tsx'), /onAccessLost=\{onAccessLost\}/);
+  for (const path of ['components/AccountDraftsTab.tsx', 'app/drafts/page.tsx']) {
+    const src = read(path);
+    assert.match(src, /loadMoreAfterStatusChange\(fetchPage, drafts\)/, path);
+    assert.match(src, /draftStatusChanged\(drafts, next\)/, path);
+    assert.ok((src.match(/gen [!=]== generation\.current/g) ?? []).length >= 4, path);
+  }
+});

@@ -204,6 +204,52 @@ export async function loadDraftPages(
   return { drafts, nextCursor: cursor ?? '', pages: loaded };
 }
 
+/**
+ * Merges a re-read from the first page into what is shown: shown drafts keep
+ * their visible order with the server copy when the re-read has one, then
+ * drafts not yet shown follow in server order.
+ */
+export function mergeRereadDrafts(shown: UpdateDraft[], reread: UpdateDraft[]): UpdateDraft[] {
+  const fresh = new Map(reread.map((d) => [draftKey(d), d]));
+  return appendDraftPage(shown.map((d) => fresh.get(draftKey(d)) ?? d), reread);
+}
+
+/**
+ * More after a status change: the saved offset cursor is stale because the
+ * changed draft moved in the server order. Re-reads from the first page through
+ * the shown drafts plus one page, merges, and returns the re-read's cursor.
+ */
+export async function loadMoreAfterStatusChange(
+  fetchPage: (cursor: string | undefined) => Promise<UpdateDraftsPage>,
+  shown: UpdateDraft[],
+): Promise<{ drafts: UpdateDraft[]; nextCursor: string; pages: number }> {
+  let reread: UpdateDraft[] = [];
+  let cursor: string | undefined;
+  let pageSize = 0;
+  let pages = 0;
+  do {
+    const page = normalizeDraftsPage(await fetchPage(cursor));
+    pageSize ||= page.drafts.length;
+    reread = appendDraftPage(reread, page.drafts);
+    cursor = page.nextCursor || undefined;
+    pages++;
+  } while (cursor && reread.length < shown.length + pageSize);
+  return { drafts: mergeRereadDrafts(shown, reread), nextCursor: cursor ?? '', pages };
+}
+
+/** True when `next` changes the status of a draft that is shown. */
+export function draftStatusChanged(shown: UpdateDraft[], next: UpdateDraft): boolean {
+  return shown.some((d) => draftKey(d) === draftKey(next) && d.status !== next.status);
+}
+
+/**
+ * The revision an edit save submits: the one the edit started from. After a
+ * 409 the user's next explicit save targets the latest revision shown.
+ */
+export function editSaveRevision(base: number, latest: number, conflicted: boolean): number {
+  return conflicted ? latest : base;
+}
+
 /** The empty-state message shows only when nothing is loaded and no page remains. */
 export function showDraftsEmpty(drafts: UpdateDraft[], nextCursor: string): boolean {
   return drafts.length === 0 && !nextCursor;

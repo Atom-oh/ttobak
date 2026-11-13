@@ -5,8 +5,10 @@ import { customerUpdatesApi } from '@/lib/api';
 import {
   COPY,
   appendDraftPage,
+  draftStatusChanged,
   groupDraftsByDay,
   loadDraftPages,
+  loadMoreAfterStatusChange,
   normalizeDraft,
   normalizeDraftsPage,
   replaceDraft,
@@ -51,30 +53,51 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
     return () => controller.abort();
   }, [accountId, userId, onAccessLost]);
 
+  // Only the latest list request applies; a status change makes the offset cursor stale.
+  const generation = useRef(0);
+  const statusChanged = useRef(false);
+  const fetchPage = useCallback(
+    (cursor: string | undefined) => customerUpdatesApi.listAccountDrafts(accountId, cursor, { expectedUserId: userId }),
+    [accountId, userId],
+  );
+
   const reload = useCallback(async () => {
+    const gen = ++generation.current;
     try {
-      const result = await loadDraftPages(
-        (cursor) => customerUpdatesApi.listAccountDrafts(accountId, cursor, { expectedUserId: userId }),
-        pagesLoaded.current,
-      );
+      const result = await loadDraftPages(fetchPage, pagesLoaded.current);
+      if (gen !== generation.current) return;
       pagesLoaded.current = result.pages;
+      statusChanged.current = false;
       setDrafts(result.drafts);
       setNextCursor(result.nextCursor);
     } catch (err) {
+      if (gen !== generation.current) return;
       if (isAccessLost(err)) onAccessLost();
       else setError(COPY['drafts.loadFailed']);
     }
-  }, [accountId, userId, onAccessLost]);
+  }, [fetchPage, onAccessLost]);
 
   const loadMore = async () => {
+    const gen = ++generation.current;
     setMoreBusy(true);
     setError('');
     try {
-      const page = normalizeDraftsPage(await customerUpdatesApi.listAccountDrafts(accountId, nextCursor, { expectedUserId: userId }));
-      setDrafts((prev) => appendDraftPage(prev, page.drafts));
-      setNextCursor(page.nextCursor);
-      pagesLoaded.current += 1;
+      if (statusChanged.current) {
+        const result = await loadMoreAfterStatusChange(fetchPage, drafts);
+        if (gen !== generation.current) return;
+        statusChanged.current = false;
+        pagesLoaded.current = result.pages;
+        setDrafts(result.drafts);
+        setNextCursor(result.nextCursor);
+      } else {
+        const page = normalizeDraftsPage(await fetchPage(nextCursor));
+        if (gen !== generation.current) return;
+        setDrafts((prev) => appendDraftPage(prev, page.drafts));
+        setNextCursor(page.nextCursor);
+        pagesLoaded.current += 1;
+      }
     } catch (err) {
+      if (gen !== generation.current) return;
       if (isAccessLost(err)) onAccessLost();
       else setError(COPY['drafts.loadFailed']);
     } finally {
@@ -97,7 +120,10 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
     }
   };
 
-  const onChanged = (next: UpdateDraft) => setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
+  const onChanged = (next: UpdateDraft) => {
+    if (draftStatusChanged(drafts, next)) statusChanged.current = true;
+    setDrafts((prev) => replaceDraft(prev, normalizeDraft(next)));
+  };
   const { open, handled } = splitHandledDrafts(drafts);
   const days = groupDraftsByDay(open);
 
@@ -122,7 +148,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
         <section key={group.day} aria-label={group.day} className="space-y-3">
           <h3 className="text-sm font-semibold text-slate-500 dark:text-text-muted">{group.day}</h3>
           {group.drafts.map((draft) => (
-            <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} accountName={accountName} onChanged={onChanged} onConflict={reload} />
+            <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} accountName={accountName} onChanged={onChanged} onConflict={reload} onAccessLost={onAccessLost} />
           ))}
         </section>
       ))}
@@ -134,7 +160,7 @@ export function AccountDraftsTab({ accountId, userId, accountName, initial, onAc
           </summary>
           <div className="mt-3 space-y-3">
             {handled.map((draft) => (
-              <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} accountName={accountName} onChanged={onChanged} onConflict={reload} />
+              <CustomerUpdateDraftCard key={draft.urlHash} draft={draft} accountName={accountName} onChanged={onChanged} onConflict={reload} onAccessLost={onAccessLost} />
             ))}
           </div>
         </details>
