@@ -363,17 +363,20 @@ describe('private news publication release', () => {
     });
     const receipt = (id: string, extra: any = {}) => ({
       sourceId: id, runId: identity(id).executionName, sourceRevision: 'a'.repeat(64),
-      status: 'COMPLETED', docsAdded: 0, errors: [], fetchWarnings: [],
+      status: 'COMPLETED', docsAdded: 0, errors: [], faults: [], fetchWarnings: [],
       usageComplete: true, ...extra,
     });
     // Python's actual discovery + transactional finalization test establishes
     // this normal successful-task / failed-crawl receipt contract.
-    const failedSearch = receipt('a', { status: 'PARTIAL', errors: ['SEARCH_FAILED'] });
+    const failedSearch = receipt('a', {
+      status: 'PARTIAL', errors: ['SEARCH_FAILED'], faults: ['SEARCH_FAILED'],
+    });
     expect(dailyResult(daily, [identity('a'), identity('b')],
       [failedSearch, receipt('b')])).toEqual({ terminal: 'DailyPublicationFailed', invoked: 2 });
-    for (const errors of [{}, null, '', '[]', undefined, ['QUERY_TOO_LONG']]) {
-      const output = receipt('a', { errors });
-      if (errors === undefined) delete output.errors;
+    for (const faults of [{}, null, '', '[]', undefined, ['QUERY_TOO_LONG'], ['RUN_BUDGET']]) {
+      const output = receipt('a', { faults });
+      // A receipt written before `faults` existed is not a success.
+      if (faults === undefined) delete output.faults;
       expect(dailyResult(daily, [identity('a'), identity('b')], [output, receipt('b')]))
         .toEqual({ terminal: 'DailyPublicationFailed', invoked: 2 });
     }
@@ -384,8 +387,11 @@ describe('private news publication release', () => {
       expect(dailyResult(daily, [identity('a'), identity('b')], [output, receipt('b')]))
         .toEqual({ terminal: 'DailyPublicationFailed', invoked: 2 });
     }
+    // Rejected articles are listed in `errors` but are not run faults.
     for (const output of [receipt('a'), receipt('a', {
       status: 'PARTIAL', fetchWarnings: ['CORROBORATION_DEFERRED'],
+    }), receipt('a', {
+      status: 'PARTIAL', errors: ['HTTP_403', 'NOT_RELEVANT', 'SCHEMA_INVALID'],
     })]) {
       expect(dailyResult(daily, [identity('a')], [output]))
         .toEqual({ terminal: 'DailyComplete', invoked: 1 });
