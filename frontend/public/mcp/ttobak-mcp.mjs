@@ -25272,7 +25272,11 @@ function buildMatcher(accounts, ownDomains2) {
     ),
     domains: [...new Set(a.domains.map(normalizeDomain))].filter((d) => d && !isOwn(d))
   }));
+  const listed2 = new Set(accounts.map((a) => a.accountId));
   return {
+    lists(accountId) {
+      return listed2.has(accountId);
+    },
     match(input) {
       const title = normalize(input.title);
       const location = normalize(input.location ?? "");
@@ -25438,14 +25442,14 @@ function truncateBytes(value, bytes) {
   }
   return result;
 }
-function sanitizeLocation(location) {
+function sanitizeLocation(location, bytes = 256) {
   if (!location) return void 0;
   const parts = [];
   for (const raw of location.split(/[;\n]/)) {
     const part = raw.replace(/\b(?:https?|msteams|zoommtg|webex):\/\/\S+/gi, "").replace(/\S*(?:pwd|passcode|password)=\S*/gi, "").replace(/\s+/g, " ").trim();
     if (part && !parts.includes(part)) parts.push(part);
   }
-  const joined = truncateBytes(parts.join("; "), 256).trim();
+  const joined = truncateBytes(parts.join("; "), bytes).trim();
   return joined || void 0;
 }
 function organizerDomain(email3) {
@@ -25546,13 +25550,29 @@ function decideSharing(event, item2, previous, sharing) {
     return;
   }
   if (!sharing.matcher) {
-    applyShare(event, { candidateAccountIds: previous?.share?.candidateAccountIds });
+    applyShare(event, previous?.share);
     return;
   }
   const domains = [...facts?.domains ?? [], ...event.organizerDomain ? [event.organizerDomain] : []];
-  const result = sharing.matcher.match({ title: event.title, location: event.location, domains });
-  if (result.kind === "matched") applyShare(event, { candidateAccountIds: [result.accountId] });
-  else if (result.kind === "candidate") applyShare(event, { candidateAccountIds: result.accountIds });
+  const subject = item2.subject?.trim() ? item2.subject : event.title;
+  const location = sanitizeLocation(item2.location, Number.POSITIVE_INFINITY) ?? "";
+  const matched = sharing.matcher.match({
+    title: truncateBytes(subject, MATCH_TEXT_BYTES),
+    location: truncateBytes(location, MATCH_TEXT_BYTES),
+    domains
+  });
+  const overlong = Buffer.byteLength(subject) > MATCH_TEXT_BYTES || Buffer.byteLength(location) > MATCH_TEXT_BYTES;
+  const result = overlong && matched.kind === "matched" ? { kind: "candidate", accountIds: [matched.accountId] } : matched;
+  if (facts == null && previous?.share?.shareEvidence?.includes("domain") && !!previous.share.shareAccountId && sharing.matcher.lists(previous.share.shareAccountId) && !(result.kind === "matched" && result.accountId === previous.share.shareAccountId)) {
+    applyShare(event, previous.share);
+  } else if (result.kind === "matched" && facts == null) {
+    if (previous?.share?.shareAccountId === result.accountId) applyShare(event, previous.share);
+    else applyShare(event, { candidateAccountIds: [result.accountId] });
+  } else if (result.kind === "matched") {
+    applyShare(event, { shareAccountId: result.accountId, shareEvidence: result.evidence });
+  } else if (result.kind === "candidate") {
+    applyShare(event, { candidateAccountIds: result.accountIds });
+  }
 }
 function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_RESPONSES, sharing) {
   const wanted = new Set(responses);
@@ -25794,8 +25814,9 @@ async function runCalendar(options2) {
   const directory = await readDirectory(options2.api);
   const matcher = directory ? buildMatcher(directory, options2.ownDomains?.length ? options2.ownDomains : DEFAULT_OWN_DOMAINS) : null;
   const facts = /* @__PURE__ */ new Map();
-  if (matcher && options2.attendees) {
-    for (const item2 of sharingCandidates(items, window)) facts.set(item2.meetingId, await options2.attendees.factsFor(item2));
+  const lookups = sharingCandidates(items, window).filter((item2) => matcher || state.ledger[item2.meetingId]?.share?.shareAccountId);
+  if (options2.attendees && (matcher || lookups.length)) {
+    for (const item2 of lookups) facts.set(item2.meetingId, await options2.attendees.factsFor(item2));
     options2.attendees.save(now);
   }
   const plan = planCalendar(items, state.ledger, window, zone, options2.responses, { sourceId, matcher, facts });
@@ -25844,7 +25865,7 @@ async function runCalendar(options2) {
   for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);
   return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
-var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, CALENDAR_RESPONSES, DEFAULT_CALENDAR_RESPONSES, LONG_EVENT_MS, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS, MAX_DIRECTORY_PAGES;
+var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, CALENDAR_RESPONSES, DEFAULT_CALENDAR_RESPONSES, LONG_EVENT_MS, MATCH_TEXT_BYTES, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS, MAX_DIRECTORY_PAGES;
 var init_calendar2 = __esm({
   "src/intake/calendar.ts"() {
     "use strict";
@@ -25862,6 +25883,7 @@ var init_calendar2 = __esm({
     CALENDAR_RESPONSES = ["accept", "organizer", "tentative", "none"];
     DEFAULT_CALENDAR_RESPONSES = ["accept", "organizer", "tentative"];
     LONG_EVENT_MS = 93 * 24 * 60 * 60 * 1e3;
+    MATCH_TEXT_BYTES = 8192;
     SCOPE_PATTERN = /^[0-9a-f]{32}$/;
     IDENTIFIER2 = /^[A-Za-z0-9_-]{1,128}$/;
     MAX_DIRECTORY_ACCOUNTS = 1e3;
