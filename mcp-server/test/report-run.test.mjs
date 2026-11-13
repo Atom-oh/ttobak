@@ -454,13 +454,13 @@ test('sandbox_unavailable_fails_closed', async t => {
 });
 
 test('old_or_unknown_claude_versions_fail_closed', async t => {
-  for (const version of ['2.1.321 (Claude Code)', '1.9.999', 'Claude Code', '', '2.1.322-beta.1']) {
+  for (const version of ['2.1.310 (Claude Code)', '1.9.999', 'Claude Code', '', '2.1.311-beta.1']) {
     const ctx = setup(t, { version });
     assert.equal(await ctx.run(), 2, version);
     assert.equal(ctx.output().code, 'REPORT_SANDBOX_UNAVAILABLE', version);
     assert.ok(!existsSync(join(ctx.home, 'record.json')), 'the real run never started');
   }
-  for (const version of ['2.1.322 (Claude Code)', '2.2.0', '3.0.0 (Claude Code)']) {
+  for (const version of ['2.1.311 (Claude Code)', '2.1.322 (Claude Code)', '2.2.0', '3.0.0 (Claude Code)']) {
     const ctx = setup(t, { version });
     assert.equal(await ctx.run(), 0, version);
   }

@@ -820,7 +820,7 @@ Behavior:
   (`work/.claude` is in `denyWrite`) and
   never in the skill, and no reads of HOME except the skill, the run's session
   folder and a home-installed `python3`, nor of the run's own config files.
-  Without a usable sandbox, or with a `claude` older than 2.1.322 (the version
+  Without a usable sandbox, or with a `claude` older than 2.1.311 (the earliest version
   whose settings schema was verified) or of unknown version, the run fails with
   `REPORT_SANDBOX_UNAVAILABLE` and nothing runs unsandboxed. Writes to SFDC, Slack, Outlook, SpecReq and TFC Hub are
   denied by the CLI. The environment is HOME, PATH, LANG, USER, LOGNAME and the
@@ -837,7 +837,7 @@ Behavior:
 
 ### Prerequisites in short
 
-- Claude Code CLI 2.1.322 or newer, logged in (`claude`, then `/login`), or
+- Claude Code CLI 2.1.311 or newer, logged in (`claude`, then `/login`), or
   Bedrock: the `env` of `~/.claude/settings.json`, or the generate dialog's
   Bedrock toggle plus an AWS profile (the app passes
   `TTOBAK_REPORT_USE_BEDROCK=1` and `TTOBAK_REPORT_AWS_PROFILE`).
@@ -896,7 +896,7 @@ Behavior:
 | `REPORT_EXCLUDED_CHANNEL` | The model output still names an excluded Slack channel (a string equal to the name, `#name` not followed by an ASCII name character, or the bare name followed by the Korean word for channel); nothing was uploaded. Remove the channel from the highlights if it is there, then re-run. |
 | `SLACK_NOT_SELECTED` | `report slack-channels` needs the Slack connector selected in intake setup. |
 | `REPORT_PERIOD_EXPIRED` | The custom period ended more than two calendar years ago (server retention); pick a later period. |
-| `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.322 or of unknown version (a pre-release suffix is rejected); update the CLI. |
+| `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.311 or of unknown version (a pre-release suffix is rejected); update the CLI. |
 | `RUN_IN_PROGRESS` | Another report run holds `report.lock`; wait for it. |
 | `ADAPTER_OUTDATED` | App only, before any spawn: `~/.ttobak/server.mjs` predates the `report run` command; press Update in the app's intake settings. |
 | `TTOBAK_LOGIN_REQUIRED` | Sign in again with the TTOBAK login. |
