@@ -23,11 +23,11 @@ test('unknown_tab_falls_back_to_overview', () => {
 });
 
 test('drafts_tab_is_for_direct_members_only', () => {
-  assert.equal(tabs.parseAccountTab('drafts', false, true), 'drafts');
-  assert.equal(tabs.parseAccountTab('drafts', false, false), 'general');
-  assert.equal(tabs.ACCOUNT_TAB_LABELS.drafts, copyModule.COPY['tab.drafts.label']);
-  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'drafts', 'projects', 'docs', 'kb']);
-  assert.ok(!tabs.visibleAccountTabs(false, false).includes('drafts'));
+  assert.equal(tabs.parseAccountTab('update-drafts', false, true), 'update-drafts');
+  assert.equal(tabs.parseAccountTab('update-drafts', false, false), 'general');
+  assert.equal(tabs.ACCOUNT_TAB_LABELS['update-drafts'], copyModule.COPY['tab.drafts.label']);
+  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'update-drafts', 'projects', 'docs', 'kb']);
+  assert.ok(!tabs.visibleAccountTabs(false, false).includes('update-drafts'));
 });
 
 test('billing_hidden_falls_back_to_overview', () => {
@@ -89,7 +89,7 @@ test('events_tab_is_only_for_direct_members', () => {
   assert.equal(tabs.parseAccountTab('events', false), 'general');
   assert.equal(tabs.parseAccountTab('events', false, true), 'events');
   assert.ok(!tabs.visibleAccountTabs(true).includes('events'));
-  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'drafts', 'projects', 'docs', 'kb']);
+  assert.deepEqual([...tabs.visibleAccountTabs(false, true)], ['general', 'meetings', 'events', 'insights', 'update-drafts', 'projects', 'docs', 'kb']);
   assert.equal(tabs.ACCOUNT_TAB_LABELS.events, '일정');
 });
 

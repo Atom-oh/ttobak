@@ -1,4 +1,4 @@
-export const ACCOUNT_TABS = ['general', 'meetings', 'events', 'insights', 'drafts', 'projects', 'docs', 'kb', 'billing'] as const;
+export const ACCOUNT_TABS = ['general', 'meetings', 'events', 'insights', 'update-drafts', 'projects', 'docs', 'kb', 'billing'] as const;
 export type AccountTab = (typeof ACCOUNT_TABS)[number];
 
 export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
@@ -8,7 +8,7 @@ export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
   insights: '인사이트',
   // Copy key tab.drafts.label; account-tabs.test.mjs pins it to COPY. Kept literal so this
   // module stays dependency-free for the many tests that load it without a require shim.
-  drafts: '초안',
+  'update-drafts': '초안',
   projects: '프로젝트',
   docs: '문서',
   kb: '자료(KB)',
@@ -17,12 +17,12 @@ export const ACCOUNT_TAB_LABELS: Record<AccountTab, string> = {
 
 /** Events, KB and drafts are visible to direct members only, like contacts. */
 export function visibleAccountTabs(billingVisible: boolean, eventsVisible = false): AccountTab[] {
-  return ACCOUNT_TABS.filter((tab) => (tab !== 'billing' || billingVisible) && (tab !== 'events' || eventsVisible) && (tab !== 'kb' || eventsVisible) && (tab !== 'drafts' || eventsVisible));
+  return ACCOUNT_TABS.filter((tab) => (tab !== 'billing' || billingVisible) && (tab !== 'events' || eventsVisible) && (tab !== 'kb' || eventsVisible) && (tab !== 'update-drafts' || eventsVisible));
 }
 
 export function parseAccountTab(value: string | null, billingVisible: boolean, eventsVisible = false): AccountTab {
   const tab = ACCOUNT_TABS.find((t) => t === value);
-  if (!tab || (tab === 'billing' && !billingVisible) || (tab === 'events' && !eventsVisible) || (tab === 'kb' && !eventsVisible) || (tab === 'drafts' && !eventsVisible)) return 'general';
+  if (!tab || (tab === 'billing' && !billingVisible) || (tab === 'events' && !eventsVisible) || (tab === 'kb' && !eventsVisible) || (tab === 'update-drafts' && !eventsVisible)) return 'general';
   return tab;
 }
 
