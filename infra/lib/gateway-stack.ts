@@ -26,6 +26,9 @@ import { HttpOrigin } from './http-origin';
 import { connectorCryptoLayer } from './connector-crypto';
 import { billingInsightUrlContext } from './billing-insight';
 import { DEFAULT_MODEL_CONFIGURATION, IMAGE_MODEL_ID, ModelConfiguration, validateModelConfiguration } from './model-config';
+import {
+  NEWS_DAILY_STATE_MACHINE_NAME, NEWS_PUBLICATION_STATE_MACHINE_NAME, newsDailyWindowEnvironment, newsStateMachineArn,
+} from './news-publication';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -440,6 +443,12 @@ export class GatewayStack extends cdk.Stack {
         // keeps that route a 404. A context change alters the function
         // configuration, so currentVersion publishes a new version.
         ...(billingInsightUrl ? { BILLING_INSIGHT_URL: billingInsightUrl } : {}),
+        // "Collect now" advisory admission (ADR-004): the manual starter's
+        // window values and the two state machines it checks, by name (no
+        // CrawlerStack reference). AiStack grants ListExecutions on both.
+        ...newsDailyWindowEnvironment(),
+        NEWS_DAILY_STATE_MACHINE_ARN: newsStateMachineArn(NEWS_DAILY_STATE_MACHINE_NAME),
+        NEWS_PUBLICATION_STATE_MACHINE_ARN: newsStateMachineArn(NEWS_PUBLICATION_STATE_MACHINE_NAME),
         ...apiTelemetry?.environment,
       },
       timeout: cdk.Duration.seconds(30),

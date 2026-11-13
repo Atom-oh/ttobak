@@ -22,6 +22,10 @@ SCOPE = {"schema_version": 1, "basenames": ["package-lock.json"], "extensions": 
 
 class SizeTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("ROLE_REVIEW_KIRO", None)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -64,6 +68,18 @@ class SizeTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["over"], [])
         self.assertEqual(report["kept_files"], 1)
+
+    def test_cap_follows_kiro_routing(self):
+        self.branch()
+        self.write("a.txt", "hello\n")
+        self.commit("change")
+        code, report = self.run_check()
+        self.assertEqual((code, report["kiro_active"]), (0, False))
+        self.assertEqual((report["max_bytes"], report["max_lines"]), (200000, 6000))
+        with patch.dict(os.environ, ROLE_REVIEW_KIRO="1"):
+            code, report = self.run_check()
+        self.assertEqual((code, report["kiro_active"]), (0, True))
+        self.assertEqual((report["max_bytes"], report["max_lines"]), (95000, 3000))
 
     def test_over_byte_limit(self):
         self.branch()

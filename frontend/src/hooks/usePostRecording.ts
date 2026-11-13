@@ -123,6 +123,8 @@ export function usePostRecording({
   // what was confirmed linked to `persistedMeetingIdRef`'s meeting.
   const boundAccountRef = useRef<string | undefined>(undefined);
   const accountUncertainRef = useRef(false);
+  // True while linkPendingAccount is talking to the server for this meeting.
+  const accountLinkInFlightRef = useRef(false);
   const accountSyncRef = useRef<Promise<void>>(Promise.resolve());
   const skipAccountSyncRef = useRef(false);
   const desiredProjectsRef = useRef<string[]>([]);
@@ -131,17 +133,22 @@ export function usePostRecording({
   // Projects whose unlink request is in flight: possibly unlinked already.
   const unlinkingProjectsRef = useRef<Set<string>>(new Set());
   const projectSyncRef = useRef<Promise<unknown>>(Promise.resolve());
-  const [recordingLinks, setRecordingLinks] = useState<{ accountId?: string; boundAccountId?: string; projectIds: string[]; linkedProjectIds: string[] }>({ projectIds: [], linkedProjectIds: [] });
+  const [recordingLinks, setRecordingLinks] = useState<{
+    accountId?: string; boundAccountId?: string; projectIds: string[]; linkedProjectIds: string[];
+    /** A link request is in flight, or one may have committed unseen: clearing is refused. */
+    accountLinkInFlight?: boolean; accountUncertain?: boolean;
+  }>({ projectIds: [], linkedProjectIds: [] });
   const [linkError, setLinkError] = useState<string | null>(null);
   const publishLinks = useCallback(() => {
     setRecordingLinks({
       accountId: preparationRef.current.accountId, boundAccountId: boundAccountRef.current,
       projectIds: desiredProjectsRef.current, linkedProjectIds: linkedProjectsRef.current,
+      accountLinkInFlight: accountLinkInFlightRef.current, accountUncertain: accountUncertainRef.current,
     });
   }, []);
   const resetLinks = useCallback(() => {
     boundAccountRef.current = undefined; desiredProjectsRef.current = []; linkedProjectsRef.current = [];
-    accountUncertainRef.current = false; attemptedProjectsRef.current = []; unlinkingProjectsRef.current = new Set();
+    accountUncertainRef.current = false; accountLinkInFlightRef.current = false; attemptedProjectsRef.current = []; unlinkingProjectsRef.current = new Set();
     accountSyncRef.current = Promise.resolve(); projectSyncRef.current = Promise.resolve();
     skipAccountSyncRef.current = false;
     setLinkError(null);
@@ -192,7 +199,11 @@ export function usePostRecording({
   }, [notesWriter]);
 
   /** Create a draft meeting at recording start for crash recovery */
-  const createDraftMeeting = useCallback(async (): Promise<string | null> => {
+  // `overrides` replace this render's title/Account, e.g. a leftover upload
+  // that dropped a calendar auto link in the same event handler.
+  const createDraftMeeting = useCallback(async (overrides?: { title?: string; accountId?: string }): Promise<string | null> => {
+    const draftAccountId = overrides?.accountId ?? accountId;
+    const draftTitle = overrides?.title ?? meetingTitle;
     notesUserIdRef.current = userId;
     setCanKeepLocally(false);
     // A stale pending payload from a previous, never-resolved recording
@@ -217,19 +228,22 @@ export function usePostRecording({
     try {
       // Retain the selection for a failed-lookup retry; mutation payloads below
       // replace this candidate with the freshly validated Account ID.
-      preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: accountId || undefined };
+      preparationRef.current = { notes: preparationNotes(preparationContext || ''), accountId: draftAccountId || undefined };
       setPendingAccountValue(preparationRef.current.accountId || null);
       publishLinks();
       const creationAccountId = await withTimeout(
-        resolveRecordingAccountId(accountId, notesUserIdRef.current), 15000, 'Validate preparation account',
+        resolveRecordingAccountId(draftAccountId, notesUserIdRef.current), 15000, 'Validate preparation account',
       );
       if (!mountedRef.current || flowGenerationRef.current !== generation) return null;
       const prepared = { ...preparationRef.current, accountId: creationAccountId };
-      preparationRef.current = prepared;
-      setPendingAccountValue(prepared.accountId || null);
+      // A customer chosen during validation (e.g. a calendar auto link) is
+      // not this request's Account; keep it as the latest choice.
+      const chosenDuringValidation = preparationRef.current.accountId !== (draftAccountId || undefined);
+      preparationRef.current = chosenDuringValidation ? { ...prepared, accountId: preparationRef.current.accountId } : prepared;
+      setPendingAccountValue(preparationRef.current.accountId || null);
       const result = await withTimeout(
         meetingsApi.create({
-          title: meetingTitle || formatDefaultTitle(new Date()),
+          title: draftTitle || formatDefaultTitle(new Date()),
           status: 'recording',
           ...prepared,
         }, { expectedUserId: notesUserIdRef.current }),
@@ -242,7 +256,8 @@ export function usePostRecording({
       notesWriter.initialize(result.meetingId, acknowledged, result.supportsNotesComparison === true, result.notesRevision || '');
       setCreatedNotes({ meetingId: result.meetingId, notes: acknowledged });
       if (result.preparationApplied) { boundAccountRef.current = prepared.accountId; setPendingAccountValue(null); }
-      // A customer chosen while creation was in flight is linked at save.
+      // A customer chosen while creation was in flight is linked at save; until
+      // a request starts it stays a local choice that can be replaced or cleared.
       const latestAccountId = preparationRef.current.accountId;
       if (latestAccountId && latestAccountId !== boundAccountRef.current) setPendingAccountValue(latestAccountId);
       linkedProjectsRef.current = [];
@@ -277,8 +292,12 @@ export function usePostRecording({
           publishLinks();
           continue;
         }
+        accountLinkInFlightRef.current = true;
+        publishLinks();
         const capabilities = await meetingsApi.get(meetingId, options);
         if (!isCurrent()) return;
+        // Replaced while nothing was sent: link the newer choice instead.
+        if (pendingAccountRef.current !== accountToLink) continue;
         if (!capabilities.supportsPrivateAccountLink) throw new Error('고객 연결 기능을 업데이트 중입니다. 잠시 후 재시도하거나 고객 연결 재시도를 생략해 주세요.');
         accountUncertainRef.current = true;
         await meetingAccountApi.link(meetingId, accountToLink, options);
@@ -288,6 +307,10 @@ export function usePostRecording({
         if (pendingAccountRef.current === accountToLink) setPendingAccountValue(null);
         publishLinks();
       }
+    }).finally(() => {
+      if (!isCurrent()) return;
+      accountLinkInFlightRef.current = false;
+      publishLinks();
     });
     accountSyncRef.current = run.catch(() => undefined);
     return withTimeout(run, 15000, 'Link preparation account');
@@ -348,7 +371,9 @@ export function usePostRecording({
     const next = nextAccountId || undefined;
     const meetingId = persistedMeetingIdRef.current;
     const plan = planRecordingAccountChange(meetingId, boundAccountRef.current, next);
-    if (plan.kind === 'locked' || (meetingId && !next && (pendingAccountRef.current || accountUncertainRef.current))) {
+    // A deferred choice nothing has sent yet is local and can be cleared; a
+    // request in flight or of unknown outcome may already have linked it.
+    if (plan.kind === 'locked' || (meetingId && !next && (accountLinkInFlightRef.current || accountUncertainRef.current))) {
       setLinkError('이미 연결된 고객은 해제할 수 없습니다. 다른 고객으로 변경할 수 있습니다.');
       return;
     }

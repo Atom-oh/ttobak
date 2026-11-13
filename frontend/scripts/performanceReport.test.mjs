@@ -200,3 +200,22 @@ test('turning Bedrock off never sends a profile that is gone', () => {
   assert.equal(report.bedrockToggleProfile(present), 'cc-bedrock');
   assert.equal(report.bedrockToggleProfile(null), null);
 });
+
+test('Slack channel rows: candidates checked unless excluded, stale exclusions kept', () => {
+  const rows = report.channelRows({ channels: [{ name: 'sa-team', count: 3 }, { name: '양국', count: 1 }] }, ['양국', 'old-hobby']);
+  assert.deepEqual(plain(rows), [
+    { name: 'sa-team', count: 3, included: true },
+    { name: '양국', count: 1, included: false },
+    { name: 'old-hobby', count: null, included: false },
+  ]);
+  assert.deepEqual(plain(report.channelRows(null, [])), []);
+  assert.deepEqual(plain(report.toggleExcluded(['a'], 'b')), ['a', 'b']);
+  assert.deepEqual(plain(report.toggleExcluded(['a', 'b'], 'a')), ['b']);
+});
+
+test('Slack exclusion codes have Korean copy', () => {
+  for (const code of ['REPORT_EXCLUDED_CHANNEL', 'SLACK_NOT_SELECTED']) {
+    assert.ok(/[가-힣]/.test(report.reportCodeLabel(code)), code);
+  }
+  assert.ok(report.reportCodeLabel('REPORT_EXCLUDED_CHANNEL').includes('강조'));
+});

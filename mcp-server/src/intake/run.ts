@@ -171,11 +171,18 @@ function flags(args: string[], allowed: Record<string, 'value' | 'flag' | 'list'
   return result;
 }
 
-function ttobakConfig(selection: Selection | null, env: NodeJS.ProcessEnv) {
-  const apiUrl = env.TTOBAK_API_URL || selection?.ttobak?.apiUrl || '';
-  const cognitoDomain = env.TTOBAK_COGNITO_DOMAIN || selection?.ttobak?.cognitoDomain || '';
-  const clientId = env.TTOBAK_CLIENT_ID || selection?.ttobak?.clientId || '';
-  const userPoolId = env.TTOBAK_USER_POOL_ID || selection?.ttobak?.userPoolId;
+/**
+ * TTOBAK endpoints: the environment, else the saved selection, else (with
+ * `home`) the host's own ttobak MCP entry, so a Mac that never selected a
+ * connector can still sign in (one-click setup on a fresh Mac).
+ */
+export function ttobakConfig(selection: Selection | null, env: NodeJS.ProcessEnv, home?: string) {
+  const saved = selection?.ttobak;
+  const host = home && !(saved?.apiUrl && saved.cognitoDomain && saved.clientId) ? hostTtobakEndpoints(home, 'claude') : {};
+  const apiUrl = env.TTOBAK_API_URL || saved?.apiUrl || host.TTOBAK_API_URL || '';
+  const cognitoDomain = env.TTOBAK_COGNITO_DOMAIN || saved?.cognitoDomain || host.TTOBAK_COGNITO_DOMAIN || '';
+  const clientId = env.TTOBAK_CLIENT_ID || saved?.clientId || host.TTOBAK_CLIENT_ID || '';
+  const userPoolId = env.TTOBAK_USER_POOL_ID || saved?.userPoolId || host.TTOBAK_USER_POOL_ID;
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new IntakeError('INVALID_ARGUMENT', 'TTOBAK_API_URL, TTOBAK_COGNITO_DOMAIN and TTOBAK_CLIENT_ID are required (env or a host ttobak entry)');
   }
@@ -187,7 +194,7 @@ function definedTtobakEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /** `optional` tools are allowed but not required here; their step checks them itself. */
-async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
+export async function openSession(environment: IntakeEnvironment, host: HostId, server: string, pathDirs: string[],
   tools: readonly ToolExpectation[], optional: readonly ToolExpectation[] = []) {
   const spec = resolveServer(environment.home, host, server, pathDirs);
   const session = await McpSession.open(spec, server, { pathDirs, allowedTools: [...tools, ...optional].map(tool => tool.name) });
@@ -317,7 +324,7 @@ export async function signIn(selection: Selection | null, environment: IntakeEnv
   let scope = environment.scope;
   let me = environment.me;
   if (!dryRun && !api) {
-    const config = ttobakConfig(selection, environment.env);
+    const config = ttobakConfig(selection, environment.env, environment.home);
     const auth = environment.authFactory?.(config, { interactive: !noninteractive }) ??
       new CognitoAuth(config, { interactive: !noninteractive });
     api = new TtobakApi(auth as CognitoAuth, config.apiUrl);
@@ -338,7 +345,7 @@ export async function signIn(selection: Selection | null, environment: IntakeEnv
 /** A dry run reads the share directory with a stored session only; it never opens a browser. */
 function directoryOnlyApi(selection: Selection | null, environment: IntakeEnvironment): TtobakApi | undefined {
   try {
-    const config = ttobakConfig(selection, environment.env);
+    const config = ttobakConfig(selection, environment.env, environment.home);
     return new TtobakApi(new CognitoAuth(config, { interactive: false, tokenDirectory: join(environment.home, '.ttobak') }),
       config.apiUrl);
   } catch {
@@ -374,7 +381,7 @@ async function openMeetingFacts(environment: IntakeEnvironment, store: IntakeSto
 /** Interactive Cognito sign-in for an explicit user click; a browser may open. */
 async function login(environment: IntakeEnvironment, store: IntakeStore): Promise<{ email: string }> {
   const selection = store.read<Selection>('selection.json');
-  const config = ttobakConfig(selection, environment.env);
+  const config = ttobakConfig(selection, environment.env, environment.home);
   const auth = environment.authFactory?.(config, { interactive: true }) ?? new CognitoAuth(config, { interactive: true });
   let idToken: string;
   try { idToken = await auth.getIdToken(); } catch (error) {

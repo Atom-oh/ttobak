@@ -170,9 +170,26 @@ type accountNewsTestCrawler struct {
 	sources map[string]*model.CrawlerSource
 	docs    map[string][]model.CrawledDocument
 	limits  []int32
+	// stale, when set for an ID, is what an eventually consistent GetSource
+	// still returns; GetSourceConsistent always sees sources.
+	stale           map[string]*model.CrawlerSource
+	consistentReads int
 }
 
 func (c *accountNewsTestCrawler) GetSource(_ context.Context, id string) (*model.CrawlerSource, error) {
+	src := c.sources[id]
+	if old, ok := c.stale[id]; ok {
+		src = old
+	}
+	if src == nil {
+		return nil, nil
+	}
+	copied := *src
+	return &copied, nil
+}
+
+func (c *accountNewsTestCrawler) GetSourceConsistent(_ context.Context, id string) (*model.CrawlerSource, error) {
+	c.consistentReads++
 	src := c.sources[id]
 	if src == nil {
 		return nil, nil

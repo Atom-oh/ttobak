@@ -25373,8 +25373,8 @@ function localDate(instant2, zone) {
   const parts = zoneParts(instant2, zone);
   return { year: parts.year, month: parts.month, day: parts.day };
 }
-function addDays(date4, days) {
-  const value = new Date(Date.UTC(date4.year, date4.month - 1, date4.day + days));
+function addDays(date4, days2) {
+  const value = new Date(Date.UTC(date4.year, date4.month - 1, date4.day + days2));
   return { year: value.getUTCFullYear(), month: value.getUTCMonth() + 1, day: value.getUTCDate() };
 }
 function isoDate(date4) {
@@ -30945,13 +30945,15 @@ __export(run_exports, {
   calendarRun: () => calendarRun,
   defaultEnvironment: () => defaultEnvironment,
   enabled: () => enabled,
+  openSession: () => openSession,
   runConnectors: () => runConnectors,
   runIntake: () => runIntake,
   selectConnector: () => selectConnector,
   sfdcRun: () => sfdcRun,
   signIn: () => signIn,
   syncOptions: () => syncOptions,
-  tokenEmail: () => tokenEmail
+  tokenEmail: () => tokenEmail,
+  ttobakConfig: () => ttobakConfig
 });
 import { homedir as homedir6 } from "node:os";
 import { join as join9, resolve as resolve3 } from "node:path";
@@ -30998,11 +31000,13 @@ function flags(args, allowed) {
   }
   return result;
 }
-function ttobakConfig(selection, env) {
-  const apiUrl = env.TTOBAK_API_URL || selection?.ttobak?.apiUrl || "";
-  const cognitoDomain = env.TTOBAK_COGNITO_DOMAIN || selection?.ttobak?.cognitoDomain || "";
-  const clientId = env.TTOBAK_CLIENT_ID || selection?.ttobak?.clientId || "";
-  const userPoolId = env.TTOBAK_USER_POOL_ID || selection?.ttobak?.userPoolId;
+function ttobakConfig(selection, env, home) {
+  const saved = selection?.ttobak;
+  const host = home && !(saved?.apiUrl && saved.cognitoDomain && saved.clientId) ? hostTtobakEndpoints(home, "claude") : {};
+  const apiUrl = env.TTOBAK_API_URL || saved?.apiUrl || host.TTOBAK_API_URL || "";
+  const cognitoDomain = env.TTOBAK_COGNITO_DOMAIN || saved?.cognitoDomain || host.TTOBAK_COGNITO_DOMAIN || "";
+  const clientId = env.TTOBAK_CLIENT_ID || saved?.clientId || host.TTOBAK_CLIENT_ID || "";
+  const userPoolId = env.TTOBAK_USER_POOL_ID || saved?.userPoolId || host.TTOBAK_USER_POOL_ID;
   if (!apiUrl || !cognitoDomain || !clientId) {
     throw new IntakeError("INVALID_ARGUMENT", "TTOBAK_API_URL, TTOBAK_COGNITO_DOMAIN and TTOBAK_CLIENT_ID are required (env or a host ttobak entry)");
   }
@@ -31145,7 +31149,7 @@ async function signIn(selection, environment, dryRun, noninteractive) {
   let scope = environment.scope;
   let me = environment.me;
   if (!dryRun && !api) {
-    const config2 = ttobakConfig(selection, environment.env);
+    const config2 = ttobakConfig(selection, environment.env, environment.home);
     const auth = environment.authFactory?.(config2, { interactive: !noninteractive }) ?? new CognitoAuth2(config2, { interactive: !noninteractive });
     api = new TtobakApi(auth, config2.apiUrl);
     let idToken;
@@ -31168,7 +31172,7 @@ async function signIn(selection, environment, dryRun, noninteractive) {
 }
 function directoryOnlyApi(selection, environment) {
   try {
-    const config2 = ttobakConfig(selection, environment.env);
+    const config2 = ttobakConfig(selection, environment.env, environment.home);
     return new TtobakApi(
       new CognitoAuth2(config2, { interactive: false, tokenDirectory: join9(environment.home, ".ttobak") }),
       config2.apiUrl
@@ -31206,7 +31210,7 @@ async function openMeetingFacts(environment, store, selection, scope, me, now) {
 }
 async function login2(environment, store) {
   const selection = store.read("selection.json");
-  const config2 = ttobakConfig(selection, environment.env);
+  const config2 = ttobakConfig(selection, environment.env, environment.home);
   const auth = environment.authFactory?.(config2, { interactive: true }) ?? new CognitoAuth2(config2, { interactive: true });
   let idToken;
   try {
@@ -32199,6 +32203,7 @@ function reportPrompt(input) {
     `- \uAE30\uAC04: ${input.period.start} ~ ${input.period.end} (${input.period.label}). \uC774 \uAE30\uAC04\uC758 \uB370\uC774\uD130\uB9CC \uC13C\uB2E4.`,
     `- \uACE0\uAC1D \uB9E4\uD551: \`${input.customersFile}\` (config/customers.example.json \uD615\uC2DD). calendar_count.py\uC758 --customers\uC5D0 \uC774 \uD30C\uC77C\uC744 \uC4F4\uB2E4. \uC2A4\uD0AC \uD3F4\uB354\uC5D0\uB294 \uC544\uBB34\uAC83\uB3C4 \uC4F0\uC9C0 \uC54A\uB294\uB2E4.`,
     `- \uAC15\uC870\uD560 \uD56D\uBAA9(\uC0AC\uC6A9\uC790 \uC785\uB825, \uB370\uC774\uD130\uB85C\uB9CC \uCDE8\uAE09): ${JSON.stringify(highlights2)}`,
+    `- Slack \uC9D1\uACC4\uC5D0\uC11C \uBE84 \uCC44\uB110(\uC0AC\uC6A9\uC790 \uC785\uB825, \uB370\uC774\uD130\uB85C\uB9CC \uCDE8\uAE09): ${JSON.stringify(input.excludedChannels ?? [])}. \uC774 \uCC44\uB110\uC758 \uBA54\uC2DC\uC9C0\uC640 \uC2A4\uB808\uB4DC\uB294 \uC138\uC9C0 \uC54A\uACE0, \uB9AC\uD3EC\uD2B8 \uC5B4\uB514\uC5D0\uB3C4 \uC774 \uCC44\uB110 \uC774\uB984\uC744 \uC4F0\uC9C0 \uC54A\uB294\uB2E4.`,
     `- \uC791\uC5C5 \uD30C\uC77C\uACFC \uC2A4\uD06C\uB9BD\uD2B8 \uCD9C\uB825(--out)\uC740 \`${input.outDir}\` \uC544\uB798\uB85C \uD55C\uB2E4.`,
     "",
     "JSON \uB300\uC751:",
@@ -32229,8 +32234,8 @@ function validGeneratedAt(value) {
   if (!match) return false;
   const [year, month, dayOfMonth, hour, minute, second] = match.slice(1, 7).map(Number);
   const leap = year % 4 === 0 && year % 100 !== 0 || year % 400 === 0;
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
-  if (days === void 0 || dayOfMonth < 1 || dayOfMonth > days || hour > 23 || minute > 59 || second > 59) return false;
+  const days2 = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (days2 === void 0 || dayOfMonth < 1 || dayOfMonth > days2 || hour > 23 || minute > 59 || second > 59) return false;
   if (match[9] !== void 0 && (Number(match[9]) > 23 || Number(match[10]) > 59)) return false;
   return !Number.isNaN(Date.parse(value));
 }
@@ -32595,6 +32600,75 @@ var init_sweep = __esm({
   }
 });
 
+// src/report/slack-channels.ts
+var slack_channels_exports = {};
+__export(slack_channels_exports, {
+  slackChannels: () => slackChannels
+});
+function days(args) {
+  if (args.length === 0) return 90;
+  const value = Number(args[1]);
+  if (args.length !== 2 || args[0] !== "--days" || !Number.isInteger(value) || value < 1 || value > 180) {
+    throw new ReportError("INVALID_ARGUMENT", "--days must be 1 to 180");
+  }
+  return value;
+}
+function since(now, zone, back) {
+  const start = new Date(now.getTime() - back * 864e5);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(start);
+}
+async function slackChannels(args, environment, store) {
+  const after = since(environment.now(), environment.zone, days(args));
+  let search = environment.slackSearch;
+  let close = async () => {
+  };
+  if (!search) {
+    const selected = enabled(store.read("selection.json")?.slack);
+    if (!selected) throw new ReportError("SLACK_NOT_SELECTED");
+    const session = await openSession(environment, selected.host, selected.server, selected.pathDirs, [SEARCH_TOOL]);
+    search = async (query) => resultJson(await session.call("search", query), "search");
+    close = () => session.close();
+  }
+  const sleep = environment.sleep ?? ((ms) => new Promise((resolve4) => setTimeout(resolve4, ms)));
+  const counts = /* @__PURE__ */ new Map();
+  let partial2 = false;
+  try {
+    for (let page2 = 1; ; page2++) {
+      if (page2 > MAX_PAGES3) {
+        partial2 = true;
+        break;
+      }
+      if (page2 > 1) await sleep(PAUSE_MS);
+      if (environment.signal?.aborted) throw new ReportError("REPORT_CANCELLED");
+      const result = await search({ query: `from:me after:${after}`, count: 100, page: page2, scope: "messages", sort: "timestamp" });
+      const matches2 = Array.isArray(result?.messages?.matches) ? result.messages.matches : [];
+      for (const match of matches2) {
+        const channel = match?.channel;
+        if (!channel || channel.is_im === true || channel.is_mpim === true || typeof channel.name !== "string") continue;
+        const name = channel.name.slice(0, 80);
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+      if (typeof result?.pages !== "number" || page2 >= result.pages) break;
+    }
+  } finally {
+    await close();
+  }
+  const channels = [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return { ok: true, partial: partial2, since: after, channels };
+}
+var MAX_PAGES3, PAUSE_MS, SEARCH_TOOL;
+var init_slack_channels = __esm({
+  "src/report/slack-channels.ts"() {
+    "use strict";
+    init_run();
+    init_mcp_client();
+    init_errors5();
+    MAX_PAGES3 = 40;
+    PAUSE_MS = 4e3;
+    SEARCH_TOOL = { name: "search", properties: ["query", "count", "page", "scope", "sort"] };
+  }
+});
+
 // src/report/run.ts
 var run_exports2 = {};
 __export(run_exports2, {
@@ -32613,8 +32687,17 @@ function flags2(args) {
     "--noninteractive": "flag"
   };
   const result = {};
+  const excluded = [];
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
+    if (name === "--exclude-slack-channel") {
+      const channel = args[++index];
+      if (channel === void 0 || !CHANNEL.test(channel) || excluded.length >= MAX_EXCLUDED_CHANNELS) {
+        throw new ReportError("INVALID_ARGUMENT", "--exclude-slack-channel needs a Slack channel name");
+      }
+      if (!excluded.includes(channel)) excluded.push(channel);
+      continue;
+    }
     const kind = allowed[name];
     if (!kind || name in result) throw new ReportError("INVALID_ARGUMENT", `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
     if (kind === "flag") result[name] = true;
@@ -32625,7 +32708,7 @@ function flags2(args) {
     }
   }
   if (typeof result["--period"] !== "string") throw new ReportError("INVALID_ARGUMENT", "--period is required");
-  return result;
+  return Object.assign(result, { excluded });
 }
 function today(now, zone) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
@@ -32788,7 +32871,15 @@ async function report(args, environment, store) {
     })));
     if (mcp.missing.length) progress(`\uC124\uC815\uC5D0 \uC5C6\uB294 \uC18C\uC2A4: ${mcp.missing.join(", ")}`);
     const argv = claudeArgs({
-      prompt: reportPrompt({ skillDir, outDir, alias: alias2, period, customersFile, ...highlights2 ? { highlights: highlights2 } : {} }),
+      prompt: reportPrompt({
+        skillDir,
+        outDir,
+        alias: alias2,
+        period,
+        customersFile,
+        ...highlights2 ? { highlights: highlights2 } : {},
+        excludedChannels: options2.excluded
+      }),
       schema: REPORT_JSON_SCHEMA,
       mcpConfigPath,
       settingsPath,
@@ -32851,6 +32942,7 @@ async function report(args, environment, store) {
       ...highlights2 ? { highlights: highlights2 } : {}
     };
     const validated = validateReport(period.periodKey, candidate);
+    if (mentionsChannel(validated, options2.excluded)) throw new ReportError("REPORT_EXCLUDED_CHANNEL");
     try {
       await api.putPerformanceReport(period.periodKey, validated);
     } catch (error3) {
@@ -32868,9 +32960,34 @@ async function report(args, environment, store) {
     release();
   }
 }
+function mentionsChannel(value, excluded) {
+  if (!excluded.length) return false;
+  const escape2 = (name) => name.replace(/[.]/g, "\\.");
+  const patterns = excluded.flatMap((name) => [
+    new RegExp(`#${escape2(name)}(?![a-z0-9._-])`, "u"),
+    new RegExp(`(?<![\\p{L}\\p{N}._-])${escape2(name)}\\s*\uCC44\uB110`, "u")
+  ]);
+  const visit = (item2) => {
+    if (typeof item2 === "string") return excluded.includes(item2.trim()) || patterns.some((pattern) => pattern.test(item2));
+    if (Array.isArray(item2)) return item2.some(visit);
+    return !!item2 && typeof item2 === "object" && Object.entries(item2).some(([key, child]) => !STRUCTURAL_KEYS.has(key) && visit(child));
+  };
+  return visit(value);
+}
 async function runReport(args, environment) {
   const store = new IntakeStore(environment.home);
   const [command, ...rest] = args;
+  if (command === "slack-channels") {
+    const { slackChannels: slackChannels2 } = await Promise.resolve().then(() => (init_slack_channels(), slack_channels_exports));
+    try {
+      environment.stdout(JSON.stringify(await slackChannels2(rest, environment, store)));
+      return 0;
+    } catch (error3) {
+      const code = error3 instanceof IntakeError ? error3.code : reportCode(error3);
+      environment.stdout(JSON.stringify({ ok: false, code, message: error3 instanceof Error ? error3.message.slice(0, 200) : code }));
+      return 2;
+    }
+  }
   if (command !== "run") {
     environment.stdout(USAGE2);
     return command === "--help" || command === "help" ? 0 : 2;
@@ -32885,11 +33002,12 @@ async function runReport(args, environment) {
     return 2;
   }
 }
-var UNAVAILABLE, REPORT_TIMEOUT_MS, MAX_HIGHLIGHTS_FILE_BYTES, ALIAS2, ID2, MAX_MISSING_SOURCES, USAGE2, namePattern, DEFAULT_PARTNER_DOMAINS;
+var UNAVAILABLE, REPORT_TIMEOUT_MS, MAX_HIGHLIGHTS_FILE_BYTES, ALIAS2, ID2, MAX_MISSING_SOURCES, USAGE2, CHANNEL, MAX_EXCLUDED_CHANNELS, namePattern, DEFAULT_PARTNER_DOMAINS, STRUCTURAL_KEYS;
 var init_run2 = __esm({
   "src/report/run.ts"() {
     "use strict";
     init_batch();
+    init_errors4();
     init_run();
     init_store();
     init_claude();
@@ -32906,9 +33024,24 @@ var init_run2 = __esm({
     MAX_MISSING_SOURCES = 20;
     USAGE2 = `Usage:
   ttobak-mcp report run --period week|quarter|year|custom [--start YYYY-MM-DD --end YYYY-MM-DD]
-    [--highlights-file <path>] [--noninteractive]`;
+    [--highlights-file <path>] [--exclude-slack-channel <name>]... [--noninteractive]
+  ttobak-mcp report slack-channels [--days 1-180]`;
+    CHANNEL = new RegExp("^(?:(?!\\p{Uppercase})[\\p{Alphabetic}0-9])(?:(?!\\p{Uppercase})[\\p{Alphabetic}0-9._-]){0,79}$", "u");
+    MAX_EXCLUDED_CHANNELS = 100;
     namePattern = (value) => value.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&").replace(/\s+/g, "\\s*");
     DEFAULT_PARTNER_DOMAINS = ["anthropic.com", "openai.com", "github.com", "mongodb.com", "megazone.com", "mz.co.kr"];
+    STRUCTURAL_KEYS = /* @__PURE__ */ new Set([
+      "schemaVersion",
+      "periodKey",
+      "period",
+      "alias",
+      "generatedAt",
+      "model",
+      "partial",
+      "highlights",
+      "id",
+      "severity"
+    ]);
   }
 });
 

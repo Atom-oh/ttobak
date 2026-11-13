@@ -30,7 +30,7 @@ The account KB reference rows live in `ttobak-main` (ADR-021, relationship links
 | TtobakEdgeAuthStack | CloudFront viewer JWT validation, us-east-1 | Auth |
 | TtobakObservabilityStack | OTLP collector (Fargate, internal ALB) writing to the mgmt ClickHouse PrivateLink | None |
 | TtobakGatewayStack | HTTP/WebSocket APIs, Go/Python functions, conversion/events | Auth, Storage, AI, Knowledge, WebSearchGateway |
-| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
+| TtobakCrawlerStack | Crawling/ingestion workflow and workers; manual account news collection rule and versioned starter; separate legacy news drain switch | AI, Storage, Knowledge, WebSearchGateway |
 | TtobakResearchAgentStack | Legacy Bedrock Agent/tools and AgentCore spans log group | Storage, Knowledge |
 | TtobakWhisperStack | GPU On-Demand/Spot ECS, ECR, production/benchmark tasks | Storage |
 | TtobakFrontendStack | Static site, CloudFront, runtime config and media keys | Gateway, EdgeAuth, Auth |
@@ -855,22 +855,51 @@ decryption, and the `BEDROCK_MODEL_ID` model resources.
 CrawlerStack rule `ttobak-news-collect-requested` routes default-bus
 `ttobak.crawler` events with detail-type `NewsCollectRequested`
 (`{sourceId,accountId,requestId}`, identifiers only; `sourceId` must start with
-`acct_`) to `ttobak-crawler-news` as `{"manualCollect":{sourceId,accountId,requestId}}`
-(ADR-004). Neither EventBridge (`retryAttempts: 0`, one-hour event age) nor
-Lambda (async `MaximumRetryAttempts: 0`, one-hour age) retries a failure, so there
-are no retry-driven repeats. Before any search, fetch or model call the worker
-claims the request with a conditional `UpdateItem` on the CONFIG row: it runs only
-when `lastCollectRequestId` (set by the request route) equals the event's
-`requestId` and `lastCollectStartedRequestId` does not, so a duplicate delivery of
-the same request is refused. A manual run can still overlap a scheduled run of the
-same source. Delivery failures and failed async invocations land in
-SSE-SQS `ttobak-news-collect-failures` (seven-day retention, redrive denied);
-the crawler stack owns the `sqs:SendMessage` policy on the imported crawler role
-and alarms on rule `FailedInvocations`/`InvocationsFailedToBeSentToDlq`, function
-`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. The async
-configuration does not affect the workflow's synchronous `CrawlNews` task. No
-route publishes the event yet; the API role already has default-bus
-`events:PutEvents`.
+`acct_`) to the starter `ttobak-news-manual` (`news_manual.handler`, declared in
+the `NewsPublication` construct of the same stack, so no cross-stack edge) as
+`{"manualCollect":{sourceId,accountId,requestId}}` (ADR-004). Neither EventBridge
+(`retryAttempts: 0`, one-hour event age) nor Lambda (async `MaximumRetryAttempts:
+0`, one-hour age) retries a failure. The starter's checks, refusal codes,
+claim release and claim are in ADR-004; it starts `ttobak-news-publication`
+once as `manual-{requestId}` with `{sourceId, runId}`, the input the daily
+parent passes. Its environment carries `NEWS_DAILY_HOUR_UTC`,
+`NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS`, derived from the same constants as the daily rule,
+the child timeout and `NEWS_DAILY_GRACE` (15 minutes), for the `DAILY_WINDOW`
+refusal. Its role has `GetItem`/`UpdateItem`/`PutItem`/`Query` on `CRAWLER#*`
+keys of the table (`PutItem`/`Query` only for `COLLECTREFUSAL#` receipts),
+`states:StartExecution` on the publication state machine only,
+`states:ListExecutions` on the daily and publication state machines only, its
+own log group and, through the Lambda failure destination, `sqs:SendMessage` on
+the failure queue. Reserved concurrency is one. The publication child's
+`DiscoverArticles` task retries only `Lambda.TooManyRequestsException` (30
+seconds, backoff 1, 24 attempts, derived from the 600-second discovery timeout),
+so a run meeting discovery's single reserved slot waits instead of failing; the
+starter's running checks are cost and fairness guards. Delivery failures and failed
+async invocations land in SSE-SQS `ttobak-news-collect-failures` (seven-day
+retention, redrive denied), with alarms on rule
+`FailedInvocations`/`InvocationsFailedToBeSentToDlq`, starter
+`AsyncEventsDropped`/`DestinationDeliveryFailures` and queue backlog. Inspect,
+do not redrive: a request whose started marker is set is spent and a replay is
+refused as a duplicate, but a failure before the marker (ListExecutions or claim
+error) leaves it unset, so a replay within the hour would start a paid run. The
+legacy `ttobak-crawler-news` function no longer has an async invoke
+configuration or queue permission, and its manual branch is removed.
+
+The API's advisory admission check for the collect route uses AiStack's API role
+statement `SfnListNewsExecutions`: `states:ListExecutions` on exactly
+`ttobak-news-daily` and `ttobak-news-publication`, ARNs built from those names
+with the stack's partition, region and account (no wildcard, no CrawlerStack
+reference). GatewayStack gives the API function the starter's
+`NEWS_DAILY_HOUR_UTC`, `NEWS_DAILY_MINUTE_UTC`, `NEWS_DAILY_LEAD_SECONDS` and
+`NEWS_DAILY_GRACE_SECONDS` from the same exported constants
+(`newsDailyWindowEnvironment` in `news-publication.ts`) plus
+`NEWS_DAILY_STATE_MACHINE_ARN` and `NEWS_PUBLICATION_STATE_MACHINE_ARN` built the
+same way. No stack edge changes. Deploy AiStack (the role) before GatewayStack
+(the function that calls it), each with `--exclusively`, and the frontend
+(which shows the button again) after GatewayStack. A GatewayStack deployed
+first fails the lookups with access denied, so the route answers 503 rather
+than accepting unchecked.
 
 ## Summary privacy writer activation
 

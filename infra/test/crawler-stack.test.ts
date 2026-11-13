@@ -35,8 +35,8 @@ describe('CrawlerStack', () => {
     template = Template.fromStack(stack);
   });
 
-  test('creates 4 legacy and 5 private publication Lambda functions', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 9);
+  test('creates 4 legacy and 6 private publication Lambda functions', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 10);
   });
 
   test('creates Step Functions state machine', () => {
@@ -91,9 +91,14 @@ describe('CrawlerStack', () => {
       expect(Object.keys(rules)).toHaveLength(1);
       return Object.values(rules)[0].Properties;
     };
-    const newsCrawlerId = () => Object.keys(template.findResources('AWS::Lambda::Function', {
-      Properties: { FunctionName: 'ttobak-crawler-news' },
-    }))[0];
+    const functionId = (name: string) => {
+      const found = Object.keys(template.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: name },
+      }));
+      expect(found).toHaveLength(1);
+      return found[0];
+    };
+    const starterId = () => functionId('ttobak-news-manual');
     const queueId = () => {
       const queues = template.findResources('AWS::SQS::Queue', {
         Properties: { QueueName: 'ttobak-news-collect-failures' },
@@ -116,11 +121,11 @@ describe('CrawlerStack', () => {
       });
     });
 
-    test('has one news crawler target with only the manual IDs, no retries and its DLQ', () => {
+    test('has one versioned starter target with only the manual IDs, no retries and its DLQ', () => {
       const rule = collectRule();
       expect(rule.Targets).toHaveLength(1);
       const [target] = rule.Targets;
-      expect(target.Arn).toEqual({ 'Fn::GetAtt': [newsCrawlerId(), 'Arn'] });
+      expect(target.Arn).toEqual({ 'Fn::GetAtt': [starterId(), 'Arn'] });
       expect(target.RetryPolicy).toEqual({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 3600 });
       expect(target.DeadLetterConfig).toEqual({ Arn: { 'Fn::GetAtt': [queueId(), 'Arn'] } });
       expect(target.InputTransformer.InputPathsMap).toEqual({
@@ -134,21 +139,39 @@ describe('CrawlerStack', () => {
         } });
     });
 
-    test('Lambda does not retry a failed async invocation and records it', () => {
-      template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
-        FunctionName: { Ref: newsCrawlerId() },
+    test('the starter does not retry a failed async invocation and records it', () => {
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'ttobak-news-manual', Handler: 'news_manual.handler',
+      });
+      const configs = template.findResources('AWS::Lambda::EventInvokeConfig');
+      expect(Object.values(configs).map((c: any) => c.Properties)).toEqual([{
+        FunctionName: { Ref: starterId() },
+        Qualifier: '$LATEST',
         MaximumRetryAttempts: 0,
         MaximumEventAgeInSeconds: 3600,
         DestinationConfig: { OnFailure: { Destination: { 'Fn::GetAtt': [queueId(), 'Arn'] } } },
-      });
+      }]);
       template.hasResourceProperties('AWS::SQS::Queue', {
         QueueName: 'ttobak-news-collect-failures', SqsManagedSseEnabled: true,
       });
-      template.hasResourceProperties('AWS::IAM::Policy', {
-        PolicyDocument: { Statement: [{
-          Action: 'sqs:SendMessage', Effect: 'Allow', Resource: { 'Fn::GetAtt': [queueId(), 'Arn'] },
-        }] },
-      });
+      const sends = Object.values(template.findResources('AWS::IAM::Policy'))
+        .flatMap((p: any) => p.Properties.PolicyDocument.Statement.map((s: any) => ({ s, p })))
+        .filter(({ s }) => [].concat(s.Action).includes('sqs:SendMessage' as never));
+      expect(sends).toHaveLength(1);
+      expect(sends[0].s.Resource).toEqual({ 'Fn::GetAtt': [queueId(), 'Arn'] });
+      const starterRole = template.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: 'ttobak-news-manual' },
+      })[starterId()].Properties.Role['Fn::GetAtt'][0];
+      expect(sends[0].p.Properties.Roles).toEqual([{ Ref: starterRole }]);
+    });
+
+    test('the legacy news crawler no longer receives manual requests', () => {
+      const legacy = functionId('ttobak-crawler-news');
+      const targets = Object.values(template.findResources('AWS::Events::Rule'))
+        .flatMap((r: any) => r.Properties.Targets ?? []);
+      expect(targets.some((t: any) => JSON.stringify(t.Arn).includes(legacy))).toBe(false);
+      expect(Object.values(template.findResources('AWS::Lambda::EventInvokeConfig'))
+        .some((c: any) => c.Properties.FunctionName?.Ref === legacy)).toBe(false);
     });
 
     test('alarms on delivery failures, dropped async events and failure backlog', () => {
@@ -164,7 +187,7 @@ describe('CrawlerStack', () => {
       for (const metricName of ['AsyncEventsDropped', 'DestinationDeliveryFailures']) {
         template.hasResourceProperties('AWS::CloudWatch::Alarm', {
           Namespace: 'AWS/Lambda', MetricName: metricName,
-          Dimensions: [{ Name: 'FunctionName', Value: { Ref: newsCrawlerId() } }],
+          Dimensions: [{ Name: 'FunctionName', Value: { Ref: starterId() } }],
         });
       }
       template.hasResourceProperties('AWS::CloudWatch::Alarm', {

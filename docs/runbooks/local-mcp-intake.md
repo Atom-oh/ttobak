@@ -27,6 +27,20 @@ and `~/.local/bin` when they exist and are missing, so the AIM wrappers find
 `aim` even when only `~/.zshrc` adds it; `intake_refresh_path` recaptures the
 login PATH. Nothing else from your shell reaches the run.
 
+One-click setup (copy key `setupButton`, command `setup_start`) runs in order, reporting each
+step: PATH repair (`intake_refresh_path`), adapter update, the adapter's
+`setup apply` (skill packages and MCP servers, see "Skill packages" below) and
+`intake setup --noninteractive`. A failed adapter step stops the rest, an
+adapter without `setup apply` reports `ADAPTER_OUTDATED` for the package step,
+and a server failure does not stop `intake setup`. New registries, servers or
+URLs end the run with a confirmation; Install (`setupInstall`) runs it again with those keys
+approved. Pressing it again with nothing new installs nothing: skills and
+servers report current (packages and connection setup still report ok). A
+TTOBAK login failure in the package step does not stop connection setup, and
+the panel then offers the login. Without a saved selection, sign-in and login
+read the TTOBAK endpoints from the host's own `ttobak` MCP entry (Claude, then
+Codex, then Kiro), after `TTOBAK_*` variables and the saved selection.
+
 Install and update the adapter:
 
 - The adapter is `~/.ttobak/server.mjs`. Settings shows whether it is present and
@@ -836,7 +850,14 @@ Behavior:
 - From the app: Performance, Report tab, "Make report". The app first checks
   that `~/.ttobak/server.mjs` contains the `report run` command and otherwise
   stops with `ADAPTER_OUTDATED` (update the adapter in the intake settings). Pick a period and
-  optional highlights; Bedrock settings are under Advanced. Closing the dialog
+  optional highlights; Bedrock settings and the Slack channel picker are under
+  Advanced. The picker lists the channels where you posted in the last 90 days
+  (`report slack-channels [--days N]`, the selected Slack connector's `search`
+  at most 15 calls a minute and 40 pages; refreshing takes minutes and has its
+  own busy flag, separate from report runs, refused while a report runs). Unchecked
+  channels are stored in the app's intake settings and passed to every run as
+  `--exclude-slack-channel <name>` (at most 100); every channel not excluded is
+  counted, also those older than 90 days. Closing the dialog
   keeps the run going; Cancel stops it. Quitting the app sends the CLI SIGTERM
   and waits up to 2 s for it (only while a report runs) before SIGKILL; in
   that time the CLI stops claude and removes its directories. Anything a quit
@@ -872,6 +893,8 @@ Behavior:
 | `REPORT_NO_SFDC` | No synced SFDC assignments; run `intake run` first. |
 | `REPORT_TIMEOUT` | The 45-minute CLI limit (50 in the app) passed; re-run, optionally with a shorter period. |
 | `REPORT_CANCELLED` | Cancelled by the user, SIGTERM or SIGINT. |
+| `REPORT_EXCLUDED_CHANNEL` | The model output still names an excluded Slack channel (a string equal to the name, `#name` not followed by an ASCII name character, or the bare name followed by the Korean word for channel); nothing was uploaded. Remove the channel from the highlights if it is there, then re-run. |
+| `SLACK_NOT_SELECTED` | `report slack-channels` needs the Slack connector selected in intake setup. |
 | `REPORT_PERIOD_EXPIRED` | The custom period ended more than two calendar years ago (server retention); pick a later period. |
 | `REPORT_SANDBOX_UNAVAILABLE` | No usable sandbox, or a CLI older than 2.1.322 or of unknown version (a pre-release suffix is rejected); update the CLI. |
 | `RUN_IN_PROGRESS` | Another report run holds `report.lock`; wait for it. |
