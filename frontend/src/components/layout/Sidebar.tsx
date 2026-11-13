@@ -70,7 +70,8 @@ export function Sidebar({ activePath }: { activePath: string }) {
 
   return (
     <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest/80 dark:backdrop-blur-xl flex flex-col gap-3 p-4 shrink-0 h-dvh sticky top-0">
-      <div className="flex flex-1 flex-col gap-4 min-h-0 overflow-y-auto">
+      {/* `relative`: see the page scroller in AppLayout. */}
+      <div className="relative flex flex-1 flex-col gap-4 min-h-0 overflow-y-auto">
         {/* Workspace Identity */}
         <div className="flex shrink-0 items-center gap-3 px-2">
           <div className="bg-primary/10 rounded-lg p-2 flex items-center justify-center">
