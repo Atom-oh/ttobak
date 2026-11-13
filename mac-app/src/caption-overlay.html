@@ -29,6 +29,7 @@
         padding: 14px 18px 6px;
         display: flex;
         background: var(--bg);
+        border-radius: 14px;
       }
       /* No caption to show: the whole window is invisible, so nothing stays
          over the slides after a recording stops. The page also reports idle
@@ -60,12 +61,32 @@
       }
       html:hover #move,
       html:hover #grip,
+      html:hover #close,
       html.resizing #grip {
         pointer-events: auto;
       }
       #outline {
         inset: 0;
         border: 1px dashed rgba(255, 255, 255, 0.7);
+        border-radius: 14px;
+      }
+      /* Small close button, top right, part of the hover chrome. */
+      #close {
+        top: 4px;
+        right: 4px;
+        width: 16px;
+        height: 16px;
+        padding: 0;
+        border: 0;
+        border-radius: 5px;
+        background: rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.9);
+        font: 12px/16px system-ui, sans-serif;
+        text-align: center;
+        cursor: pointer;
+      }
+      #close:hover {
+        background: rgba(200, 40, 40, 0.9);
       }
       #move {
         top: 2px;
@@ -123,6 +144,7 @@
     <div id="outline" class="chrome" aria-hidden="true"></div>
     <div id="move" class="chrome" data-tauri-drag-region aria-hidden="true">⠿</div>
     <div id="grip" class="chrome" data-tauri-drag-region="false" aria-hidden="true"></div>
+    <button id="close" class="chrome" type="button" data-tauri-drag-region="false" aria-label="자막 창 닫기">×</button>
     <script>
       // Size for a grip drag: the starting inner size plus the pointer
       // delta, rounded and clamped to the window minimum (320x80 points).
@@ -334,6 +356,19 @@
           events.listen('caption-style', function (e) {
             if (ours(e.payload)) applyStyle(e.payload);
           }, scope);
+        }
+
+        // Close button: Rust closes only this window and tells the main
+        // window. Not a drag region, so a press never starts a window move.
+        var closeButton = document.getElementById('close');
+        if (closeButton) {
+          closeButton.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+          closeButton.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!core || typeof core.invoke !== 'function') return;
+            core.invoke('caption_overlay_dismiss').catch(function () {});
+          });
         }
 
         // Resize from the bottom-right grip. tao 0.37 does not support

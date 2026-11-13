@@ -180,8 +180,13 @@ and `core:window:allow-set-size`, plus the app command `allow-caption-overlay-id
 (own-window pass-through only; not granted to the remote SPA). No event emit and no
 other app command.
 
-**Mouse move and resize.** Hovering an overlay shows a dashed outline, a top-centre
-move handle and a bottom-right resize grip, all hidden again when the pointer leaves,
+**Mouse move, resize and close.** Hovering an overlay shows a dashed outline, a
+top-centre move handle, a small top-right close button (2026-11-13) and a
+bottom-right resize grip, all hidden again when the pointer leaves. The window and
+its outline have rounded corners. The close button calls `caption_overlay_dismiss`,
+granted only to the overlay capability: it closes only the calling window, saves it
+closed and tells the main window (`caption-window-closed`), whose panel then stops
+translating for it. The chrome is hidden,
 so a projected view shows only subtitles; the chrome sits in reserved padding and
 never covers text. tao 0.37 returns `NotSupported` for `drag_resize_window` on macOS,
 so the grip resizes the window from the page with `setSize(LogicalSize)` once per
