@@ -16,6 +16,10 @@ manifests.
 - Drag and drop a Remember CSV or .xlsx export onto the contact import fields on the Account page and in Settings, in the browser and the Mac app; the Mac app's other upload drop zones now receive drops too.
 - Personalized Assistant cards and meeting-aware questions; automatic read-only answers to spoken questions, enabled by default with a separate external-search opt-in (#894).
 
+### Changed
+
+- The SA performance report accepts Claude Code 2.1.311 or newer (was 2.1.322); 2.1.311 has the same verified sandbox settings schema.
+
 ## [1.0.0] - 2026-11-11
 
 First tagged application release. It contains all earlier history; the entries below
