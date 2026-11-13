@@ -12,7 +12,7 @@ import { TranscribeFallbackClient, type TranscribeCallbacks } from './transcribe
 import { TranscribeStreamingSession } from './transcribeStreamingClient';
 import { translateApi } from './api';
 import { hasMobileMicConflictRisk } from './device';
-import { LiveTranslation, liveLanguageOptions, type ExtraLiveLanguage, type FixedLiveLanguage } from './liveTranslation';
+import { LiveTranslation, liveLanguageOptions, type ExtraLiveLanguage, type LiveLanguage } from './liveTranslation';
 import type { LiveVocabularyNames } from './liveVocabulary';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
@@ -34,11 +34,12 @@ export interface SttManagerConfig {
   /** Optional third recognition language; absent keeps 'ko-KR,en-US'. */
   extraLanguage?: ExtraLiveLanguage;
   /**
-   * Native captions only: recognize this one language instead of
-   * identifying the language of each utterance. Identification costs
-   * accuracy when the speaker uses a single language.
+   * Native captions only: the languages to recognize, replacing the default
+   * Korean + English (+ `extraLanguage`). One language is recognized
+   * directly; several are identified per utterance, the first preferred.
+   * Fewer candidates recognize more accurately.
    */
-  fixedLanguage?: FixedLiveLanguage;
+  nativeLanguages?: LiveLanguage[];
   /** Per-segment hook fired for every transcript result (interim and final). */
   onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
   onProviderChange?: (provider: LiveSttProvider) => void;
@@ -560,14 +561,17 @@ export class SttManager {
     const tsConfig = this.config.transcribeStreamingConfig!;
     const handleTranscript = this.transcriptHandler();
 
-    const fixed = this.config.fixedLanguage;
+    const chosen = this.config.nativeLanguages?.length ? this.config.nativeLanguages : undefined;
+    const fixed = chosen?.length === 1 ? chosen[0] : undefined;
     const session = new TranscribeStreamingSession({
       region: tsConfig.region,
       identityPoolId: tsConfig.identityPoolId,
       userPoolId: tsConfig.userPoolId,
       ...(fixed
         ? { multiLanguage: false, languageCode: fixed }
-        : { multiLanguage: true, languageOptions: liveLanguageOptions(this.config.extraLanguage), preferredLanguage: 'ko-KR' }),
+        : chosen
+          ? { multiLanguage: true, languageOptions: chosen.join(','), preferredLanguage: chosen[0] }
+          : { multiLanguage: true, languageOptions: liveLanguageOptions(this.config.extraLanguage), preferredLanguage: 'ko-KR' }),
       vocabularies: this.vocabularyDisabled ? undefined : tsConfig.vocabularies,
       onVocabularyFallback: () => this.handleVocabularyFallback(session),
       onTranscript: (text, isFinal, detectedLang, resultId) => {

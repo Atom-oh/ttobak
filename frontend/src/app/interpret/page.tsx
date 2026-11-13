@@ -13,7 +13,8 @@ import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
 import { upsertCaptionLine, visibleCaptionLines } from '@/lib/interpretCaptions';
 import { INTERPRET_MESSAGES, formatElapsed } from '@/lib/interpretSession';
 import {
-  SPEECH_LANGUAGE_KEY, normalizeSpeechLanguage, speechLanguageOptions, type SpeechLanguageChoice,
+  DEFAULT_SPEECH_LANGUAGES, MAX_SPEECH_LANGUAGES, SPEECH_LANGUAGES, SPEECH_LANGUAGE_KEY,
+  canToggleSpeechLanguage, parseSpeechLanguages, toggleSpeechLanguage, type SpeechLanguage,
 } from '@/lib/interpretSpeechLanguage';
 import { BILINGUAL_TARGET, type TranslationEntry } from '@/lib/liveTranslation';
 import { onNativeAudioLevel, useIsMacApp } from '@/lib/tauri';
@@ -97,21 +98,30 @@ function Interpreter() {
   const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
     captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
   }, []);
-  // Spoken language: automatic identification, or one fixed language for better recognition.
-  const [speechChoice, setSpeechChoice] = useState<SpeechLanguageChoice>(() => {
+  // Spoken languages: one or two of four, kept as a per-viewer preference.
+  const [speechLanguages, setSpeechLanguages] = useState<SpeechLanguage[]>(() => {
     try {
-      // Read as stored; it is narrowed to what this session offers below.
-      const stored = window.localStorage.getItem(SPEECH_LANGUAGE_KEY);
-      const withExtra = normalizeSpeechLanguage(stored, 'ja-JP');
-      return withExtra === 'auto' ? normalizeSpeechLanguage(stored, 'zh-CN') : withExtra;
+      return parseSpeechLanguages(window.localStorage.getItem(SPEECH_LANGUAGE_KEY));
     } catch {
-      return 'auto';
+      return [...DEFAULT_SPEECH_LANGUAGES];
     }
   });
-  const speechRef = useRef<SpeechLanguageChoice>('auto');
-  const getFixedLanguage = useCallback(() => (speechRef.current === 'auto' ? undefined : speechRef.current), []);
+  const speechRef = useRef(speechLanguages);
+  useEffect(() => {
+    speechRef.current = speechLanguages;
+  }, [speechLanguages]);
+  const getSpeechLanguages = useCallback(() => speechRef.current, []);
+  const switchSpeechLanguage = (lang: SpeechLanguage) => {
+    const next = toggleSpeechLanguage(speechLanguages, lang);
+    setSpeechLanguages(next);
+    try {
+      window.localStorage.setItem(SPEECH_LANGUAGE_KEY, JSON.stringify(next));
+    } catch {
+      // The choice still applies to this visit.
+    }
+  };
   const session = useInterpretSession({
-    targetLang: BILINGUAL_TARGET, interimTranslation: false, onSegment, getExtraLanguage, getFixedLanguage,
+    targetLang: BILINGUAL_TARGET, interimTranslation: false, onSegment, getExtraLanguage, getSpeechLanguages,
   });
   const idle = session.phase === 'idle';
   const captions = useCaptionOverlay({ isRecording: !idle, onEntry: onCaptionEntry });
@@ -125,20 +135,6 @@ function Interpreter() {
   useEffect(() => {
     captionLinkRef.current = { extraLanguage: captionExtraLanguage, onSegment: captionOnSegment };
   }, [captionExtraLanguage, captionOnSegment]);
-  // A fixed extra language that is no longer the caption windows' extra language falls back to automatic.
-  const speechLanguage = normalizeSpeechLanguage(speechChoice, captionExtraLanguage);
-  useEffect(() => {
-    speechRef.current = speechLanguage;
-  }, [speechLanguage]);
-  const chooseSpeechLanguage = (value: string) => {
-    const next = normalizeSpeechLanguage(value, captionExtraLanguage);
-    setSpeechChoice(next);
-    try {
-      window.localStorage.setItem(SPEECH_LANGUAGE_KEY, next);
-    } catch {
-      // The choice still applies to this visit.
-    }
-  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 lg:p-6">
@@ -148,21 +144,34 @@ function Interpreter() {
 
       <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
         <NativeMicSelector value={inputUid} onChange={setInputUid} disabled={!idle} mode="listen" />
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="speech-language" className="text-xs font-bold text-slate-600 dark:text-text-secondary">말하는 언어</label>
-          <select
-            id="speech-language"
-            value={speechLanguage}
-            disabled={!idle}
-            onChange={(event) => chooseSpeechLanguage(event.target.value)}
-            className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 disabled:opacity-60 dark:border-white/10 dark:bg-surface dark:text-text-main"
-          >
-            {speechLanguageOptions(captionExtraLanguage).map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <p className="text-xs text-slate-500 dark:text-text-muted">한 언어만 쓰면 고정하는 쪽이 더 정확해요.</p>
-        </div>
+        <fieldset className="flex flex-col gap-1.5" disabled={!idle}>
+          <legend className="text-xs font-bold text-slate-600 dark:text-text-secondary">
+            말하는 언어 (최대 {MAX_SPEECH_LANGUAGES}개)
+          </legend>
+          <div className="flex min-h-10 flex-wrap items-center gap-2">
+            {SPEECH_LANGUAGES.map((item) => {
+              const on = speechLanguages.includes(item.value);
+              return (
+                <label
+                  key={item.value}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 ${on
+                    ? 'border-primary bg-primary/10 font-semibold text-primary'
+                    : 'border-slate-200 text-slate-700 dark:border-white/10 dark:text-text-secondary'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!idle || !canToggleSpeechLanguage(speechLanguages, item.value)}
+                    onChange={() => switchSpeechLanguage(item.value)}
+                    className="rounded border-slate-300 text-primary focus:ring-primary"
+                  />
+                  {item.label}
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-xs text-slate-500 dark:text-text-muted">실제로 쓰는 언어만 고르면 더 정확해요. 하나만 골라도 돼요.</p>
+        </fieldset>
         <div className="ml-auto flex items-center gap-4">
           {!idle && <LevelMeter active />}
           {!idle && (
