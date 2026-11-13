@@ -41,6 +41,19 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+/** Live interpretation with no meeting; the Mac app only (it needs native capture). */
+export const INTERPRET_ITEM: NavItem = { href: '/interpret', icon: 'translate', label: '통역' };
+
+/** The menu for this client: the Mac app also gets the interpretation entry, right after Meetings. */
+export function navGroupsFor(isMacApp: boolean): NavGroup[] {
+  if (!isMacApp) return NAV_GROUPS;
+  return NAV_GROUPS.map((group) => {
+    const at = group.items.findIndex((item) => item.href === '/meetings');
+    if (at < 0) return group;
+    return { ...group, items: [...group.items.slice(0, at + 1), INTERPRET_ITEM, ...group.items.slice(at + 1)] };
+  });
+}
+
 export const SETTINGS_ITEM: NavItem = { href: '/settings', icon: 'settings', label: 'Settings' };
 
 /**

@@ -8,7 +8,8 @@ import { useTheme } from '@/hooks/useTheme';
 import { BillingInsightButton } from '@/components/layout/BillingInsightButton';
 import { UserGuideButton } from '@/components/layout/UserGuideButton';
 import { ReleaseLink } from '@/components/layout/ReleaseLink';
-import { NAV_GROUPS, SETTINGS_ITEM, isNavActive } from '@/lib/navigation';
+import { SETTINGS_ITEM, isNavActive, navGroupsFor } from '@/lib/navigation';
+import { useIsMacApp } from '@/lib/tauri';
 
 function NavItem({ href, icon, label, isActive }: { href: string; icon: string; label: string; isActive: boolean }) {
   const activeClasses = isActive
@@ -33,9 +34,11 @@ function GroupLabel({ name }: { name: string }) {
 }
 
 function SidebarNav({ activePath, tab }: { activePath: string; tab: string | null }) {
+  // The prerendered menu is the web one; the Mac app adds its entry after hydration.
+  const groups = navGroupsFor(useIsMacApp() === true);
   return (
     <nav aria-label="주 메뉴" className="flex flex-col gap-3">
-      {NAV_GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.name || 'top'} className="flex flex-col gap-1">
           {group.name && <GroupLabel name={group.name} />}
           {group.items.map((item) => (

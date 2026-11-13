@@ -15,6 +15,7 @@ const pathLabels: Record<string, string> = {
   '/projects': 'Projects',
   '/settings': 'Settings',
   '/record': 'Recording',
+  '/interpret': 'Interpretation',
   '/profile': 'Profile',
   '/accounts': 'Accounts',
   '/docs': 'Docs',

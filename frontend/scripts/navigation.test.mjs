@@ -58,3 +58,14 @@ test('Home and Meetings have distinct destinations and active states', () => {
   assert.equal(nav.isNavActive('/meetings', '/', null), false);
   assert.equal(nav.isNavActive('/meetings', '/meetings', null), true);
 });
+
+test('interpret entry appears only in the Mac app, after Meetings', () => {
+  const web = nav.navGroupsFor(false).flatMap((g) => g.items.map((i) => i.href));
+  assert.ok(!web.includes('/interpret'));
+  assert.equal(nav.navGroupsFor(false), nav.NAV_GROUPS);
+  const work = nav.navGroupsFor(true).find((g) => g.name === '업무').items.map((i) => i.href);
+  assert.equal(work[work.indexOf('/meetings') + 1], '/interpret');
+  assert.equal(nav.INTERPRET_ITEM.label, '통역');
+  assert.equal(nav.INTERPRET_ITEM.icon, 'translate');
+  assert.ok(!nav.NAV_GROUPS.flatMap((g) => g.items).some((i) => i.href === '/interpret'));
+});
