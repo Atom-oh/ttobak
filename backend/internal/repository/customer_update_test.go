@@ -114,3 +114,19 @@ func TestCustomerUpdateAddSourceExpression(t *testing.T) {
 		t.Fatalf("string set value missing: %v", expr.Values())
 	}
 }
+
+func TestCustomerUpdateURLPendingKey(t *testing.T) {
+	in, err := urlPendingInput("tbl", "abc", "https://example.com/a", time.Unix(1000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := in.Item["PK"].(*types.AttributeValueMemberS).Value; got != "CUURL#abc" {
+		t.Fatalf("PK = %q", got)
+	}
+	if got := in.Item["SK"].(*types.AttributeValueMemberS).Value; got != "META" {
+		t.Fatalf("SK = %q", got)
+	}
+	if in.ConditionExpression == nil || !strings.Contains(*in.ConditionExpression, "attribute_not_exists") {
+		t.Fatalf("condition = %v", in.ConditionExpression)
+	}
+}

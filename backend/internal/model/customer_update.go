@@ -23,6 +23,10 @@ const (
 	PrefixUpdateOpt      = "CUOPT#"
 	PrefixUpdateURL      = "CUURL#"
 	PKUpdatePending      = "CUPENDING"
+
+	// SKUpdateURLMeta: the shared URL cache row is PK = CUURL#{urlHash}, SK = META,
+	// shared across users (a Python runtime will read and write the same key).
+	SKUpdateURLMeta = "META"
 )
 
 const (

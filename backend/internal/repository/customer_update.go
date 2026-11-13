@@ -280,29 +280,40 @@ func (r *CustomerUpdateRepository) PutItemsIfAbsent(ctx context.Context, userID,
 	return created, nil
 }
 
-// EnsureURLPending creates the shared URL cache row as pending when absent; an
-// existing row is left unchanged.
-func (r *CustomerUpdateRepository) EnsureURLPending(ctx context.Context, urlHash, url string) error {
-	pk := model.UpdateURLPK(urlHash)
+// urlPendingInput builds the create-if-absent write for the shared URL cache row
+// (PK = CUURL#{urlHash}, SK = META).
+func urlPendingInput(tableName, urlHash, url string, now time.Time) (*dynamodb.PutItemInput, error) {
 	av, err := attributevalue.MarshalMap(updateURLRow{
-		customerUpdateKeys: customerUpdateKeys{PK: pk, SK: pk, EntityType: "UPDATE_URL"},
+		customerUpdateKeys: customerUpdateKeys{
+			PK: model.UpdateURLPK(urlHash), SK: model.SKUpdateURLMeta, EntityType: "UPDATE_URL",
+		},
 		UpdateURL: model.UpdateURL{
 			URLHash: urlHash, URL: url, Status: model.UpdateURLPending,
-			ExpiresAt: time.Now().Add(model.UpdateURLTTL).Unix(),
+			ExpiresAt: now.Add(model.UpdateURLTTL).Unix(),
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal update url: %w", err)
+		return nil, fmt.Errorf("failed to marshal update url: %w", err)
 	}
 	cond, err := absentCondition()
 	if err != nil {
-		return fmt.Errorf("build create-url condition: %w", err)
+		return nil, fmt.Errorf("build create-url condition: %w", err)
 	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName), Item: av,
+	return &dynamodb.PutItemInput{
+		TableName: aws.String(tableName), Item: av,
 		ConditionExpression:      cond.Condition(),
 		ExpressionAttributeNames: cond.Names(),
-	})
+	}, nil
+}
+
+// EnsureURLPending creates the shared URL cache row as pending when absent; an
+// existing row is left unchanged.
+func (r *CustomerUpdateRepository) EnsureURLPending(ctx context.Context, urlHash, url string) error {
+	in, err := urlPendingInput(r.tableName, urlHash, url, time.Now())
+	if err != nil {
+		return err
+	}
+	_, err = r.client.PutItem(ctx, in)
 	if err != nil && !isConditionFailed(err) {
 		return fmt.Errorf("failed to create update url: %w", err)
 	}
