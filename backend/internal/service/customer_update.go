@@ -34,6 +34,7 @@ type customerUpdateRepo interface {
 	MarkPending(ctx context.Context, userID string) error
 	GetDraft(ctx context.Context, userID, accountID, urlHash string) (*model.UpdateDraft, error)
 	ListDrafts(ctx context.Context, userID, accountID string, limit int, cursor string) ([]model.UpdateDraft, string, error)
+	OpenDraft(ctx context.Context, userID string, d *model.UpdateDraft) error
 	UpdateDraftIfRevision(ctx context.Context, userID string, d *model.UpdateDraft, expectedRevision int) error
 	GetAccountOpt(ctx context.Context, userID, accountID string) (bool, error)
 	PutAccountOpt(ctx context.Context, userID, accountID string, enabled bool) error
@@ -281,7 +282,8 @@ func updateExpired(expiresAt int64, now time.Time) bool {
 // past their expiry (even before TTL deletion) and drafts of accounts the
 // caller no longer directly belongs to (one membership check per distinct
 // account), orders open drafts first, then newest CreatedAt first (ties by
-// urlHash, then accountId), and pages that list in memory. The cursor is an
+// urlHash, then accountId), pages that list in memory and opens only the
+// page's sealed drafts (unreadable ones are omitted). The cursor is an
 // opaque offset; a malformed or out-of-range cursor returns ErrInvalidInput.
 func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountID string, limit int, cursor string) (*model.UpdateDraftsPage, error) {
 	if limit < 1 {
@@ -338,7 +340,17 @@ func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountI
 	if end > len(visible) {
 		end = len(visible)
 	}
-	page := &model.UpdateDraftsPage{Drafts: append([]model.UpdateDraft{}, visible[offset:end]...)}
+	// Only the returned page is opened; an unreadable row is left out of it.
+	page := &model.UpdateDraftsPage{Drafts: make([]model.UpdateDraft, 0, end-offset)}
+	for _, d := range visible[offset:end] {
+		if err := s.repo.OpenDraft(ctx, userID, &d); err != nil {
+			if errors.Is(err, repository.ErrUpdateDraftUnreadable) {
+				continue
+			}
+			return nil, err
+		}
+		page.Drafts = append(page.Drafts, d)
+	}
 	if end < len(visible) {
 		page.NextCursor = encodeDraftOffset(end)
 	}

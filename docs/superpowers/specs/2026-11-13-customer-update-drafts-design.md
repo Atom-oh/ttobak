@@ -148,7 +148,8 @@ per account for the requesting user and passes it in:
     the Billing BFF closed to other principals. Designer's call: the billing
     worker derives a names-only object (service names ranked by usage, no
     amounts) at publish time, and the run worker may read only that object.
-    This is recorded in ADR-012. Omitted when the account has no billing data.
+    This names-only billing object is a planned ADR-012 change that ships with
+    the generator slice; ADR-012 does not record it yet. Omitted when the account has no billing data.
   - The account's recent news from the crawler (titles, summaries, tags).
   - Opportunity ID, name and stage (the only SFDC opportunity fields in the
     cloud).

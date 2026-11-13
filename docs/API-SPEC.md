@@ -1794,6 +1794,11 @@ returns 409 `CONFLICT` before any write. Draft `PATCH` carries `action`, `body`,
 Invalid input returns 400, a missing user 401, `ErrForbidden` 403, `ErrNotFound`
 404; other failures return a generic 500.
 
+Draft text is KMS-sealed at rest (ADR-015, customer update drafts). Without the
+record key, draft list and `PATCH` routes return 503 `DRAFTS_UNAVAILABLE` and write
+nothing. A row that cannot be opened is left out of a list page; on `PATCH` it
+returns the generic 500. Responses never include the sealed value.
+
 ### Staged summary-sharing privacy
 
 Meeting detail adds `summarySharing`: `canCreateGrant`, `canShareToAccount`,

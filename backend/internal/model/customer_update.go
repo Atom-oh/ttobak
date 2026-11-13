@@ -167,6 +167,9 @@ type UpdateDraft struct {
 	CreatedAt     time.Time          `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt     time.Time          `json:"updatedAt" dynamodbav:"updatedAt"`
 	ExpiresAt     int64              `json:"expiresAt" dynamodbav:"pendingShareExpiresAt"`
+	// Sealed is the at-rest sealed text of a listed, unopened draft; it is
+	// never serialized.
+	Sealed string `json:"-" dynamodbav:"-"`
 }
 
 // NormalizeSlices replaces nil Opportunities and Links with empty slices so a

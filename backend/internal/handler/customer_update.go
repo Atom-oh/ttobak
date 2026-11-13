@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -74,7 +76,12 @@ func cuWriteServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Not found")
 	case errors.Is(err, service.ErrConflict):
 		writeError(w, http.StatusConflict, model.ErrCodeConflict, "Conflict")
+	case errors.Is(err, repository.ErrUpdateDraftEncryptionUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "DRAFTS_UNAVAILABLE", "Drafts are temporarily unavailable")
 	default:
+		// Includes repository.ErrUpdateDraftUnreadable, a 500 as for an
+		// unreadable customer brief. Only the error is logged, never draft text.
+		log.Printf("customer updates: request failed: %v", err)
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 	}
 }
