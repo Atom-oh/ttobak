@@ -132,7 +132,7 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             continue;
         }
         // Core Audio reads happen without any app lock held.
-        let sources = probe.sources();
+        let (sources, starters) = probe.sources();
         let recording = app
             .state::<RecorderState>()
             .recorder
@@ -140,7 +140,10 @@ fn watch(app: AppHandle, state: Arc<MeetingState>) {
             .snapshot()
             .recording;
         let now_ms = epoch.elapsed().as_millis() as u64;
-        let events = state.detector.lock().observe(now_ms, &sources, recording);
+        let events = state
+            .detector
+            .lock()
+            .observe_audio(now_ms, &sources, &starters, recording);
         for event in events {
             announce(&app, &state, &event);
         }
@@ -396,10 +399,15 @@ mod mac {
         /// capture from a non-default or virtual input device, which leaves
         /// the default device's `IsRunningSomewhere` false (observed with Zoom).
         /// Output counts too, so a listen-only participant whose app or
-        /// browser has released the microphone is still detected.
-        pub fn sources(&mut self) -> Vec<Source> {
+        /// browser has released the microphone stays detected. The second
+        /// list holds the sources that may start a detection: a native app
+        /// only while it captures input, because output alone is also its
+        /// notification and calendar reminder sounds; a browser only on a
+        /// meeting tab, as before.
+        pub fn sources(&mut self) -> (Vec<Source>, Vec<Source>) {
             let own_pid = std::process::id() as i32;
             let mut sources = Vec::new();
+            let mut starters = Vec::new();
             self.audio_active = false;
             for process in process_objects() {
                 let input = get_u32(process, kAudioProcessPropertyIsRunningInput) == Some(1);
@@ -416,25 +424,35 @@ mod mac {
                     continue;
                 };
                 match classify_bundle(&bundle) {
-                    Some(MicUser::Native(kind)) => sources.push(Source {
-                        kind,
-                        browser: None,
-                    }),
+                    Some(MicUser::Native(kind)) => {
+                        let source = Source {
+                            kind,
+                            browser: None,
+                        };
+                        sources.push(source);
+                        if input {
+                            starters.push(source);
+                        }
+                    }
                     Some(MicUser::Browser(browser)) if input || self.granted.contains(&browser) => {
                         // Safari's shared WebKit process has no Safari ancestor.
                         let root = match browser {
                             Browser::Safari => None,
                             _ => pid.and_then(browser_root_pid),
                         };
-                        sources.extend(self.browser_meetings(browser, root))
+                        let found = self.browser_meetings(browser, root);
+                        starters.extend(found.iter().copied());
+                        sources.extend(found)
                     }
                     Some(MicUser::Browser(_)) => {}
                     None => {}
                 }
             }
-            sources.sort_by_key(|s| s.key());
-            sources.dedup();
-            sources
+            for list in [&mut sources, &mut starters] {
+                list.sort_by_key(|s| s.key());
+                list.dedup();
+            }
+            (sources, starters)
         }
 
         fn browser_meetings(&mut self, browser: Browser, pid: Option<i32>) -> Vec<Source> {
