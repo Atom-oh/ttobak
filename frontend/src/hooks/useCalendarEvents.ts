@@ -176,6 +176,7 @@ export function useCalendarEvents({ from, to, accountId, enabled = true, onAcces
     }
   };
   return {
+    userId,
     events: current?.events ?? [], sources: current?.sources ?? [],
     state: current?.state ?? 'loading' as CalendarState,
     nextCursor: current?.nextCursor ?? null, sourcesNextCursor: current?.sourcesNextCursor ?? null,

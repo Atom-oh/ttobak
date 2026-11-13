@@ -94,6 +94,7 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
     '@/components/auth/AuthProvider': { useAuth: () => auth },
     '@/components/layout/AppLayout': { AppLayout: ({ children }) => React.createElement('main', { 'data-shell': true }, children) },
     '@/components/MemberPicker': { MemberPicker: props => React.createElement('input', { ...props, 'aria-label': 'Add member' }) },
+    '@/components/account/AccountSchedule': { AccountSchedule: () => null },
     '@/components/AccountBillingTab': { AccountBillingTab: () => React.createElement('p', {}, 'Authorized billing') },
     // The contact list has its own suites; it is inert here.
     '@/components/AccountContacts': { AccountContacts: () => null },
@@ -131,6 +132,7 @@ function fixture({ url = '/accounts/A', api = {}, billing = false, billingAccoun
       meetingsApi: { list: () => { throw new Error('Private history must not be queried'); } },
       specReqTaskApi: { list: async () => ({ tasks: [], nextCursor: null }), get: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); } },
       calendarApi: {
+        shareDirectory: () => Promise.resolve({ accounts: [] }),
         events: read('calendarEvents', () => ({ events: [], nextCursor: null })),
         sources: read('calendarSources', () => ({ sources: [], nextCursor: null })),
       },

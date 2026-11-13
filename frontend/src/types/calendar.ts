@@ -11,6 +11,41 @@ export interface CalendarEvent {
   endDate?: string;
   location?: string;
   accountId?: string;
+  shareAccountId?: string;
+  shareEvidence?: string[];
+  candidateAccountIds?: string[];
+  private?: boolean;
+  sharingMode?: 'auto' | 'account' | 'hidden';
+}
+
+export type CalendarSharingRequest =
+  | { mode: 'auto' | 'hidden' }
+  | { mode: 'account'; accountId: string };
+
+export interface AccountCalendarEvent {
+  meetingKey: string;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  timeZone: string;
+  isAllDay: boolean;
+  startDate?: string;
+  endDate?: string;
+  location?: string;
+  sharedBy: string[];
+  sharedByMe: boolean;
+}
+
+export interface AccountCalendarPage {
+  events: AccountCalendarEvent[];
+  nextCursor: string | null;
+}
+
+export interface CalendarShareDirectoryAccount {
+  accountId: string;
+  name: string;
+  aliases: string[];
+  domains: string[];
 }
 
 export interface CalendarSourceStatus {

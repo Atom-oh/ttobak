@@ -87,8 +87,8 @@ type calendarShareDecision struct {
 	extraVeto string
 }
 
-// decideCalendarShare applies, in order: hidden override, account override, Private, automatic
-// match. recorded lists the accounts the stored event row holds (its share, then its extra veto).
+// decideCalendarShare applies, in order: hidden override, Private, account override, automatic
+// match. Private vetoes the recorded account (else the override account) and never shares. recorded lists the accounts the stored event row holds (its share, then its extra veto).
 // Hidden vetoes the automatic account and the account where the event is recorded (shared or
 // vetoed), at most two.
 func decideCalendarShare(input model.CalendarEventInput, override *repository.CalendarOverrideRow, recorded []string, fromRequest bool) calendarShareDecision {
@@ -114,13 +114,17 @@ func decideCalendarShare(input model.CalendarEventInput, override *repository.Ca
 			decision.extraVeto = accounts[1]
 		}
 		return decision
-	case override != nil && override.Mode == calendarModeAccount:
-		return calendarShareDecision{accountID: override.AccountID, state: calendarStateShared}
 	case input.Private:
+		// Private beats an account override (spec G4): never share, veto where recorded.
 		if len(recorded) > 0 {
 			return calendarShareDecision{accountID: recorded[0], state: calendarStateVeto}
 		}
+		if override != nil && override.Mode == calendarModeAccount {
+			return calendarShareDecision{accountID: override.AccountID, state: calendarStateVeto}
+		}
 		return calendarShareDecision{}
+	case override != nil && override.Mode == calendarModeAccount:
+		return calendarShareDecision{accountID: override.AccountID, state: calendarStateShared}
 	case input.ShareAccountID != "":
 		return calendarShareDecision{accountID: input.ShareAccountID, state: calendarStateShared, requested: fromRequest}
 	}
@@ -309,18 +313,22 @@ func calendarSharingMode(override *repository.CalendarOverrideRow) string {
 	return override.Mode
 }
 
-// calendarOwnerEvent is the owner's view of one stored event, including sharing state.
+// calendarOwnerEvent is the owner's view of one stored event, including sharing state. The
+// shared account comes from the stored row (the share the repository granted), never from the
+// payload: a vetoed, unshared or collision-dropped event reports no shareAccountId.
 func calendarOwnerEvent(row repository.CalendarEventRow, input model.CalendarEventInput, override *repository.CalendarOverrideRow) model.CalendarEvent {
 	event := model.CalendarEvent{
 		EventID: row.EventID, SourceID: row.SourceID, Provider: "outlook",
 		Title: input.Title, StartsAt: input.StartsAt, EndsAt: input.EndsAt, TimeZone: input.TimeZone,
 		IsAllDay: input.IsAllDay, StartDate: input.StartDate, EndDate: input.EndDate, Location: input.Location, OrganizerDomain: input.OrganizerDomain, AccountID: input.AccountID,
-		ShareAccountID: input.ShareAccountID, ShareEvidence: input.ShareEvidence, CandidateAccountIDs: input.CandidateAccountIDs,
-		Private: input.Private, SharingMode: calendarSharingMode(override),
+		CandidateAccountIDs: input.CandidateAccountIDs, Private: input.Private, SharingMode: calendarSharingMode(override),
 	}
-	if override != nil && override.Mode == calendarModeAccount && override.AccountID != input.ShareAccountID {
-		// A manual assignment has no match evidence for its account.
-		event.ShareAccountID, event.ShareEvidence = override.AccountID, nil
+	if row.ShareState == calendarStateShared && calendarIdentifier.MatchString(row.ShareAccountID) && calendarIdentifier.MatchString(row.MeetingKey) {
+		event.ShareAccountID = row.ShareAccountID
+		if row.ShareAccountID == input.ShareAccountID {
+			// Match evidence belongs to the automatic account only; a manual assignment has none.
+			event.ShareEvidence = input.ShareEvidence
+		}
 	}
 	// Report a share only once the stored row holds it granted; a sealed claim that was not
 	// granted (or an event stored before share rows existed) is not shared.
