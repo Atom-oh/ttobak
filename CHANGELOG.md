@@ -20,7 +20,7 @@ manifests.
   (#957).
 - Customer update drafts on the web: followed-source settings, an account drafts tab
   and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
-  until the collector and generator ship (#958).
+  until the collector and generator ship (#961).
 
 ### Changed
 
