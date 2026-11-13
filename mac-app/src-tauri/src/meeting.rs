@@ -302,8 +302,10 @@ pub struct Detector {
     /// A meeting whose end was reported while recording; its audio returning
     /// resumes it at once (no sustain), cancelling the pending stop.
     ended_while_recording: Option<Detection>,
-    /// Source keys present in the latest observation.
-    present: HashSet<String>,
+    /// Source keys in the latest observation that may start or resume a
+    /// detection. The stop guard uses the same rule as resume, so an
+    /// output-only notification sound cannot refuse a pending stop.
+    resumable: HashSet<String>,
 }
 
 impl Detector {
@@ -356,7 +358,7 @@ impl Detector {
         // A brief absence restarts the sustain window, not the grace period:
         // the window starts again at the next observation that sees it.
         self.first_seen.retain(|key, _| starting.contains(key));
-        self.present = present.clone();
+        self.resumable = starting.clone();
 
         if !recording {
             self.ended_while_recording = None;
@@ -431,9 +433,10 @@ impl Detector {
         !self.silent && self.active.as_ref().is_some_and(|d| d.id == id)
     }
 
-    /// Whether `source`'s audio was present in the latest observation.
+    /// Whether `source` was observed in a form that resumes its meeting
+    /// (a starter) in the latest observation.
     pub fn is_present(&self, source: &Source) -> bool {
-        self.present.contains(&source.key())
+        self.resumable.contains(&source.key())
     }
 
     /// The announced meeting, if any (a silently tracked one is not offered).
@@ -763,6 +766,14 @@ mod tests {
         d.observe(0, &[ZOOM], true);
         assert!(d.is_present(&ZOOM));
         d.observe(1_000, &[], true);
+        assert!(!d.is_present(&ZOOM));
+    }
+
+    #[test]
+    fn output_alone_does_not_count_as_present_for_the_stop_guard() {
+        let mut d = Detector::default();
+        d.observe(0, &[ZOOM], true);
+        d.observe_audio(1_000, &[ZOOM], &[], true);
         assert!(!d.is_present(&ZOOM));
     }
 

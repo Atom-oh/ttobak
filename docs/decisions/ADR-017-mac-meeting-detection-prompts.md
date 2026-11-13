@@ -32,7 +32,8 @@ without a user confirmation.
   the app or browser releases the microphone. A native app starts or resumes a
   detection only while it captures input: its output alone is also its
   notification and calendar reminder sounds (Zoom announced a meeting for an
-  Outlook reminder). Output-only browser audio checks
+  Outlook reminder); the automatic stop treats a meeting as resumed by the
+  same rule. Output-only browser audio checks
   tabs only for a browser whose tab script already succeeded in this run, so a
   video never raises the first Automation prompt.
 - Native meeting apps (Zoom including its capture host, Teams, Webex, Slack,
