@@ -412,7 +412,7 @@ func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountI
 		}
 		allowed[accountID] = true
 	}
-	rows, err := s.scanDrafts(ctx, userID, accountID)
+	rows, truncated, err := s.scanDrafts(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +450,9 @@ func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountI
 		end = len(visible)
 	}
 	// Only the returned page is opened; an unreadable row is left out of it.
-	page := &model.UpdateDraftsPage{Drafts: make([]model.UpdateDraft, 0, end-offset)}
+	// Only the all-accounts scope reports truncation (per-account lists are
+	// unaffected).
+	page := &model.UpdateDraftsPage{Drafts: make([]model.UpdateDraft, 0, end-offset), Truncated: truncated && accountID == ""}
 	for _, d := range visible[offset:end] {
 		if err := s.repo.OpenDraft(ctx, userID, &d); err != nil {
 			if errors.Is(err, repository.ErrUpdateDraftUnreadable) {
@@ -467,21 +469,24 @@ func (s *CustomerUpdateService) ListDrafts(ctx context.Context, userID, accountI
 }
 
 // scanDrafts follows repository pages until the scope is drained or
-// model.MaxUpdateDraftsScan rows have been read.
-func (s *CustomerUpdateService) scanDrafts(ctx context.Context, userID, accountID string) ([]model.UpdateDraft, error) {
+// model.MaxUpdateDraftsScan rows have been read. It reports truncated when
+// it stopped at the cap with rows remaining (the repository returned a
+// continuation, or more rows than the cap).
+func (s *CustomerUpdateService) scanDrafts(ctx context.Context, userID, accountID string) ([]model.UpdateDraft, bool, error) {
 	var out []model.UpdateDraft
 	next := ""
 	for {
 		rows, cursor, err := s.repo.ListDrafts(ctx, userID, accountID, model.MaxUpdateDraftsScan-len(out), next)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, rows...)
 		if len(out) >= model.MaxUpdateDraftsScan {
-			return out[:model.MaxUpdateDraftsScan], nil
+			truncated := len(out) > model.MaxUpdateDraftsScan || (cursor != "" && cursor != next)
+			return out[:model.MaxUpdateDraftsScan], truncated, nil
 		}
 		if cursor == "" || cursor == next {
-			return out, nil
+			return out, false, nil
 		}
 		next = cursor
 	}
