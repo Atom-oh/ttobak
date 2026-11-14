@@ -45,6 +45,13 @@ target (`Any`) receives every emit. Each page therefore listens with a target sc
 to its own window (`{kind: 'WebviewWindow', label: 'caption-<lang>'}`), and both
 payloads carry `lang`; the page drops any payload for another language.
 
+**Speaker colours.** A push may carry a zero-based speaker number (the interpret
+screen's Transcribe Streaming label for a final segment, ADR-005). The window colours
+that line from a fixed six-colour set that repeats; the first voice keeps the colour
+chosen in the settings, so a single presenter looks as configured. Drafts and lines
+with no number keep the chosen colour. Rust drops a number above 29 instead of
+rejecting the push, and a Mac app older than 0.2.2 ignores the field.
+
 **Idle and failure display.** A failed translation pushes that entry's id with empty
 text, which removes its line, so expired credentials mid-sentence never leave a stale
 draft on the projector. Text longer than the 4,000-byte push cap is cut to its tail

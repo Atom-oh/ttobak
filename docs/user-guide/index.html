@@ -14,12 +14,13 @@
 <body>
 <a class="skip-link" href="#main">본문으로 이동</a>
 <header class="site-header">
-<a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">또</span><span><strong>TTOBAK</strong><small>PRODUCT GUIDE</small></span></a>
+<a class="brand" href="#top"><img class="brand-mark" src="favicon.svg" width="38" height="38" alt=""><span><strong>TTOBAK</strong><small>PRODUCT GUIDE</small></span></a>
 <div class="header-actions"><span class="edition">2026.11 · 한국어</span><button id="theme" type="button" hidden aria-label="어두운 테마로 변경">다크 모드</button><button id="print" type="button" hidden>전체 가이드 · PDF</button><button id="menu-toggle" type="button" hidden aria-expanded="false" aria-controls="contents">목차</button></div>
 </header>
 <progress class="reading-progress" id="reading-progress" max="100" value="0" aria-label="가이드 읽기 진행률" hidden></progress>
 <div class="layout">
 <aside class="sidebar" id="contents" aria-label="제품 가이드 목차">
+<nav class="guide-tabs" aria-label="가이드 종류"><a href="#top" data-tab="web">웹 가이드</a><a href="#mac" data-tab="mac">Mac 앱</a></nav>
 <div class="search-box"><label for="search">가이드 검색</label><div class="search-input"><input id="search" type="search" placeholder="메뉴, 권한, 모델, 오류 검색" disabled><kbd aria-hidden="true">⌘ K</kbd></div><p id="search-status" class="search-status" role="status" aria-live="polite">메뉴별로 읽거나 전체 문서를 검색하세요.</p></div>
 <nav id="chapter-nav" aria-label="전체 가이드">
 <div class="nav-group"><p>시작과 핵심 개념</p><a href="#start">01 시작하기</a><a href="#home">02 Home · 업무 시작 화면</a><a href="#qa">03 어떤 챗을 사용하나요?</a><a href="#models">04 AI 모델과 처리 원리</a></div>
@@ -27,6 +28,7 @@
 <div class="nav-group"><p>고객과 협업</p><a href="#accounts">11 Accounts · 고객 작업 공간</a><a href="#contacts">12 연락처 · 일괄 가져오기</a><a href="#people">13 사람 연결 · 관계 · 시그널</a><a href="#projects">14 Projects · 프로젝트</a><a href="#sharing">15 공유와 권한</a></div>
 <div class="nav-group"><p>문서와 지식</p><a href="#documents">16 Docs · 개인 문서</a><a href="#knowledge">17 Library · 파일과 검색</a><a href="#research">18 Deep Research</a><a href="#news">19 News &amp; Updates</a><a href="#dictionary">20 Custom Dictionary</a></div>
 <div class="nav-group"><p>설정과 조직 운영</p><a href="#billing">21 Billing · 비용 분석</a><a href="#settings">22 Settings · 설정과 연동</a><a href="#admin">23 사용자 초대 · 관리자</a><a href="#devices">24 모바일 · Mac · Profile</a><a href="#security">25 데이터와 보안 경계</a><a href="#workflows">26 팀 도입과 업무 시나리오</a><a href="#troubleshooting">27 문제 해결</a><a href="#glossary">28 용어 · 범위 · 업데이트 기준</a></div>
+<div class="nav-group" data-part="mac"><p>Mac 앱 전용</p><a href="#mac-install">M1 설치와 업데이트</a><a href="#mac-permissions">M2 macOS 권한</a><a href="#mac-record">M3 Mac 녹음 · 시스템 오디오</a><a href="#mac-detect">M4 회의 감지 · 음소거 따라가기</a><a href="#mac-captions">M5 자막 창 · 실시간 통역</a><a href="#mac-intake">M6 로컬 수집 · 리포트 · MCP</a><a href="#mac-trouble">M7 Mac 앱 문제 해결</a></div>
 </nav>
 <p class="sidebar-note">가상 데이터로 만든 공개 가이드입니다.<br>제품 화면의 실제 메뉴명을 사용합니다.</p>
 </aside>
@@ -35,7 +37,7 @@
 <p class="eyebrow">TTOBAK DOCUMENTATION / PRODUCT &amp; OPERATIONS</p>
 <h1>회의의 기록을<br><span>다음 업무의 근거로.</span></h1>
 <p class="lead">또박의 모든 메뉴를 이해하고, 올바른 자료와 권한으로 AI를 사용하세요. 처음 녹음하는 사용자부터 고객·프로젝트 담당자와 관리자까지 함께 보는 제품 가이드입니다.</p>
-<div class="hero-meta"><span>28개 장</span><span>사용 절차 + 동작 원리</span><span>권한 · AI · 문제 해결</span></div>
+<div class="hero-meta"><span>28개 장 + Mac 앱 7개 장</span><span>사용 절차 + 동작 원리</span><span>권한 · AI · 문제 해결</span></div>
 <div class="quick-links"><a class="primary-link" href="#start">처음 사용하는 순서 →</a><a href="#qa">질문에 맞는 챗 찾기 →</a><a href="#troubleshooting">문제 해결 →</a></div>
 <div class="scope-note"><strong>작성 기준: 2026-11-10</strong><p>현재 소스의 화면·처리 흐름·기본 모델 설정을 확인했습니다. 기능의 운영 활성화, 조직 정책, 로그인 계정의 권한에 따라 보이는 항목이 달라집니다. 아래 화면은 앱을 직접 실행해 캡처했습니다. 메뉴·아이콘·배치를 그대로 담았으며, 고객·연락처·회의는 가이드용 예시 데이터입니다. 각 화면의 ‘화면 크게 보기’에서 원본 크기로 확인할 수 있습니다.</p></div>
 </div>
@@ -149,7 +151,7 @@
 <h3 id="calendar-states">빈 일정·실패·오래된 동기화를 구분하세요</h3><div class="table-wrap"><table><caption>개인 캘린더 상태를 읽는 기준</caption><thead><tr><th>상황</th><th>가능한 의미</th><th>할 일</th></tr></thead><tbody><tr><td>일정 없음</td><td>해당 범위에 없음, 아직 동기화 전</td><td>연결과 조회 범위 확인</td></tr><tr><td>최근 동기화 완료</td><td>확인한 범위의 변경을 반영</td><td>현재 시간·시간대 확인</td></tr><tr><td>최근 시도 실패</td><td>토큰·네트워크·충돌 등 문제</td><td>이전 정상 일정과 실패 시각을 분리해 판단</td></tr><tr><td>일정이 이동·취소됐는데 남음</td><td>삭제 근거를 아직 확인하지 못했을 수 있음</td><td>원본과 동기화 경로를 점검</td></tr></tbody></table></div>
 <div class="callout caution"><strong>비공개 일정과 예약 녹음</strong><p>원본 도구가 비공개 표시를 전달하는지 먼저 확인해야 합니다. “읽기 전용”은 “민감한 일정을 자동 제외”한다는 뜻이 아닙니다. 일정이 보이는 것만으로 녹음이나 고객 공유가 자동 실행되지는 않습니다. 로컬 intake 도구의 자동화 기능은 설치 버전과 별도 수용 검증을 확인하세요.</p></div>
 <p class="related"><a href="#accounts">고객 공동 일정</a> · <a href="#settings">MCP 연결</a></p>
-<h3 id="calendar-intake">로컬 MCP로 Outlook을 연결하는 절차</h3><p>현재 소스에는 <code>ttobak-mcp intake</code> 명령줄 수집기가 있습니다. Mac Settings 안에서 수집 서버를 선택하는 UI는 아직 제공되지 않습니다. 지원되는 로컬 Outlook reader와 TTOBAK stdio 어댑터를 준비하고 각각 로그인해야 합니다. 아래 명령은 어댑터 설치가 끝난 컴퓨터에서 실행하는 예시입니다.</p>
+<h3 id="calendar-intake">로컬 MCP로 Outlook을 연결하는 절차</h3><p>현재 소스에는 <code>ttobak-mcp intake</code> 명령줄 수집기가 있습니다. Mac 앱에서는 Settings → Mac 로컬 수집의 [한 번에 설정]으로 같은 준비를 화면에서 할 수 있습니다(<a href="#mac-intake">Mac 앱 탭</a>). 아래는 터미널에서 직접 하는 절차입니다. 지원되는 로컬 Outlook reader와 TTOBAK stdio 어댑터를 준비하고 각각 로그인해야 합니다. 아래 명령은 어댑터 설치가 끝난 컴퓨터에서 실행하는 예시입니다.</p>
 <ol class="steps"><li>로컬 호스트의 MCP 설정에 승인된 Outlook reader가 있는지 확인합니다. reader의 읽기 권한·실행 파일·인증 갱신을 확인합니다.</li><li><code>node ~/.ttobak/server.mjs intake hosts</code>로 지원 호스트에서 발견한 서버 이름·전송 방식·활성 상태를 확인합니다. 이 명령은 설정의 비밀값을 표시하지 않습니다.</li><li><code>node ~/.ttobak/server.mjs intake select calendar --host claude --server aws-outlook-mcp</code>처럼 실제 호스트·서버를 선택합니다. <code>claude</code>, <code>codex</code>, <code>kiro</code>는 MCP 설정을 읽는 호스트이며 캘린더 내용을 이해하는 필수 대화 모델을 뜻하지 않습니다.</li><li><code>node ~/.ttobak/server.mjs intake calendar --dry-run</code>으로 최근 7일·다음 30일의 계획과 건수를 확인합니다. dry run은 TTOBAK에 일정을 쓰지 않습니다. 제목 미리보기를 추가하는 옵션은 로컬 화면에도 민감한 일정 제목이 나타날 수 있으므로 필요한 경우만 사용합니다.</li><li>공개·비공개·반복 일정·이동·취소·종일 일정을 가상 자료로 검증한 뒤 <code>node ~/.ttobak/server.mjs intake calendar</code>를 실행합니다. 최초 TTOBAK 로그인이 필요하면 대화형 인증을 완료합니다.</li><li><code>node ~/.ttobak/server.mjs intake status</code>와 Home·Meetings에서 결과를 비교합니다. 같은 작업을 다시 실행했을 때 중복 변경이 없는지 확인합니다.</li><li>본인 컴퓨터에서 읽기·재시도·제외 정책이 검증된 뒤에만 반복 실행을 설정합니다. 이 가이드는 사용자의 Mac에서 제공자 검증이나 무인 스케줄 설치가 끝났다고 보증하지 않습니다.</li></ol>
 <div class="callout caution"><strong>비공개 일정 식별을 먼저 검증</strong><p>현재 reader가 비공개 일정을 숨기거나 민감도 표시를 반환한다고 가정할 수 없습니다. 민감도가 없으면 기본 수집은 <code>SENSITIVITY_UNKNOWN</code>으로 중단될 수 있습니다. 민감도 미확인 허용 옵션을 켜면 비공개 일정도 개인 TTOBAK 캘린더로 들어올 수 있습니다. 단순 오류 해결을 위해 켜지 말고 조직의 제외 정책과 실제 reader 동작을 먼저 확인합니다.</p></div>
 <p>409 충돌은 서버 버전과 로컬 상태를 조정해야 하는 상황입니다. 화면·지원 안내를 확인하고 재조정 후 실행합니다. 중간 인증 만료·서버 스키마 변경·다른 작업 실행 중 등의 오류는 각각 원인을 해결한 뒤 재시도합니다. 날짜 범위에서 사라진 일정은 자동 삭제 근거로 사용하지 않습니다.</p>
@@ -332,7 +334,7 @@
 <h3 id="devices-profile">Profile · 계정 확인과 로그아웃</h3><p>사이드바 아래 사용자 영역이나 모바일 프로필 메뉴에서 현재 이름·이메일을 확인합니다. 프로필 화면에는 계정 정보와 Settings·Library·사전·활성화된 Billing 등의 진입이 제공됩니다. 공유 컴퓨터에서는 업로드·저장을 확인한 뒤 로그아웃합니다. 다른 계정으로 전환할 때는 복구 오디오와 로컬 파일이 현재 사용자의 것인지 별도로 확인합니다.</p>
 <h3 id="devices-web">웹 브라우저</h3><p>브라우저 녹음은 마이크·선택한 오디오 경로의 권한에 영향을 받습니다. 화면 공유나 시스템 오디오 지원은 브라우저·운영체제에 따라 달라집니다. 헤드셋 변경·절전·탭 닫힘·네트워크 단절에 대비해 녹음 상태와 종료 후 업로드를 확인합니다.</p>
 <h3 id="devices-mobile">모바일에서 오래 녹음할 때</h3><ol class="steps"><li>배터리·저장 공간·네트워크를 확인하고 앱 화면에서 직접 녹음을 시작합니다.</li><li>마이크 권한을 허용하고 입력이 들어오는지 확인합니다. 시작 전 한 번 눌러야 하는 오디오 재개 동작이 있을 수 있습니다.</li><li>화면 잠금·백그라운드·전화 수신은 녹음에 영향을 줄 수 있으므로 중요한 회의에서는 상태를 자주 확인합니다.</li><li>자막이 실패해도 녹음 자체가 계속될 수 있습니다. 자막만 보고 녹음이 중단됐다고 판단하지 않습니다.</li><li>정지·연결 복구 안내가 나오면 화면의 수동 복구 동작을 사용하고, 종료 후 미팅의 업로드·처리 상태를 확인합니다.</li></ol><p>화면 유지·재연결·감시·수동 복구 기능은 중단 위험을 줄이는 장치입니다. 모든 운영체제 상황에서 무중단 녹음을 보장하는 것은 아닙니다.</p>
-<h3 id="devices-mac">Mac 앱의 오디오와 백업</h3><p>최신 Mac 앱(macOS 14.2 이상)은 시스템 오디오와 마이크를 함께 수집합니다. 이전 버전 앱은 시스템 오디오만 녹음할 수 있으므로 본인 목소리도 필요한 경우 앱을 업데이트하고 짧은 시험 녹음으로 확인합니다. 웹 브라우저의 마이크 권한과 macOS의 오디오 권한·장치 설정을 구분합니다. 실제 회의 앱과 헤드셋으로 미리 테스트합니다.</p><ol class="steps"><li>Mac 앱에서 로그인 상태와 마이크·시스템 오디오 권한을 확인합니다.</li><li>회의 감지 제안이 나오더라도 녹음 시작 여부를 직접 확인합니다. 감지 설정 자체가 회의 녹음 완료를 의미하지 않습니다.</li><li>녹음 종료 후 업로드·완료 확인을 기다립니다. 파일 전송은 앱이 수행하며 웹 화면의 자막과 다른 경로입니다.</li><li>이전 녹음 복구 안내가 나오면 파일 정보와 업로드할 현재 계정을 확인한 뒤 선택합니다.</li></ol><div class="callout caution"><strong>복구 파일의 계정 경계</strong><p>남은 WAV 복구는 macOS 사용자에 보관된 파일을 대상으로 하며 TTOBAK 로그인 계정과 연결되어 있지 않습니다. 공유 Mac·계정 전환 후에는 파일이 누구의 회의인지 확인하고 업로드할 계정을 선택합니다.</p></div><p class="related"><a href="#record">녹음 준비와 처리 단계</a> · <a href="#troubleshooting">복구 확인</a></p>
+<h3 id="devices-mac">Mac 앱의 오디오와 백업</h3><p>최신 Mac 앱(macOS 14.2 이상)은 시스템 오디오와 마이크를 함께 수집합니다. 이전 버전 앱은 시스템 오디오만 녹음할 수 있으므로 본인 목소리도 필요한 경우 앱을 업데이트하고 짧은 시험 녹음으로 확인합니다. 웹 브라우저의 마이크 권한과 macOS의 오디오 권한·장치 설정을 구분합니다. 실제 회의 앱과 헤드셋으로 미리 테스트합니다.</p><ol class="steps"><li>Mac 앱에서 로그인 상태와 마이크·시스템 오디오 권한을 확인합니다.</li><li>회의 감지 제안이 나오더라도 녹음 시작 여부를 직접 확인합니다. 감지 설정 자체가 회의 녹음 완료를 의미하지 않습니다.</li><li>녹음 종료 후 업로드·완료 확인을 기다립니다. 파일 전송은 앱이 수행하며 웹 화면의 자막과 다른 경로입니다.</li><li>이전 녹음 복구 안내가 나오면 파일 정보와 업로드할 현재 계정을 확인한 뒤 선택합니다.</li></ol><div class="callout caution"><strong>복구 파일의 계정 경계</strong><p>남은 WAV 복구는 macOS 사용자에 보관된 파일을 대상으로 하며 TTOBAK 로그인 계정과 연결되어 있지 않습니다. 공유 Mac·계정 전환 후에는 파일이 누구의 회의인지 확인하고 업로드할 계정을 선택합니다.</p></div><p>설치, 권한, 회의 감지, 자막 창처럼 Mac 앱에서만 되는 기능은 <a href="#mac">Mac 앱 탭</a>에서 자세히 설명합니다.</p><p class="related"><a href="#record">녹음 준비와 처리 단계</a> · <a href="#troubleshooting">복구 확인</a> · <a href="#mac-install">Mac 앱 설치</a></p>
 </section>
 
 <section class="chapter" id="security" data-keywords="보안 개인정보 모델 데이터 외부 검색 권한 저장 보존 삭제 암호 토큰 공개 링크 읽기 CloudFront JWT">
@@ -362,6 +364,107 @@
 <div class="table-wrap"><table><caption>제품·AI·상태 용어</caption><thead><tr><th>용어</th><th>의미</th><th>사용자가 알아둘 점</th></tr></thead><tbody><tr><td>Account</td><td>고객·조직별 작업 공간</td><td>AWS 청구 계정이나 개인 로그인 계정과 구분</td></tr><tr><td>Project</td><td>여러 자료·고객을 묶는 과제</td><td>연결 고객도 프로젝트 접근 경로가 될 수 있음</td></tr><tr><td>Owner / 멤버</td><td>자료·고객의 소유·참여 역할</td><td>관리자 권한과 별개</td></tr><tr><td>STT / 전사</td><td>오디오를 발언 텍스트로 변환</td><td>회의록 정리·번역 단계와 구분</td></tr><tr><td>화자 분리</td><td>오디오의 발언 구간을 구분</td><td>실제 이름은 사람이 확인해야 함</td></tr><tr><td>회의록 / 노트</td><td>AI로 정리한 결과와 사람이 저장한 내용</td><td>사람의 수정과 AI 재생성 충돌을 확인</td></tr><tr><td>QA / Assistant</td><td>자료에 질문하고 근거를 읽는 대화</td><td>질문 범위·현재 접근 권한을 확인</td></tr><tr><td>KB / Library</td><td>지식 자료와 검색 준비 흐름</td><td>파일 저장 성공만으로 검색 완료가 아님</td></tr><tr><td>색인 / RAG</td><td>관련 자료를 찾아 근거와 함께 답하는 흐름</td><td>찾은 후보가 현재 읽기 가능한지 다시 확인</td></tr><tr><td>MCP</td><td>외부 AI 클라이언트의 도구 연결 방식</td><td>대화 모델과 권한은 연결한 클라이언트·서비스에서 확인</td></tr><tr><td>현재 원본 / revision</td><td>자료의 현재 내용·버전</td><td>교체된 파일과 오래된 답변을 섞지 않기</td></tr><tr><td>CAS / 조건부 저장</td><td>읽은 상태가 여전히 같을 때 변경을 반영</td><td>저장 충돌 시 최신 자료와 내 수정 비교</td></tr><tr><td>lease / 실행 권한</td><td>작업이 일정 시간 소유하는 실행 상태</td><td>중복 실행 방지·복구를 위한 상태</td></tr><tr><td>cursor / 다음 페이지</td><td>이어 읽을 위치와 조건을 담은 값</td><td>원본이 바뀌면 처음부터 다시 읽어야 할 수 있음</td></tr><tr><td>추출 / 미리보기</td><td>AI용 텍스트 확보 / 사람이 볼 화면 생성</td><td>두 작업의 성공 여부를 별도로 확인</td></tr></tbody></table></div>
 <h3 id="guide-basis">이 가이드의 기준과 범위</h3><p>2026년 11월 10일 TTOBAK 소스 기준 메뉴·구현을 확인했습니다. 기본 모델 표는 그 시점의 설정이며 운영자가 변경할 수 있습니다. 환경별 기능 활성화·권한·데이터 준비에 따라 메뉴와 동작이 달라질 수 있습니다.</p><p>공개 화면은 해당 소스의 앱 UI를 직접 캡처한 것입니다. 예시 데이터와 개발용 사용자·관리자 권한으로 확인했으며, Billing은 활성화된 예시 환경의 화면입니다. 운영 데이터와 실제 고객·회의·비용 기록은 사용하지 않았습니다. macOS 네이티브 화면은 이 캡처에 포함되지 않습니다. 운영 배포 완료·연동 승인·모든 플랫폼에서의 동작을 대신 증명하지 않습니다.</p><p>본 가이드는 외부 서비스 계약·조직 보안 정책·공식 가격표를 대체하지 않습니다. 사용하는 환경의 설정과 실제 결과를 기준으로 업무를 진행합니다.</p><p class="related"><a href="#top">처음으로</a> · <a href="#start">첫 사용</a> · <a href="#troubleshooting">문제 해결</a></p>
 </section>
+<div class="guide-part" id="mac" data-part="mac">
+<div class="hero part-hero">
+<p class="eyebrow">TTOBAK FOR MAC / 전용 앱 가이드</p>
+<h2 class="part-title">Mac 앱에서만 되는 일</h2>
+<p class="lead">Mac 앱은 웹 또박을 그대로 열고, 그 위에 Mac에서만 가능한 기능을 더합니다. 다른 참석자의 소리를 내 마이크와 함께 녹음하고, 회의를 감지해 녹음을 제안하고, 화면 위에 자막을 띄웁니다. 웹 화면의 사용법은 웹 가이드 탭을 그대로 따릅니다.</p>
+<div class="hero-meta"><span>Apple Silicon · macOS 14.2 이상</span><span>7개 장</span><span>설치 · 권한 · 녹음 · 문제 해결</span></div>
+<div class="quick-links"><a class="primary-link" href="#mac-install">설치하기 →</a><a href="#mac-permissions">권한 허용하기 →</a><a href="#mac-trouble">문제 해결 →</a></div>
+</div>
+
+<section class="chapter" id="mac-install" data-keywords="Mac 설치 curl install.sh 터미널 업데이트 자동 업데이트 버전 Apple Silicon M1 M2 M3 macOS 14.2 Applications 삭제 TTOBAK Dev">
+<p class="eyebrow">M1 / INSTALL &amp; UPDATE</p><h2>설치와 업데이트</h2><p class="lead">터미널에 명령 한 줄을 붙여넣어 설치합니다. 설치 뒤에는 앱이 새 버전을 스스로 확인하고, 버튼 한 번으로 업데이트합니다.</p>
+<h3 id="mac-install-steps">처음 설치하기</h3><ol class="steps"><li>Apple Silicon(M1 이후) Mac이고 macOS 14.2 이상인지 확인합니다. Intel Mac은 지원하지 않습니다.</li><li>웹 또박의 Settings → <strong>Mac 앱</strong>에서 설치 명령어를 복사하거나 아래 명령을 그대로 사용합니다.</li><li>터미널을 열고 명령을 붙여넣은 뒤 Enter를 누릅니다. 관리자 비밀번호는 묻지 않습니다.</li><li>설치가 끝나면 앱이 자동으로 열립니다. 웹과 같은 계정으로 로그인합니다.</li><li>첫 녹음에서 macOS가 묻는 권한을 허용합니다. <a href="#mac-permissions">권한 안내</a>를 함께 봅니다.</li></ol>
+<pre><code>curl -fsSL https://ttobak.atomai.click/mac/install.sh | sh</code></pre>
+<p>설치 스크립트는 내려받은 파일의 체크섬을 확인한 뒤 <code>/Applications/TTOBAK.app</code>에 설치합니다. 체크섬이 맞지 않으면 아무것도 설치하지 않습니다. 설치에 실패하면 이전 앱을 되돌려 놓습니다.</p>
+<div class="callout"><strong>회사 서명이 아닌 팀 전용 서명</strong><p>이 앱은 Apple 공증 대신 팀 전용 "TTOBAK Dev" 인증서로 서명합니다. 터미널 명령으로 받은 앱은 그대로 실행됩니다. 브라우저로 앱 파일을 따로 내려받아 실행하는 방식은 지원하지 않습니다. 회사 기기 관리 정책이 이 앱을 막으면 관리자에게 문의합니다.</p></div>
+<h3 id="mac-update">업데이트</h3><ul><li>앱은 실행할 때와 이후 6시간마다 새 버전을 확인합니다. 새 버전이 있으면 <strong>새 버전 vX이 있습니다</strong> 창이 뜹니다. <strong>업데이트</strong>를 누르면 내려받아 설치하고 앱이 다시 시작됩니다.</li><li><strong>나중에</strong>를 누르면 그 버전은 다시 자동으로 묻지 않습니다. 더 새 버전이 나오거나 직접 확인하면 다시 안내합니다.</li><li>직접 확인하려면 메뉴 막대의 <strong>TTOBAK</strong> → <strong>업데이트 확인…</strong>을 누릅니다. 새 버전을 이미 찾았다면 메뉴 이름이 <strong>업데이트 가능 (vX)…</strong>로 바뀝니다.</li><li>녹음, 녹음 마무리, 업로드, 통역 중에는 업데이트 창을 띄우지 않고 설치도 하지 않습니다. 작업이 끝나면 다시 안내합니다. 이때 누르면 <strong>녹음이 끝난 뒤 다시 시도해 주세요.</strong>가 보입니다.</li><li>설치 명령을 다시 실행해도 최신 버전으로 바뀝니다. 녹음 중이면 <strong>녹음이 끝난 뒤 다시 실행해 주세요.</strong>를 보여주고 멈춥니다.</li></ul>
+<p>웹 화면의 기능은 웹 배포와 함께 바로 바뀝니다. 앱 업데이트는 녹음·자막 창처럼 Mac 앱 자체의 기능이 바뀔 때만 필요합니다. 오래된 앱에서 새 기능을 쓰면 "앱을 업데이트해주세요" 안내가 나옵니다.</p>
+<h3 id="mac-uninstall">앱 지우기</h3><p>앱을 끄고 <code>/Applications/TTOBAK.app</code>을 휴지통으로 옮깁니다. 업로드하지 못한 녹음이 남아 있을 수 있으니, 먼저 녹음 화면에서 <a href="#mac-leftover">남은 녹음 파일</a> 안내가 없는지 확인합니다.</p>
+<p class="related"><a href="#mac-permissions">권한</a> · <a href="#mac-trouble">설치 문제 해결</a> · <a href="#devices">웹 · 모바일 · Mac 비교</a></p>
+</section>
+
+<section class="chapter" id="mac-permissions" data-keywords="권한 마이크 시스템 오디오 화면 및 시스템 오디오 녹음 손쉬운 사용 접근성 Accessibility 자동화 Automation 알림 개인정보 보호 tccutil">
+<p class="eyebrow">M2 / PERMISSIONS</p><h2>macOS 권한</h2><p class="lead">권한은 기능을 처음 쓸 때 macOS가 묻습니다. 거부해도 다른 기능은 계속 쓸 수 있지만, 해당 기능은 동작하지 않거나 범위가 줄어듭니다.</p>
+<div class="table-wrap"><table><caption>어떤 기능에 어떤 권한이 필요한가요?</caption><thead><tr><th>권한</th><th>묻는 시점</th><th>필요한 기능</th><th>거부하면</th></tr></thead><tbody>
+<tr><td>마이크</td><td>첫 Mac 녹음 또는 첫 통역</td><td>내 목소리 녹음, 통역</td><td>상대방 소리만 녹음됩니다. 녹음이 끝나면 마이크가 조용했다는 경고가 나옵니다.</td></tr>
+<tr><td>화면 및 시스템 오디오 녹음</td><td>첫 Mac 녹음</td><td>다른 참석자의 소리(회의 앱·브라우저 소리) 녹음</td><td>상대방 소리가 녹음되지 않습니다. 30초 동안 조용하면 <strong>참여자 소리가 들리지 않아요</strong> 알림이 뜹니다.</td></tr>
+<tr><td>손쉬운 사용</td><td>Zoom이나 브라우저가 켜진 상태에서 녹음을 시작할 때(앱 실행마다 한 번)</td><td><a href="#mac-mute">음소거 따라가기</a></td><td>회의 앱에서 음소거해도 내 마이크가 계속 녹음됩니다.</td></tr>
+<tr><td>자동화(브라우저별)</td><td>브라우저가 처음 마이크를 쓸 때</td><td>브라우저 회의(Google Meet·Teams·Zoom 웹) 감지</td><td>그 브라우저의 회의는 감지하지 않습니다. 5분 동안 다시 묻지 않습니다.</td></tr>
+<tr><td>알림</td><td>앱이 처음 알림을 보낼 때</td><td>회의 종료 안내, 업데이트 결과, MCP 녹음 시작 안내</td><td>알림 대신 앱 화면의 안내만 보입니다.</td></tr>
+</tbody></table></div>
+<h3 id="mac-permissions-fix">권한을 나중에 바꾸기</h3><ol class="steps"><li>시스템 설정 → 개인정보 보호 및 보안을 엽니다.</li><li>마이크, 화면 및 시스템 오디오 녹음, 손쉬운 사용, 자동화 항목에서 TTOBAK을 켭니다.</li><li>앱을 다시 시작하고 짧은 시험 녹음으로 두 소리가 모두 들리는지 확인합니다.</li></ol>
+<p>앱을 업데이트해도 권한은 유지됩니다. 같은 팀 인증서로 서명하기 때문입니다. 권한 창이 다시 뜨지 않아 꼬였다면 터미널에서 해당 권한을 초기화한 뒤 앱을 다시 엽니다.</p>
+<pre><code>tccutil reset Microphone click.atomai.ttobak.mac
+tccutil reset AudioCapture click.atomai.ttobak.mac
+tccutil reset AppleEvents click.atomai.ttobak.mac</code></pre>
+<p class="related"><a href="#mac-record">Mac 녹음</a> · <a href="#mac-trouble">소리가 안 들릴 때</a></p>
+</section>
+
+<section class="chapter" id="mac-record" data-keywords="Mac 녹음 System 시스템 오디오 마이크 선택 녹음할 마이크 자동 회의 앱 마이크 따라가기 헤드셋 업로드 잠자기 덮개 절전 남은 녹음 파일 복구 WAV 경고">
+<p class="eyebrow">M3 / RECORDING</p><h2>Mac 녹음 · 시스템 오디오</h2><p class="lead">Mac 앱의 녹음은 Mac에서 나는 소리(다른 참석자의 목소리)와 내 마이크를 한 파일로 함께 녹음합니다. 헤드셋을 써도 양쪽이 모두 남습니다.</p>
+<h3 id="mac-record-start">녹음 시작하기</h3><ol class="steps"><li>New Meeting → 실시간 녹음에서 입력 방식으로 <strong>System</strong>을 고릅니다. 이 버튼은 Mac 앱에서만 보입니다.</li><li><strong>녹음할 마이크</strong>를 확인합니다. 기본값 <strong>자동 — 회의 앱 마이크 따라가기</strong>는 회의 앱이 쓰는 마이크를 고릅니다. 목록의 "사용 중", "기본" 표시를 참고해 직접 고를 수도 있습니다.</li><li>제목·고객 등 미팅 정보를 입력하고 녹음을 시작합니다.</li><li>녹음 중에는 사용 중인 마이크가 <strong>마이크: 이름 (앱에서 쓰는 마이크)</strong>로 표시됩니다. 녹음 중에도 마이크를 바꿀 수 있습니다.</li><li>녹음을 끝내면 앱이 파일을 직접 올리고, 이후 전사·회의록 생성은 웹과 같습니다.</li></ol>
+<p>녹음 파일에는 TTOBAK 자신이 내는 소리를 뺀 Mac 전체 소리가 들어갑니다. 음악이나 다른 영상 소리도 함께 녹음되므로 회의 중에는 끕니다. 화면은 녹화하지 않습니다.</p>
+<h3 id="mac-record-warnings">시작·종료 때 보이는 경고</h3><div class="table-wrap"><table><caption>녹음 화면의 경고 문구</caption><thead><tr><th>경고(영문으로 표시)</th><th>의미</th><th>할 일</th></tr></thead><tbody>
+<tr><td>No microphone input device is available</td><td>마이크가 없어 시스템 소리만 녹음합니다.</td><td>마이크·헤드셋 연결을 확인합니다.</td></tr>
+<tr><td>System audio was silent for the whole recording</td><td>상대방 소리가 전혀 녹음되지 않았습니다.</td><td>화면 및 시스템 오디오 녹음 권한을 확인합니다.</td></tr>
+<tr><td>The microphone was silent</td><td>내 목소리가 녹음되지 않았습니다.</td><td>마이크 권한과 선택한 마이크를 확인합니다.</td></tr>
+<tr><td>audio buffers were dropped</td><td>일부 구간의 소리가 빠졌을 수 있습니다.</td><td>녹음본을 들어보고 무거운 작업을 줄입니다.</td></tr>
+<tr><td>Allow TTOBAK in … Accessibility</td><td>음소거 따라가기를 쓸 수 없어 마이크를 항상 녹음합니다.</td><td><a href="#mac-permissions">손쉬운 사용 권한</a>을 켭니다.</td></tr>
+</tbody></table></div>
+<h3 id="mac-record-sleep">잠자기와 덮개</h3><ul><li>녹음 중에는 Mac이 저절로 잠들지 않습니다. 화면은 꺼질 수 있습니다.</li><li>덮개를 닫는 등 Mac이 잠들려 하면 앱이 녹음을 멈추고 바로 업로드합니다. 녹음 뒤 메모를 입력하는 화면만 건너뛰고, 전사와 회의록은 평소처럼 만들어집니다. 업로드가 끝나지 않았으면 깨어난 뒤 이어서 시도합니다.</li><li>외부 모니터에 연결해 덮개를 닫고 쓰는 경우에는 녹음이 계속됩니다.</li><li>그래도 가장 안전한 방법은 업로드 완료를 확인한 뒤 덮개를 닫는 것입니다.</li></ul>
+<h3 id="mac-leftover">남은 녹음 파일 복구</h3><p>앱이 강제 종료되거나 업로드에 실패하면 녹음 파일이 Mac에 남습니다. 녹음 중에는 5초마다 파일에 저장하므로, 강제 종료돼도 마지막 몇 초 외에는 남습니다. 다음에 녹음 화면을 열면 <strong>이전 세션에서 남은 녹음 파일 N개</strong> 카드가 보입니다.</p><ol class="steps"><li>파일 시각과 길이로 어느 회의였는지 확인합니다.</li><li>본인 녹음이 맞으면 <strong>업로드</strong>를 누르고 확인 창에서 계속합니다. 현재 로그인한 계정의 미팅으로 올라갑니다.</li><li>필요 없는 파일은 <strong>삭제</strong>, 판단을 미루려면 <strong>나중에</strong>를 누릅니다.</li></ol><div class="callout caution"><strong>공유 Mac에서는 주인을 확인하세요</strong><p>남은 파일은 Mac 사용자 계정 기준으로 보관되며, TTOBAK 로그인 계정과 연결되어 있지 않습니다. 다른 사람이 같은 Mac에서 녹음한 파일일 수 있습니다. 48시간이 지난 파일은 앱 시작 때 정리될 수 있습니다.</p></div>
+<p class="related"><a href="#record">녹음 준비와 처리 단계(웹)</a> · <a href="#mac-detect">회의 감지</a> · <a href="#mac-trouble">녹음 문제 해결</a></p>
+</section>
+
+<section class="chapter" id="mac-detect" data-keywords="회의 감지 자동 감지 녹음 제안 Zoom Teams Webex Slack 허들 FaceTime Chime Discord Google Meet 브라우저 자동 종료 계속 녹음 지금 종료 음소거 따라가기 mute">
+<p class="eyebrow">M4 / MEETING DETECTION</p><h2>회의 감지 · 음소거 따라가기</h2><p class="lead">회의 앱이 마이크를 쓰기 시작하면 앱이 녹음을 제안합니다. 확인 없이 녹음을 시작하지는 않습니다.</p>
+<h3 id="mac-detect-apps">감지하는 회의</h3><ul><li>데스크톱 앱: Zoom, Microsoft Teams, Webex, Slack 허들, FaceTime, Amazon Chime, Discord.</li><li>브라우저: Chrome, Arc, Edge, Brave, Vivaldi, Safari에서 Google Meet·Teams·Zoom 웹 회의 탭이 열려 있을 때. 브라우저마다 <a href="#mac-permissions">자동화 권한</a>이 필요합니다. 앱은 회의 주소만 확인하고 다른 탭 주소는 버립니다.</li><li>Firefox는 감지하지 않습니다.</li><li>감지는 회의 앱이 마이크를 쓰기 시작할 때만 시작됩니다. 처음부터 마이크를 끄고 듣기만 하면 감지되지 않으니 직접 녹음을 시작합니다. 감지된 뒤에는 마이크를 꺼도 회의 소리가 나는 동안 회의가 이어지는 것으로 봅니다.</li></ul>
+<h3 id="mac-detect-flow">감지부터 종료까지</h3><ol class="steps"><li>마이크를 3초 이상 쓰면 화면 위에 <strong>(앱) 회의가 감지됐어요</strong> 창이 뜹니다.</li><li><strong>녹음 시작</strong>을 누르면 "앱 회의 · 날짜 시각" 제목으로 시스템 오디오 녹음이 시작됩니다. <strong>무시</strong>를 누르면 그 회의가 끝날 때까지 다시 묻지 않습니다.</li><li>녹음을 시작하기 전에 참석자에게 녹음 사실을 알립니다.</li><li>회의 앱의 마이크 사용과 회의 소리가 20초 동안 모두 없으면 회의가 끝난 것으로 봅니다. <strong>회의가 끝난 것 같아요</strong> 알림과 함께 30초 카운트다운이 시작됩니다.</li><li>카운트다운 중 <strong>계속 녹음</strong>을 누르면 녹음이 이어지고, <strong>지금 종료</strong>를 누르면 바로 멈추고 업로드합니다. 회의에 다시 들어가면 카운트다운이 취소됩니다.</li></ol>
+<p>이미 다른 녹음을 하고 있으면 제안하지 않습니다. 끄려면 Settings → <strong>회의 감지 (Mac 앱)</strong>에서 끕니다. 이 설정은 Mac 앱에서만 보입니다.</p>
+<h3 id="mac-mute">음소거 따라가기 (Zoom · Google Meet)</h3><p>회의 앱에서 음소거하면 그동안 내 마이크를 녹음에서 뺍니다. 다른 참석자의 소리는 계속 녹음합니다. 녹음 화면에 <strong>(앱)에서 음소거 중이라 내 목소리는 녹음하지 않습니다.</strong>가 표시됩니다.</p><ul><li><a href="#mac-permissions">손쉬운 사용 권한</a>이 필요합니다.</li><li>Zoom 데스크톱 앱은 언어 설정과 관계없이 따라갑니다.</li><li>Google Meet은 Chrome 계열 브라우저에서, 화면 언어가 한국어나 영어일 때만 따라갑니다. Safari의 Meet은 따라가지 않습니다.</li><li>회의에서 나가면 마이크 녹음이 다시 켜집니다.</li></ul>
+<p class="related"><a href="#mac-record">Mac 녹음</a> · <a href="#settings">Settings</a> · <a href="#mac-trouble">감지가 안 될 때</a></p>
+</section>
+
+<section class="chapter" id="mac-captions" data-keywords="자막 창 오버레이 자막 번역 통역 실시간 통역 영어 한국어 일본어 중국어 AWS 프로필 리전 Bedrock Amazon Translate 화면 공유 mwinit">
+<p class="eyebrow">M5 / CAPTIONS &amp; INTERPRETATION</p><h2>자막 창 · 실시간 통역</h2><p class="lead">다른 앱 위에 떠 있는 자막 창을 열고, 녹음 없이 통역만 할 수도 있습니다.</p>
+<h3 id="mac-caption-window">자막 창 띄우기</h3><ol class="steps"><li>녹음 화면이나 통역 화면의 <strong>자막 창</strong> 패널에서 언어별(한국어·English, 선택 시 일본어·중국어) <strong>열기</strong>를 누릅니다.</li><li>창은 투명하고 항상 맨 위에 있으며, 전체 화면 앱 위와 모든 데스크톱 공간에 표시됩니다. 창 위에 마우스를 올리면 닫기 버튼(×)이 보입니다.</li><li><strong>설정</strong>에서 글꼴, 크기, 글자색, 외곽선, 배경 불투명도를 바꿉니다.</li><li>인식 언어는 녹음을 시작하기 전에만 바꿀 수 있습니다.</li></ol>
+<div class="callout"><strong>화면 공유할 때</strong><p>Zoom에서 창 하나만 공유하면 자막 창이 상대에게 보이지 않습니다. 자막을 함께 보여주려면 전체 화면을 공유합니다.</p></div>
+<h3 id="mac-caption-translate">자막 번역과 비용</h3><p>다른 언어 자막은 사용자의 Mac에 설정된 AWS 프로필로 번역합니다. 자막 창 <strong>설정</strong>에서 <strong>AWS 프로필</strong>과 <strong>리전</strong>을 고르면, 그 계정에 요금이 청구될 수 있다는 확인 창이 뜹니다. <strong>허용</strong>을 눌러야 번역을 시작합니다.</p><ul><li>완성된 문장은 Amazon Bedrock의 GPT-6 Luna로, 진행 중인 문장과 모델 실패 때는 Amazon Translate로 번역합니다.</li><li>"자격 증명이 만료됐어요"가 보이면 터미널에서 <code>mwinit</code>을 실행한 뒤 다시 시도합니다.</li><li>"GPT-6 Luna 모델을 사용할 수 없어요"가 보이면 선택한 계정·리전의 모델 접근 권한을 확인합니다.</li></ul>
+<h3 id="mac-interpret">실시간 통역</h3><p>왼쪽 메뉴의 <strong>통역</strong>(Mac 앱에서만 보임)을 열면 <strong>실시간 통역</strong> 화면이 나옵니다. 미팅을 만들지 않고 들리는 말을 통역합니다.</p><ol class="steps"><li><strong>말하는 언어 (최대 2개)</strong>와 <strong>들을 마이크</strong>를 고릅니다.</li><li><strong>통역 시작</strong>을 누릅니다. 내 마이크와 Mac의 소리를 함께 듣습니다. 자막 창을 열어 화면 위에 띄울 수 있습니다.</li><li>끝나면 <strong>정지</strong>를 누릅니다.</li></ol><p>통역 내용과 소리는 저장하지 않습니다. 10분 동안 말이 인식되지 않거나, Mac이 잠들거나, 녹음을 시작하면 통역이 저절로 멈춥니다. 네트워크가 끊기면 몇 번 자동으로 다시 연결합니다.</p>
+<p class="related"><a href="#models">AI 모델과 처리 원리</a> · <a href="#security">데이터와 보안 경계</a></p>
+</section>
+
+<section class="chapter" id="mac-intake" data-keywords="Mac 로컬 수집 한 번에 설정 연결 설정 지금 수집 자동 수집 Outlook 캘린더 SFDC SpecReq Slack 회의 Midway mwinit SA 활동 리포트 리포트 만들기 MCP 제어 ttobak_app_start_recording">
+<p class="eyebrow">M6 / LOCAL INTAKE &amp; AUTOMATION</p><h2>Mac 로컬 수집 · 리포트 · MCP 제어</h2><p class="lead">사내 도구의 일정·고객 정보는 이 Mac에서 읽어 또박으로 보냅니다. 같은 Mac에서 SA 활동 리포트를 만들고, AI 도구가 녹음을 시작하게 할 수도 있습니다.</p>
+<h3 id="mac-intake-setup">Mac 로컬 수집 설정하기</h3><ol class="steps"><li>Settings → <strong>Mac 로컬 수집</strong>을 엽니다. 이 영역은 Mac 앱에서만 보입니다.</li><li><strong>한 번에 설정</strong>을 누릅니다. 앱이 수집 도구, 스킬 패키지, MCP 서버, 연결 설정을 차례로 확인합니다. 이 Mac에 처음 설치하는 항목이 있으면 <strong>설치</strong> 여부를 묻습니다.</li><li><strong>연결 설정</strong>에서 가져올 소스(캘린더, SFDC, 회의, SpecReq, Slack)를 선택하거나 건너뜁니다. 비공개 일정까지 연결하는 동의는 선택 사항입니다. 조직 정책을 확인한 뒤 필요할 때만 체크합니다.</li><li><strong>지금 수집</strong>으로 한 번 실행하고 결과 표의 소스별 마지막 성공 시각을 확인합니다. 로그인이 필요하면 <strong>TTOBAK 로그인</strong> 버튼이 나타납니다.</li><li>결과가 맞으면 자동 수집 주기를 <strong>매시간</strong>, <strong>하루 한 번</strong>, <strong>하루 두 번</strong> 중에서 고르고 저장합니다.</li><li>"가져올 일정"에서 수락함·내가 주최함·잠정 수락·아직 응답 안 함 중 가져올 응답 상태를 고릅니다.</li></ol>
+<ul><li>Mac이 꺼져 있거나 잠들어 놓친 수집은 앱을 열거나 깨어난 뒤 이어서 실행합니다.</li><li>"Midway 인증이 만료됐어요"가 보이면 터미널에서 <code>mwinit -o</code>를 실행한 뒤 다시 수집합니다.</li><li>터미널에서 설치한 자동 수집도 켜져 있으면 경고가 뜹니다. 같은 수집이 두 번 돌지 않도록 <strong>터미널 자동 수집 끄기</strong>를 누릅니다.</li></ul>
+<p>공유되는 일정의 범위와 비공개 일정 처리는 <a href="#calendar">개인 캘린더</a> 장을 따릅니다.</p>
+<h3 id="mac-report">SA 활동 리포트 만들기</h3><p>SA 활동 화면의 <strong>SA 활동 리포트</strong>에서 <strong>리포트 만들기</strong>를 누릅니다. 기간과 강조할 내용을 입력하고 만듭니다. 이 Mac의 도구로 자료를 모으기 때문에 Mac 앱에서만 만들 수 있습니다. 창을 닫아도 계속 만들며, 기간은 최대 400일입니다.</p>
+<h3 id="mac-mcp">AI 도구에서 녹음 시작·종료</h3><p>같은 Mac의 Claude Code 같은 AI 도구가 TTOBAK MCP로 녹음을 시작·종료할 수 있습니다. 앱이 열려 있고 로그인되어 있어야 합니다. MCP가 녹음을 시작하면 <strong>TTOBAK 녹음 시작</strong> 알림과 함께 앱 창이 앞으로 나오고, 녹음 화면에 "MCP에서 시작한 녹음입니다"가 표시됩니다. 같은 Mac 사용자 계정의 프로그램만 이 기능을 쓸 수 있습니다.</p>
+<p class="related"><a href="#calendar">개인 캘린더</a> · <a href="#settings">Settings · MCP</a></p>
+</section>
+
+<section class="chapter" id="mac-trouble" data-keywords="Mac 문제 해결 설치 실패 not writable Checksum 권한 소리 안 들림 감지 안 됨 업데이트 실패 녹음이 끝난 뒤 앱 업데이트 오래된 버전">
+<p class="eyebrow">M7 / TROUBLESHOOTING</p><h2>Mac 앱 문제 해결</h2><p class="lead">중요한 회의 전에는 헤드셋을 끼고 30초 정도 시험 녹음해, 내 목소리와 상대방 소리가 모두 들리는지 확인합니다.</p>
+<div class="table-wrap"><table><caption>증상별 확인 순서</caption><thead><tr><th>증상</th><th>원인 후보</th><th>할 일</th></tr></thead><tbody>
+<tr><td>설치 명령이 "requires Apple Silicon" 또는 "macOS 14.2" 오류로 멈춤</td><td>지원하지 않는 Mac·OS</td><td>macOS를 업데이트합니다. Intel Mac은 웹 브라우저로 사용합니다.</td></tr>
+<tr><td>"is not writable by this user"</td><td>응용 프로그램 폴더에 쓸 권한이 없음</td><td>관리자 계정으로 로그인해 다시 실행하거나 IT 관리자에게 문의합니다.</td></tr>
+<tr><td>"Checksum mismatch"</td><td>다운로드가 깨졌거나 배포 중</td><td>잠시 뒤 다시 실행합니다. 아무것도 설치되지 않았습니다.</td></tr>
+<tr><td>"TTOBAK is running but cannot report its state"</td><td>업데이트 확인 기능이 없는 오래된 앱이 실행 중</td><td>앱을 직접 종료하고 명령을 다시 실행합니다.</td></tr>
+<tr><td>상대방 소리가 녹음되지 않음</td><td>화면 및 시스템 오디오 녹음 권한 꺼짐, 입력 방식이 System이 아님</td><td><a href="#mac-permissions">권한</a>을 켜고 System을 골라 다시 시험합니다.</td></tr>
+<tr><td>내 목소리가 녹음되지 않음</td><td>마이크 권한 꺼짐, 다른 마이크 선택, 회의 앱에서 음소거</td><td>마이크 권한·<strong>녹음할 마이크</strong>를 확인합니다. 음소거 중이면 정상 동작입니다.</td></tr>
+<tr><td>회의를 감지하지 않음</td><td>감지 꺼짐, 자동화 권한 거부, Firefox, 지원하지 않는 회의 주소</td><td>Settings의 회의 감지와 브라우저별 자동화 권한을 확인합니다. 감지와 상관없이 직접 녹음할 수 있습니다.</td></tr>
+<tr><td>업데이트 창에서 "녹음이 끝난 뒤 다시 시도해 주세요"</td><td>녹음·업로드·통역 진행 중</td><td>작업이 끝난 뒤 메뉴의 <strong>업데이트 확인…</strong>을 누릅니다.</td></tr>
+<tr><td>"업데이트를 확인하지 못했습니다"</td><td>네트워크 문제</td><td>잠시 뒤 다시 확인하거나 설치 명령을 다시 실행합니다.</td></tr>
+<tr><td>"앱을 업데이트해주세요" 안내</td><td>웹 기능은 새 버전인데 앱이 오래됨</td><td>메뉴에서 업데이트합니다.</td></tr>
+<tr><td>녹음 화면에 남은 녹음 파일 카드</td><td>강제 종료·업로드 실패</td><td><a href="#mac-leftover">남은 녹음 파일 복구</a>를 따릅니다.</td></tr>
+</tbody></table></div>
+<p>해결되지 않으면 Mac 기종, macOS 버전, 앱 버전(메뉴 막대 TTOBAK → About TTOBAK), 증상이 나온 시각을 함께 전달합니다. 회의 내용이나 녹음 파일은 보내지 않습니다.</p>
+<p class="related"><a href="#troubleshooting">웹 문제 해결</a> · <a href="#mac-install">설치와 업데이트</a></p>
+</section>
+</div>
 <footer class="site-footer"><p><strong>TTOBAK Product Guide</strong> · 2026.11</p><p>기록 → 근거 → 실행. 정확한 범위와 확인 가능한 결과로 협업합니다.</p><a href="#top">맨 위로 ↑</a></footer>
 </main>
 <aside class="page-toc" aria-label="현재 장의 항목" hidden><p>이 장에서</p><nav id="section-toc"></nav></aside>

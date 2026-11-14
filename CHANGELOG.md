@@ -13,6 +13,7 @@ manifests.
 
 ### Added
 
+- User guide: a Mac app tab covering install and updates, macOS permissions, System audio recording, meeting detection and mute following, caption windows and interpretation, local intake, and troubleshooting; the Mac app opens the guide on that tab.
 - Drag and drop a Remember CSV or .xlsx export onto the contact import fields on the Account page and in Settings, in the browser and the Mac app; the Mac app's other upload drop zones now receive drops too.
 - Personalized Assistant cards and meeting-aware questions; automatic read-only answers to spoken questions, enabled by default with a separate external-search opt-in (#894).
 - Customer update drafts API, storage side only with no collector or generator yet:
@@ -28,7 +29,7 @@ manifests.
   system audio and shows live interpretation with no meeting; no audio file,
   transcript or upload is created. Needs a Mac app build with the
   `start_listening` command (#949).
-- Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes.
+- Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes. The floating caption windows show the same speaker colours from Mac app 0.2.2.
 - Customer update collection: an hourly feed collector and a 10-minute fan-out worker
   deliver new links from followed RSS, site and YouTube sources into each
   subscriber's inbox (#970).

@@ -16,8 +16,9 @@
   (`ShowSpeakerLabel`) and colours each caption line by the speaker who said
   most of its words; the request was accepted for `ko-KR`, `en-US`, `zh-CN`,
   `ja-JP` and two-language identification in `ap-northeast-2` (checked
-  2026-11-14). Labels are kept in memory with the captions. Recording
-  captions and the floating caption windows do not request or show them.
+  2026-11-14). Labels are kept in memory with the captions. On that screen
+  the floating caption windows colour final lines the same way (ADR-018,
+  Mac app 0.2.2 or later). Recording captions do not request labels.
 - A batch Transcribe job attaches its vocabulary through the Korean entry of
   the language settings (ADR-008). The legacy Nova Sonic method is a Transcribe
   job with the same language options and no vocabulary; its name does not mean

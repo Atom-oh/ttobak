@@ -172,12 +172,23 @@
       }
     });
   }
+  // Two guide parts: web chapters and the Mac app tab (#mac). Without JavaScript
+  // both stay visible and the tabs are plain anchors; print always shows both.
+  const macPart = document.getElementById('mac');
+  const tabs = [...document.querySelectorAll('.guide-tabs a')];
+  document.getElementById('top').dataset.part = 'web';
+  for (const section of sections) if (!macPart.contains(section)) section.dataset.part = 'web';
+  for (const group of document.querySelectorAll('#chapter-nav .nav-group:not([data-part])')) group.dataset.part = 'web';
+  const partOf = node => node?.closest('[data-part]')?.dataset.part || null;
+  const partSections = () => sections.filter(section => partOf(section) === root.dataset.guide);
   let active = null;
   const updatePosition = () => {
+    const visible = partSections();
     const max = document.documentElement.scrollHeight - window.innerHeight;
     const current = max > 0 && window.scrollY >= max - 1
-      ? sections[sections.length - 1]
-      : [...sections].reverse().find(section => section.getBoundingClientRect().top <= 150) || sections[0];
+      ? visible[visible.length - 1]
+      : [...visible].reverse().find(section => section.getBoundingClientRect().top <= 150) || visible[0];
+    if (!current) return;
     if (current !== active) {
       active = current;
       for (const link of navLinks) {
@@ -197,8 +208,35 @@
     if (!scheduled) { scheduled = true; requestAnimationFrame(() => { updatePosition(); scheduled = false; }); }
   }, { passive: true });
   window.addEventListener('resize', updatePosition);
+  const setPart = part => {
+    if (!part || root.dataset.guide === part) return false;
+    root.dataset.guide = part;
+    for (const tab of tabs) {
+      if (tab.dataset.tab === part) tab.setAttribute('aria-current', 'page');
+      else tab.removeAttribute('aria-current');
+    }
+    active = null;
+    return true;
+  };
+  const targetOf = hash => {
+    if (hash.length < 2) return null;
+    try { return document.getElementById(decodeURIComponent(hash.slice(1))); } catch { return null; }
+  };
+  // Switch before the browser follows the link, so a hidden target becomes visible first.
+  document.addEventListener('click', event => {
+    const anchor = event.target.closest('a[href^="#"]');
+    if (anchor) setPart(partOf(targetOf(anchor.hash)));
+  }, true);
+  window.addEventListener('hashchange', () => {
+    const target = targetOf(window.location.hash);
+    // An empty fragment (back to the page start) returns to the web part.
+    if (setPart(target ? partOf(target) : 'web')) (target || document.getElementById('top')).scrollIntoView();
+    updatePosition();
+  });
+  setPart(partOf(targetOf(window.location.hash)) || 'web');
   progress.hidden = false;
   document.querySelector('.page-toc').hidden = false;
   root.classList.add('js-ready');
+  targetOf(window.location.hash)?.scrollIntoView();
   updatePosition();
 })();

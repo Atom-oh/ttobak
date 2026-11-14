@@ -284,15 +284,27 @@
           });
         }
 
-        function upsert(id, order, text) {
+        // One colour per speaker, bright enough for the outline and a dark
+        // backdrop. The first voice keeps the colour chosen in the settings,
+        // so a single presenter looks as configured; colours repeat after six.
+        var SPEAKER_COLORS = ['', '#7ee2a8', '#ffd166', '#ff9aa2', '#7fdbff', '#e0a3ff'];
+        function speakerColor(speaker) {
+          if (typeof speaker !== 'number' || speaker < 0 || speaker % 1 !== 0) return '';
+          return SPEAKER_COLORS[speaker % SPEAKER_COLORS.length];
+        }
+
+        // A speaker arrives with the final text; a draft keeps the chosen colour.
+        function upsert(id, order, text, speaker) {
           var e = entries.get(id);
           if (e) {
             e.text = text;
+            e.el.style.color = speakerColor(speaker);
             render(false);
             return;
           }
           var el = document.createElement('p');
           el.className = 'line';
+          el.style.color = speakerColor(speaker);
           el.addEventListener('transitionend', function () { el.classList.remove('moving'); });
           entries.set(id, { order: order, text: text, el: el });
           render(true);
@@ -339,7 +351,7 @@
               clearLines();
             }
             if (p.isFinal === true) markFinal(p.id);
-            upsert(p.id, typeof p.order === 'number' ? p.order : 0, p.text);
+            upsert(p.id, typeof p.order === 'number' ? p.order : 0, p.text, p.speaker);
           }
         }
 

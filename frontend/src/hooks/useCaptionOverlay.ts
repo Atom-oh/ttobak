@@ -25,7 +25,9 @@ import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation'
 // Mac app only: drives the floating caption windows. Outside the Mac app the
 // hook makes no calls and reports `supported: false`. Caption text is never logged.
 
-export type CaptionSegmentHandler = (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
+export type CaptionSegmentHandler = (
+  id: string, text: string, isFinal: boolean, languageCode?: string, speaker?: string,
+) => void;
 
 export interface CaptionOverlayState {
   supported: boolean;
@@ -198,8 +200,8 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     });
   }, [applyLangs]);
 
-  const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
-    controllerRef.current?.update(id, text, isFinal, languageCode);
+  const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode, speaker) => {
+    controllerRef.current?.update(id, text, isFinal, languageCode, speaker);
   }, []);
 
   const replaceSettings = (settings: CaptionSettings) => {
