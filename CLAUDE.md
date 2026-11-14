@@ -35,7 +35,7 @@ documentation stays English.
 |---|---|---|
 | Web | Next.js 16, React 19, Tailwind 4, TipTap; production static export | `frontend/package.json`, `frontend/next.config.ts`, `frontend/src/` |
 | API | Go 1.27.3, ARM64 Lambda, chi | `backend/go.mod`, `backend/cmd/api/main.go` |
-| Go functions | Eight zip entry points: api, transcribe, summarize, process-image, kb, research-worker, websocket, ws-authorizer | `backend/cmd/`, `infra/lib/gateway-stack.ts` |
+| Go functions | Nine zip entry points: api, transcribe, summarize, process-image, kb, research-worker, websocket, ws-authorizer, customer-updates | `backend/cmd/`, `infra/lib/gateway-stack.ts` |
 | Document conversion | Separate Go container with LibreOffice; not a zip | `backend/cmd/convert-doc/` |
 | Python | QA, crawler, simulator and document-extraction Lambdas; separate research-agent container | `backend/python/`, each requirements/Dockerfile |
 | Batch STT | GPU Spot ECS; production faster-whisper and separate benchmark engines | `backend/whisper/`, `infra/lib/whisper-stack.ts` |

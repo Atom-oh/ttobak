@@ -35,8 +35,8 @@ describe('CrawlerStack', () => {
     template = Template.fromStack(stack);
   });
 
-  test('creates 4 legacy and 6 private publication Lambda functions', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 10);
+  test('creates 4 legacy, 6 private publication and 2 customer update Lambda functions', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 12);
   });
 
   test('creates Step Functions state machine', () => {
@@ -143,7 +143,9 @@ describe('CrawlerStack', () => {
       template.hasResourceProperties('AWS::Lambda::Function', {
         FunctionName: 'ttobak-news-manual', Handler: 'news_manual.handler',
       });
-      const configs = template.findResources('AWS::Lambda::EventInvokeConfig');
+      const configs = template.findResources('AWS::Lambda::EventInvokeConfig', {
+        Properties: { FunctionName: { Ref: starterId() } },
+      });
       expect(Object.values(configs).map((c: any) => c.Properties)).toEqual([{
         FunctionName: { Ref: starterId() },
         Qualifier: '$LATEST',

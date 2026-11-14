@@ -4,6 +4,7 @@ import { join } from 'node:path';
 const zipTargets = [
   'cmd/api', 'cmd/transcribe', 'cmd/summarize', 'cmd/process-image',
   'cmd/kb', 'cmd/research-worker', 'cmd/websocket', 'cmd/ws-authorizer',
+  'cmd/customer-updates',
 ].sort();
 
 test('backend Go build paths use the approved toolchain baseline', () => {

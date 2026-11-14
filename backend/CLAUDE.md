@@ -1,6 +1,6 @@
 # Go backend
 
-Follow the root guide. `cmd/` has eight zip Lambda entry points, a separate
+Follow the root guide. `cmd/` has nine zip Lambda entry points, a separate
 `convert-doc` container, and maintenance commands; do not treat every directory
 as a zip deployment. GatewayStack defines artifact packaging.
 

@@ -2,9 +2,9 @@
 
 - Status: Accepted. Merges earlier records; each section below keeps one record's
   rules, and dates inside mark owner decisions.
-- Implementation checked: 2026-11-12.
+- Implementation checked: 2026-11-13.
 
-A shared daily crawl feeds the insights knowledge base; results pass a relevance gate and can be curated; versioned news publication is a separate, conditional pipeline. The sections below keep, in order, the crawler insights record, the pipeline repair and service discovery record, the relevance gate and curation record, and the conditional news publication record.
+A shared daily crawl feeds the insights knowledge base; results pass a relevance gate and can be curated; versioned news publication is a separate, conditional pipeline. The sections below keep, in order, the crawler insights record, the pipeline repair and service discovery record, the relevance gate and curation record, the conditional news publication record, and customer update collection.
 
 ## Shared Crawled Knowledge and Insights
 
@@ -508,3 +508,101 @@ GPT web-search path.
 - `infra/test/news-publication.test.ts`
 - `backend/python/qa/news_text.py`
 - `backend/python/qa/test_news_text.py`
+
+## Customer update collection
+
+Followed RSS, site and YouTube sources feed per-user customer update inboxes
+(drafts are a separate topic). Two functions share one table and never share a
+writer for the same rows.
+
+- **Registry.** `CUFEEDS` rows list active distinct feeds. State and entries
+  live under `CUFEED#{feedHash}`. The collector (`update_collector.handler`,
+  hourly) fetches each distinct feed once through the validated transport,
+  https only, with a 2 MiB response cap and a feed `Accept` header. Many
+  followers never multiply fetches. When followers of one feed disagree on kind,
+  `site` wins. Feeds run in a shuffled order each run, and no new feed starts
+  with less than 270 s remaining (one feed can take about 250 s). Feed and page
+  URLs over 2,048 characters are dropped.
+- **Entries and baseline.** Every run keeps only entries published from 3 days
+  ago to one day ahead, the newest 50, and drops undated entries. A `site` source with no feed
+  stores the whole page as its link baseline on its first run and delivers
+  nothing; later runs deliver at most 30 new links and record only delivered
+  links (plus the previous baseline) as known, so the rest arrive on later runs.
+  The baseline holds a 16-hex SHA-256 prefix per link (at most 2,000), never
+  URLs; older URL-valued baselines are normalized on read. Other kinds never use
+  the site path. The state is read with a strongly consistent `GetItem`, so a
+  just-committed baseline is never missed and new links are not marked known
+  undelivered.
+- **Write intent.** Entries are written with put-if-absent, then the state's
+  `updatedAt` is published. Before the first entry put of a run that has entries
+  to write, the collector sets `writingAt` (the run's `seenAt` time) with an
+  attribute-level update conditioned on the stored marker still being absent or
+  the value the run read; the run's final state update, on success or failure,
+  removes it under the same condition (absent, or the value the run set or
+  read). An unacknowledged marker (`updatedAt` missing or older) is treated as
+  abandoned only when it is more than 20 minutes older than the run's time (the
+  function timeout is 10 minutes); the run then publishes `updatedAt` as the
+  later of that marker and its own time when it wrote entries, even when every
+  put was a duplicate, and removes the marker. A younger marker belongs to an
+  overlapping invocation: the run skips the feed (counted `skipped`) without
+  fetching, publishing or clearing it. A marker that appears after the run's
+  read makes its own marker write fail (feed skipped) or its final update retry
+  without publishing `updatedAt` or removing the marker. Entry puts use a
+  DynamoDB resource limited to one attempt in total (`total_max_attempts: 1`;
+  `max_attempts` would still allow one retry), so a put whose
+  response was lost surfaces as a store error instead of a retried conditional
+  failure that reads as "already exists"; a store error leaves the marker, and
+  the first run after the fence publishes it. The Go model ignores the
+  attribute.
+- **Failures.** A failed run records one code (`fetch`, `content_type`, `too_large`, `parse` or `no_feed`) and
+  a failure count on the state row; the source list shows it as a feed error.
+  DynamoDB errors (throttling, transient get/put/update failures) are not feed
+  failures: they are contained to that feed and counted as `failed` in the run
+  stats, but set no error and do not raise the failure count.
+  A failure while using a stored `resolvedUrl` also removes it, so the next run
+  rediscovers the feed from the subscription URL. After 5 consecutive failures
+  the feed is retried at most once a day. A successful run resets the count.
+- **Retention.** Entries expire after 7 days through `pendingShareExpiresAt`.
+- **Fan-out.** Python never writes `USER#` rows. The Go worker
+  (`customer-updates`, `{"kind":"tick"}` every 10 minutes, reserved concurrency
+  1) reads registry subscriptions, delivers entries to `USER#` inbox rows with
+  put-if-absent, and advances a per-subscriber `fannedAt` watermark. The
+  collector stamps `seenAt` and `updatedAt` with its run-start time but writes
+  later, so the watermark never uses the worker's clock. A feed state with a
+  zero `updatedAt` is skipped. A first delivery (zero `fannedAt`) delivers the
+  newest 50 entries seen in the last 72 hours and skips the older backlog. Later
+  deliveries read entries seen after `max(fannedAt, tick - 72h)`, oldest first,
+  at most 50 per run; that cap never splits a group of entries with the same
+  `seenAt`, and a capped delivery sets `fannedAt` to the last delivered `seenAt`.
+  Otherwise `fannedAt` becomes the state's `updatedAt` as read before the
+  entries were listed, so entries still being written are read again next tick.
+  Both the state `GetItem` and the entry `Query` are strongly consistent, so a
+  lagging replica cannot omit entries the watermark then moves past.
+- **Legacy sources.** Non-Slack sources store their `feedHash` (not exposed in
+  the API). A source without one predates the registry: listing sources heals it
+  by upserting its registry row with its current status (keeping any `fannedAt`)
+  and storing the hash in one transaction that requires the status unchanged;
+  failures are logged and do not fail the list. Pause, resume and delete resolve
+  the source with a strongly consistent keyed read and write the label, status
+  and registry row in one transaction. They use the stored hash, so a later
+  normalization change cannot orphan a registry row.
+  A feed state read failure omits that source's feed error.
+- **Logs.** Only the first 12 characters of the feed hash, counts and DynamoDB
+  error codes (for example `ProvisionedThroughputExceededException`); never
+  URLs, titles, keys, error messages or user data.
+- **IAM.** The collector role holds `Query` on leading key `CUFEEDS` and
+  `GetItem`/`PutItem`/`UpdateItem`/`Query` on `CUFEED#*`. The worker role holds
+  exactly the actions its repository uses per prefix: `PutItem`/`UpdateItem` on
+  `USER#*`, `Query`/`UpdateItem` on `CUFEEDS`, `GetItem`/`Query` on `CUFEED#*`
+  and `PutItem` on `CUURL#*` and `CUPENDING`. Neither has KMS, S3, Bedrock or
+  secret access; neither has a function URL.
+- **Retries and concurrency.** Both schedule targets and both functions' Lambda
+  asynchronous invocation configs use zero retries; the next scheduled run is
+  the retry. Both functions have reserved concurrency 1. Maximum event age is 30
+  minutes for the collector and 10 minutes for the worker, so a throttled event
+  does not run hours late. Reserved concurrency does not rule out every overlap
+  (at-least-once delivery), so the collector also keeps the marker fence above.
+
+Evidence: `backend/python/crawler/update_collector.py`,
+`backend/python/crawler/update_feeds.py`, `backend/cmd/customer-updates/main.go`,
+`infra/lib/customer-updates.ts`, `infra/test/customer-updates.test.ts`.

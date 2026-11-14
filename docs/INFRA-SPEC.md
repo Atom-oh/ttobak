@@ -902,6 +902,41 @@ same way. No stack edge changes. Deploy AiStack (the role) before GatewayStack
 first fails the lookups with access denied, so the route answers 503 rather
 than accepting unchecked.
 
+## Customer update collection delivery
+
+The `CustomerUpdates` construct in TtobakCrawlerStack (`infra/lib/customer-updates.ts`)
+declares two functions that share the main table through `TABLE_NAME`, with
+no VPC, function URL or other public resource (ADR-004):
+
+- `ttobak-customer-update-collector` (Python 3.12 ARM64, asset
+  `backend/python/crawler`, handler `update_collector.handler`, 512 MB, 10
+  minutes, reserved concurrency 1) runs from rule
+  `ttobak-customer-update-collect`, `rate(1 hour)`, no retries. Its own role has
+  `Query` on leading key `CUFEEDS` and `GetItem`/`PutItem`/`UpdateItem`/`Query`
+  on `CUFEED#*`, no `USER#` key, no index and no Scan, plus its own log group.
+  It reads feed state with a strongly consistent `GetItem` and sets a
+  `writingAt` write-intent marker (compare-and-set) before writing entries; a
+  later run publishes an unacknowledged marker only once it is over 20 minutes
+  old and skips the feed while a younger one exists. Entry puts use an SDK
+  client with retries disabled. DynamoDB errors do not count as feed failures
+  (ADR-004).
+- `ttobak-customer-updates` (`provided.al2023` ARM64, asset
+  `backend/cmd/customer-updates` built as `bootstrap`, 512 MB, 5 minutes,
+  reserved concurrency 1) runs from rule `ttobak-customer-update-tick`,
+  `rate(10 minutes)`, input `{"kind":"tick"}`, no retries, 10-minute maximum
+  event age. Its own role has one statement per leading-key prefix:
+  `PutItem`/`UpdateItem` on `USER#*`, `Query`/`UpdateItem` on `CUFEEDS`,
+  `GetItem`/`Query` on `CUFEED#*`, and `PutItem` on `CUURL#*` and `CUPENDING`,
+  plus its own log group. Its feed state read and entry Query are strongly
+  consistent.
+
+Both functions also set Lambda asynchronous invocation retries to 0 and a
+maximum event age (collector 30 minutes, worker 10 minutes) in
+`AWS::Lambda::EventInvokeConfig`, since the schedule target setting does not
+cover Lambda's own retries. Both policies use `dynamodb:LeadingKeys` with a
+`Null` guard and have no KMS, S3, Bedrock or secret statement. Deploy
+TtobakCrawlerStack with `--exclusively`.
+
 ## Summary privacy writer activation
 
 GatewayStack also declares `AccountDescendantReadsEnabled` (`0` or `1`, default

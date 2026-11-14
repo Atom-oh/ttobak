@@ -358,21 +358,32 @@ func (r *CustomerUpdateRepository) ListNewestFeedEntries(ctx context.Context, fe
 	return selectNewestFeedEntries(all, since, limit), nil
 }
 
-func (r *CustomerUpdateRepository) queryFeedEntries(ctx context.Context, feedHash string, limit int) ([]model.UpdateFeedEntry, error) {
-	if feedHash == "" || limit < 1 {
-		return nil, fmt.Errorf("feedHash and a positive limit are required")
-	}
+// feedEntriesQueryInput builds the entry Query. It is strongly consistent: the
+// fan-out advances fannedAt to the consistently read state's updatedAt, so an
+// entry missing from a lagging replica would never be delivered.
+func feedEntriesQueryInput(tableName, feedHash string) (*dynamodb.QueryInput, error) {
 	expr, err := expression.NewBuilder().WithKeyCondition(
 		expression.Key("PK").Equal(expression.Value(model.UpdateFeedPK(feedHash))).
 			And(expression.Key("SK").BeginsWith(model.PrefixUpdateFeedEntry))).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
-	input := &dynamodb.QueryInput{
-		TableName:                 aws.String(r.tableName),
+	return &dynamodb.QueryInput{
+		TableName:                 aws.String(tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
+	}, nil
+}
+
+func (r *CustomerUpdateRepository) queryFeedEntries(ctx context.Context, feedHash string, limit int) ([]model.UpdateFeedEntry, error) {
+	if feedHash == "" || limit < 1 {
+		return nil, fmt.Errorf("feedHash and a positive limit are required")
+	}
+	input, err := feedEntriesQueryInput(r.tableName, feedHash)
+	if err != nil {
+		return nil, err
 	}
 	var all []model.UpdateFeedEntry
 	for {

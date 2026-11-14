@@ -239,3 +239,24 @@ func TestSetSourceStatusWithFeedSubItemsFoldsLabel(t *testing.T) {
 		t.Fatalf("label not folded into source update: %v %v", src.ExpressionAttributeNames, src.ExpressionAttributeValues)
 	}
 }
+
+func TestFeedEntriesQueryIsConsistent(t *testing.T) {
+	in, err := feedEntriesQueryInput("tbl", "fh1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.ConsistentRead == nil || !*in.ConsistentRead {
+		t.Fatalf("entry query must be strongly consistent: %v", in.ConsistentRead)
+	}
+	if in.TableName == nil || *in.TableName != "tbl" || in.IndexName != nil {
+		t.Fatalf("unexpected table/index: %v %v", in.TableName, in.IndexName)
+	}
+	var vals []string
+	for _, v := range in.ExpressionAttributeValues {
+		vals = append(vals, v.(*types.AttributeValueMemberS).Value)
+	}
+	joined := strings.Join(vals, ",")
+	if !strings.Contains(joined, model.UpdateFeedPK("fh1")) || !strings.Contains(joined, model.PrefixUpdateFeedEntry) {
+		t.Fatalf("unexpected key condition values: %v", vals)
+	}
+}
