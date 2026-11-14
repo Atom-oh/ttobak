@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -285,7 +287,7 @@ func (s *UserAdminService) ListUsers(ctx context.Context) (*model.AdminUserListR
 	summaries := make([]model.AdminUserSummary, 0, len(users))
 	for _, u := range users {
 		userID := aws.ToString(u.Username)
-		var email, name string
+		var email, name, department string
 		var emailVerified bool
 		for _, attr := range u.Attributes {
 			switch aws.ToString(attr.Name) {
@@ -295,6 +297,8 @@ func (s *UserAdminService) ListUsers(ctx context.Context) (*model.AdminUserListR
 				emailVerified = aws.ToString(attr.Value) == "true"
 			case "name":
 				name = aws.ToString(attr.Value)
+			case "custom:department":
+				department = aws.ToString(attr.Value)
 			}
 		}
 
@@ -308,6 +312,7 @@ func (s *UserAdminService) ListUsers(ctx context.Context) (*model.AdminUserListR
 			UserID:        userID,
 			Email:         email,
 			Name:          name,
+			Department:    department,
 			Status:        string(u.UserStatus),
 			Enabled:       u.Enabled,
 			IsAdmin:       adminSet[userID],
@@ -519,4 +524,108 @@ func (s *UserAdminService) ForceResetPassword(ctx context.Context, targetUserID 
 		return fmt.Errorf("failed to reset password: %w", err)
 	}
 	return nil
+}
+
+const (
+	maxTeamSyncItems      = 200
+	teamSyncDirectoryMail = "@amazon.com"
+	departmentAttribute   = "custom:department"
+)
+
+var teamValuePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
+
+// ValidTeamValue reports whether v is an acceptable custom:department value.
+func ValidTeamValue(v string) bool {
+	return teamValuePattern.MatchString(v)
+}
+
+// SyncTeams writes custom:department for each item, the only custom:*
+// attribute this service ever writes. Per item: user must exist, be a verified
+// @amazon.com user, carry a valid team, and match Expected before any write.
+// Item-level faults are reported in the response; only request-level faults
+// (empty, too many, duplicate userId) return an error (ErrInvalidInput).
+func (s *UserAdminService) SyncTeams(ctx context.Context, actorUserID string, items []model.TeamSyncItem) (*model.TeamSyncResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("%w: items must not be empty", ErrInvalidInput)
+	}
+	if len(items) > maxTeamSyncItems {
+		return nil, fmt.Errorf("%w: at most %d items allowed", ErrInvalidInput, maxTeamSyncItems)
+	}
+	seen := make(map[string]struct{}, len(items))
+	for _, it := range items {
+		if _, dup := seen[it.UserID]; dup {
+			return nil, fmt.Errorf("%w: duplicate userId", ErrInvalidInput)
+		}
+		seen[it.UserID] = struct{}{}
+	}
+
+	resp := &model.TeamSyncResponse{
+		Updated:   []string{},
+		Conflicts: []string{},
+		Rejected:  []model.TeamSyncRejection{},
+	}
+	reject := func(userID, code string) {
+		resp.Rejected = append(resp.Rejected, model.TeamSyncRejection{UserID: userID, Code: code})
+	}
+
+	for _, it := range items {
+		current, err := s.cognito.AdminGetUser(ctx, &cognitoidp.AdminGetUserInput{
+			UserPoolId: aws.String(s.poolID),
+			Username:   aws.String(it.UserID),
+		})
+		if err != nil {
+			var notFound *cognitoidptypes.UserNotFoundException
+			if errors.As(err, &notFound) {
+				reject(it.UserID, "NOT_FOUND")
+			} else {
+				log.Printf("SyncTeams: lookup failed for %s: %v", it.UserID, err)
+				reject(it.UserID, "COGNITO_ERROR")
+			}
+			continue
+		}
+
+		var email, department string
+		verified := false
+		for _, a := range current.UserAttributes {
+			switch aws.ToString(a.Name) {
+			case "email":
+				email = aws.ToString(a.Value)
+			case "email_verified":
+				verified = aws.ToString(a.Value) == "true"
+			case departmentAttribute:
+				department = aws.ToString(a.Value)
+			}
+		}
+		if !verified || !strings.HasSuffix(strings.ToLower(email), teamSyncDirectoryMail) {
+			reject(it.UserID, "NOT_DIRECTORY_USER")
+			continue
+		}
+		if !ValidTeamValue(it.Team) {
+			reject(it.UserID, "INVALID_TEAM")
+			continue
+		}
+		if department != it.Expected {
+			resp.Conflicts = append(resp.Conflicts, it.UserID)
+			continue
+		}
+		if department == it.Team {
+			resp.Unchanged++
+			continue
+		}
+
+		if _, err := s.cognito.AdminUpdateUserAttributes(ctx, &cognitoidp.AdminUpdateUserAttributesInput{
+			UserPoolId: aws.String(s.poolID),
+			Username:   aws.String(it.UserID),
+			UserAttributes: []cognitoidptypes.AttributeType{
+				{Name: aws.String(departmentAttribute), Value: aws.String(it.Team)},
+			},
+		}); err != nil {
+			log.Printf("SyncTeams: update failed for %s: %v", it.UserID, err)
+			reject(it.UserID, "COGNITO_ERROR")
+			continue
+		}
+		log.Printf("admin audit: actor=%s target=%s action=SyncTeam old=%q new=%q", actorUserID, it.UserID, department, it.Team)
+		resp.Updated = append(resp.Updated, it.UserID)
+	}
+	return resp, nil
 }

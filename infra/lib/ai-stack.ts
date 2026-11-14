@@ -155,8 +155,9 @@ export class AiStack extends cdk.Stack {
     // user-management panel's delete/disable/enable/reset-password actions,
     // its own status lookups before acting, and its last-admin guard.
     // AdminUpdateUserAttributes backs display-name edits (self-service and
-    // admin); the service writes only the `name` attribute, never custom:*
-    // attributes that cc-on-bedrock uses for authorization in the shared pool.
+    // admin); the service writes `name`, and `custom:department` only through the
+    // admin team sync. It never writes another custom:* attribute that
+    // cc-on-bedrock uses for authorization in the shared pool.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CognitoAdminUserManagement',

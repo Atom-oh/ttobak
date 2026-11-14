@@ -3,12 +3,15 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/ttobak/backend/internal/model"
 )
 
 // fakeCognitoAdminAPI is a configurable in-memory implementation of
@@ -638,6 +641,197 @@ func TestRecoveryActionsRejectDisabledOrUnverifiedUsersBeforeMail(t *testing.T) 
 			}
 			if !errors.Is(err, test.want) || len(c.resetPwdUsers) != 0 || len(c.createUserCalls) != 0 {
 				t.Fatalf("unexpected recovery result: %v", err)
+			}
+		})
+	}
+}
+
+// teamSyncUser builds an AdminGetUser result for team-sync tests.
+func teamSyncUser(email string, verified bool, dept string) *cognitoidp.AdminGetUserOutput {
+	attrs := []cognitoidptypes.AttributeType{
+		{Name: aws.String("email"), Value: aws.String(email)},
+		{Name: aws.String("email_verified"), Value: aws.String(map[bool]string{true: "true", false: "false"}[verified])},
+	}
+	if dept != "" {
+		attrs = append(attrs, cognitoidptypes.AttributeType{Name: aws.String("custom:department"), Value: aws.String(dept)})
+	}
+	return &cognitoidp.AdminGetUserOutput{UserAttributes: attrs, Enabled: true}
+}
+
+func teamSyncService(users map[string]*cognitoidp.AdminGetUserOutput) (*UserAdminService, *fakeCognitoAdminAPI) {
+	cognito := &fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, in *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			if u, ok := users[aws.ToString(in.Username)]; ok {
+				return u, nil
+			}
+			return nil, &cognitoidptypes.UserNotFoundException{}
+		},
+	}
+	return newTestUserAdminService(cognito, &fakeUserAdminRepo{}), cognito
+}
+
+func TestValidTeamValue(t *testing.T) {
+	long50 := "a" + strings.Repeat("b", 49)
+	for _, ok := range []string{"mihong", "a", "team-1", long50} {
+		if !ValidTeamValue(ok) {
+			t.Errorf("ValidTeamValue(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "Mihong", "-x", "a b", "a=b", "a,b", long50 + "c"} {
+		if ValidTeamValue(bad) {
+			t.Errorf("ValidTeamValue(%q) = true, want false", bad)
+		}
+	}
+}
+
+func TestListUsers_IncludesDepartment(t *testing.T) {
+	cognito := &fakeCognitoAdminAPI{
+		listUsersFn: func(context.Context, *cognitoidp.ListUsersInput) (*cognitoidp.ListUsersOutput, error) {
+			return &cognitoidp.ListUsersOutput{Users: []cognitoidptypes.UserType{
+				{Username: aws.String("u1"), Attributes: []cognitoidptypes.AttributeType{
+					{Name: aws.String("custom:department"), Value: aws.String("mihong")},
+				}},
+				{Username: aws.String("u2")},
+			}}, nil
+		},
+	}
+	resp, err := newTestUserAdminService(cognito, &fakeUserAdminRepo{}).ListUsers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Users[0].Department != "mihong" || resp.Users[1].Department != "" {
+		t.Fatalf("departments = %q, %q", resp.Users[0].Department, resp.Users[1].Department)
+	}
+}
+
+func TestTeamSync_WritesOnlyDepartment(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{"u1": teamSyncUser("a@amazon.com", true, "")})
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{{UserID: "u1", Team: "mihong"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Updated) != 1 || resp.Updated[0] != "u1" {
+		t.Fatalf("updated = %v", resp.Updated)
+	}
+	if len(cognito.updateAttrCalls) != 1 {
+		t.Fatalf("update calls = %d", len(cognito.updateAttrCalls))
+	}
+	in := cognito.updateAttrCalls[0]
+	if aws.ToString(in.Username) != "u1" || len(in.UserAttributes) != 1 ||
+		aws.ToString(in.UserAttributes[0].Name) != "custom:department" || aws.ToString(in.UserAttributes[0].Value) != "mihong" {
+		t.Fatalf("unexpected update input: %+v", in)
+	}
+}
+
+func TestTeamSync_ConflictWritesNothing(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{"u1": teamSyncUser("a@amazon.com", true, "hana")})
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{{UserID: "u1", Team: "mihong", Expected: ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Conflicts) != 1 || resp.Conflicts[0] != "u1" || len(cognito.updateAttrCalls) != 0 {
+		t.Fatalf("conflicts=%v calls=%d", resp.Conflicts, len(cognito.updateAttrCalls))
+	}
+}
+
+func TestTeamSync_UnchangedIsCounted(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{"u1": teamSyncUser("a@amazon.com", true, "mihong")})
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{{UserID: "u1", Team: "mihong", Expected: "mihong"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Unchanged != 1 || len(resp.Updated) != 0 || len(cognito.updateAttrCalls) != 0 {
+		t.Fatalf("resp=%+v calls=%d", resp, len(cognito.updateAttrCalls))
+	}
+}
+
+func TestTeamSync_RejectsNonDirectoryUsers(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{
+		"gmail":      teamSyncUser("a@gmail.com", true, ""),
+		"unverified": teamSyncUser("a@amazon.com", false, ""),
+		"upper":      teamSyncUser("X@AMAZON.COM", true, ""),
+	})
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{
+		{UserID: "gmail", Team: "t"}, {UserID: "unverified", Team: "t"}, {UserID: "upper", Team: "t"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Rejected) != 2 || resp.Rejected[0].Code != "NOT_DIRECTORY_USER" || resp.Rejected[1].Code != "NOT_DIRECTORY_USER" {
+		t.Fatalf("rejected = %+v", resp.Rejected)
+	}
+	if len(resp.Updated) != 1 || resp.Updated[0] != "upper" || len(cognito.updateAttrCalls) != 1 {
+		t.Fatalf("updated=%v calls=%d", resp.Updated, len(cognito.updateAttrCalls))
+	}
+}
+
+func TestTeamSync_RejectsInvalidTeamAndMissingUser(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{"u1": teamSyncUser("a@amazon.com", true, "")})
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{
+		{UserID: "u1", Team: "Bad Team"}, {UserID: "ghost", Team: "ok"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Rejected) != 2 || resp.Rejected[0].Code != "INVALID_TEAM" || resp.Rejected[1].Code != "NOT_FOUND" || resp.Rejected[1].UserID != "ghost" {
+		t.Fatalf("rejected = %+v", resp.Rejected)
+	}
+	if len(cognito.updateAttrCalls) != 0 {
+		t.Fatal("unexpected update")
+	}
+}
+
+func TestTeamSync_PerItemCognitoErrorContinues(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{
+		"u1": teamSyncUser("a@amazon.com", true, ""),
+		"u2": teamSyncUser("b@amazon.com", true, ""),
+		"u3": teamSyncUser("c@amazon.com", true, ""),
+	})
+	cognito.adminUpdateAttributesFn = func(_ context.Context, in *cognitoidp.AdminUpdateUserAttributesInput) (*cognitoidp.AdminUpdateUserAttributesOutput, error) {
+		if aws.ToString(in.Username) == "u2" {
+			return nil, errors.New("boom")
+		}
+		return &cognitoidp.AdminUpdateUserAttributesOutput{}, nil
+	}
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{
+		{UserID: "u1", Team: "t"}, {UserID: "u2", Team: "t"}, {UserID: "u3", Team: "t"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Rejected) != 1 || resp.Rejected[0].UserID != "u2" || resp.Rejected[0].Code != "COGNITO_ERROR" {
+		t.Fatalf("rejected = %+v", resp.Rejected)
+	}
+	if len(resp.Updated) != 2 || resp.Updated[0] != "u1" || resp.Updated[1] != "u3" {
+		t.Fatalf("updated = %v", resp.Updated)
+	}
+}
+
+func TestTeamSync_RequestLimits(t *testing.T) {
+	over := make([]model.TeamSyncItem, 201)
+	for i := range over {
+		over[i] = model.TeamSyncItem{UserID: fmt.Sprintf("u%d", i), Team: "t"}
+	}
+	cases := map[string][]model.TeamSyncItem{
+		"empty":     nil,
+		"over":      over,
+		"duplicate": {{UserID: "u1", Team: "t"}, {UserID: "u1", Team: "t"}},
+	}
+	for name, items := range cases {
+		t.Run(name, func(t *testing.T) {
+			getCalls := 0
+			svc, cognito := teamSyncService(nil)
+			inner := cognito.adminGetUserFn
+			cognito.adminGetUserFn = func(ctx context.Context, in *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+				getCalls++
+				return inner(ctx, in)
+			}
+			_, err := svc.SyncTeams(context.Background(), "admin", items)
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+			if getCalls != 0 || len(cognito.updateAttrCalls) != 0 {
+				t.Fatal("Cognito was called")
 			}
 		})
 	}
