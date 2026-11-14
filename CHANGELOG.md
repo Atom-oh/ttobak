@@ -21,7 +21,7 @@ manifests.
 - Customer update drafts on the web: followed-source settings, an account drafts tab
   and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
   until the collector and generator ship (#961).
-- Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes.
+- Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes. The floating caption windows show the same speaker colours from Mac app 0.2.2.
 
 ### Changed
 

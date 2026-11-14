@@ -61,7 +61,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
 | caption_overlay_close | lang; closes the window and saves it closed |
 | caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
-| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal; a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus; `clear` also makes the window ignore the pointer; pushes to one window are serialised (`PushLanes`), other windows are independent |
+| caption_overlay_push | lang, kind entry/clear/preview, id (at most 64 bytes), order, text (at most 4,000 bytes; empty text on an entry removes that line), isFinal, optional speaker (zero-based, above 29 is dropped; colours the line); a closed window ignores it; `clear` orders the window out (a transparent window still takes clicks), a non-empty entry or preview orders it back in without taking focus; `clear` also makes the window ignore the pointer; pushes to one window are serialised (`PushLanes`), other windows are independent |
 | caption_overlay_idle | idle; overlay windows only (`caption-overlay.json`, never the remote SPA); sets only the calling `caption-<lang>` window to let clicks through while it shows no caption, and to take them again once it does; sync, main thread, no lock |
 | caption_overlay_dismiss | no arguments; overlay windows only (`caption-overlay.json`, never the remote SPA); the window's close button: closes only the calling `caption-<lang>` window, saves it closed and sends `caption-window-closed` ({lang}) to the main window |
 | intake_get_state | returns {adapter {present, updateAvailable null/bool}, nodePath, nodeMissing, schedule {kind off/hourly/daily/twiceDaily, times}, running run/setup/login/scheduleOff/options/null, lastResult (last `intake://finished` payload), status (`~/.ttobak/intake/status.json`, at most 256 KiB), selection [{connector, server, host, disabled}] (names only), options {calendarResponses [accept/organizer/tentative/none], sfdcContacts, defaults (no calendar responses stored)} (from `selection.json` `options`, known names only, CLI defaults when absent), launchAgentInstalled (the CLI LaunchAgent plist exists; the UI warns when the app schedule is also on), progress (last 200 lines)} (ADR-003, `intake_runner.rs`) |
@@ -92,7 +92,7 @@ native-meeting-detected/native-meeting-ended ({detectionId, kind, label, browser
 recording}) also go to the main window only; native-meeting-answered (same shape)
 closes the banner after the floating prompt window (`meeting_prompt.rs`, local
 `meeting-prompt.html`, `meeting_prompt_choose` only) answered it.
-Caption overlay (ADR-018): `caption-update` ({lang, kind, id, order, text, isFinal}) and
+Caption overlay (ADR-018): `caption-update` ({lang, kind, id, order, text, isFinal, speaker?}) and
 `caption-style` (style fields plus lang) are sent with `emit_to` to the matching
 `caption-<lang>` window. A JS listener with the default target receives every emit, so the
 page listens with target `{kind: 'WebviewWindow', label: 'caption-<lang>'}` and also drops
