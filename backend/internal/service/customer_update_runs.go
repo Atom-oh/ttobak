@@ -138,6 +138,7 @@ type updateRunsRepo interface {
 	AddDayResearched(ctx context.Context, userID, day string, n int) error
 	PutDecisionIfAbsent(ctx context.Context, userID string, d *model.UpdateDecision) error
 	GetDecision(ctx context.Context, userID, urlHash, accountID string) (*model.UpdateDecision, error)
+	ListDecidedAccounts(ctx context.Context, userID, urlHash string) ([]string, error)
 	SetDecisionOutcome(ctx context.Context, userID, urlHash, accountID, outcome, discardReason string) error
 	GetDraft(ctx context.Context, userID, accountID, urlHash string) (*model.UpdateDraft, error)
 	PutDraftIfAbsent(ctx context.Context, userID string, d *model.UpdateDraft) error
@@ -161,12 +162,17 @@ type CustomerUpdateRunsDeps struct {
 // RunStats are counts only, safe to log. Oversized counts finalize attempts
 // that met a run partition over the row bound (once per attempt).
 // StartAmbiguous counts invokes whose outcome is unknown (the lease is kept).
+// BuildFailedHeld counts users whose batch was held because an in-scope
+// account's pack failed to build.
 type RunStats struct {
 	Users, Started, StartFailed, StartAmbiguous, Finalized, Expired, Held int
 	Drafts, Discarded, Deferred, Ignored, OutOfScope                      int
 	Malformed, Unreadable, Oversized, Leaked, ServicesUnavailable         int
-	Errors, ItemErrors                                                    int
+	Errors, ItemErrors, BuildFailedHeld                                   int
 }
+
+// Enabled reports whether the run phases are on (an agent runtime is wired).
+func (r *CustomerUpdateRuns) Enabled() bool { return r.deps.Invoker != nil }
 
 // CustomerUpdateRuns starts agent runs for pending users and finalizes
 // finished ones. The runtime is untrusted: every result row is checked

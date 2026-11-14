@@ -1219,6 +1219,12 @@ async function main() {
     }
     return;
   }
+  if (cliArguments[0] === 'team-sync') {
+    const { runTeamSync } = await import('./team-sync/run.js');
+    const { defaultEnvironment } = await import('./intake/run.js');
+    process.exitCode = await runTeamSync(cliArguments.slice(1), defaultEnvironment());
+    return;
+  }
   if (cliArguments[0] === 'setup') {
     const { runSetup } = await import('./setup/run.js');
     const { defaultEnvironment } = await import('./intake/run.js');
@@ -1226,7 +1232,7 @@ async function main() {
     return;
   }
   if (cliArguments.includes('--help')) {
-    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help | ttobak-mcp setup --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
+    console.log('Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help | ttobak-mcp setup --help | ttobak-mcp team-sync --help. Downloaded adapter: stdio only; HTTP requires the installed server package.');
     return;
   }
   if (cliArguments.length && (cliArguments.length !== 2 || cliArguments[0] !== '--transport')) {

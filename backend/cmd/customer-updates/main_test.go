@@ -21,9 +21,12 @@ func (f *fakeFanout) Run(context.Context) (service.FanoutStats, error) {
 }
 
 type fakeRuns struct {
-	calls int
-	err   error
+	calls    int
+	err      error
+	disabled bool
 }
+
+func (f *fakeRuns) Enabled() bool { return !f.disabled }
 
 func (f *fakeRuns) Tick(context.Context) (service.RunStats, error) {
 	f.calls++
@@ -86,7 +89,7 @@ func TestFanoutContextKeepsRunPhaseTime(t *testing.T) {
 		{10 * time.Second, 10 * time.Second}, // never after the invocation deadline
 	} {
 		parent, cancel := context.WithTimeout(context.Background(), c.left)
-		ctx, done := fanoutContext(parent)
+		ctx, done := fanoutContext(parent, true)
 		deadline, ok := ctx.Deadline()
 		got := time.Until(deadline)
 		done()
@@ -95,11 +98,38 @@ func TestFanoutContextKeepsRunPhaseTime(t *testing.T) {
 			t.Fatalf("left %v: fan-out budget %v, want about %v", c.left, got, c.want)
 		}
 	}
-	ctx, done := fanoutContext(context.Background())
+	ctx, done := fanoutContext(context.Background(), true)
 	defer done()
 	if _, ok := ctx.Deadline(); ok {
 		t.Fatal("no invocation deadline must add none")
 	}
+	parent, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	defer cancel()
+	off, offDone := fanoutContext(parent, false)
+	defer offDone()
+	if d, _ := off.Deadline(); time.Until(d) < 14*time.Minute-2*time.Second {
+		t.Fatalf("run phases off: fan-out budget %v, want the full deadline", time.Until(d))
+	}
+}
+
+func TestHandle_DisabledRunsGiveFanoutFullDeadline(t *testing.T) {
+	var left time.Duration
+	fanout, runs = fanoutFunc(func(ctx context.Context) {
+		d, _ := ctx.Deadline()
+		left = time.Until(d)
+	}), &fakeRuns{disabled: true}
+	parent, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	defer cancel()
+	if err := handle(parent, Event{Kind: "tick"}); err != nil || left < 14*time.Minute-2*time.Second {
+		t.Fatalf("err=%v fan-out budget %v", err, left)
+	}
+}
+
+type fanoutFunc func(ctx context.Context)
+
+func (f fanoutFunc) Run(ctx context.Context) (service.FanoutStats, error) {
+	f(ctx)
+	return service.FanoutStats{}, nil
 }
 
 func TestHandle_UnknownKind(t *testing.T) {

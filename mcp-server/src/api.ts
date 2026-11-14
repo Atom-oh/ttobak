@@ -308,6 +308,16 @@ export interface ApiRequestOptions {
   }) => Promise<unknown>;
 }
 
+export interface AdminUser { userId: string; email: string; emailVerified: boolean; department: string }
+export interface TeamSyncBody { items: { userId: string; team: string; expected: string }[] }
+export interface TeamSyncResult {
+  updated: string[]; unchanged: number; conflicts: string[]; rejected: { userId: string; code: string }[];
+}
+const MAX_TEAM_SYNC_ITEMS = 200;
+const MAX_TEAM_SYNC_BODY_BYTES = 64 * 1024;
+const MAX_TEAM_SYNC_RESPONSE_BYTES = 64 * 1024;
+const MAX_ADMIN_USERS_BYTES = 2 * 1024 * 1024;
+
 export class TtobakApi {
   constructor(
     private auth: ApiAuth,
@@ -324,6 +334,19 @@ export class TtobakApi {
   async syncPerformance(source: PerformanceSource, body: PerformanceSyncBody) {
     return this.request('POST', `/api/performance/sources/${performanceSource(source)}/sync`,
       body, MAX_PERFORMANCE_API_BYTES, false, true);
+  }
+
+  /** Admin-only user list; local team sync reads only the fields in AdminUser. */
+  async adminListUsers(): Promise<{ users: AdminUser[]; truncated?: boolean }> {
+    return await this.request('GET', '/api/settings/users', undefined, MAX_ADMIN_USERS_BYTES, false, true) as
+      { users: AdminUser[]; truncated?: boolean };
+  }
+
+  /** Admin-only team write of at most 200 items / 64 KiB; refused client-side above that. */
+  async syncTeams(body: TeamSyncBody): Promise<TeamSyncResult> {
+    if (body.items.length > MAX_TEAM_SYNC_ITEMS) throw new Error(`team sync is limited to ${MAX_TEAM_SYNC_ITEMS} items`);
+    if (Buffer.byteLength(JSON.stringify(body)) > MAX_TEAM_SYNC_BODY_BYTES) throw new Error('team sync body exceeds 64 KiB');
+    return await this.request('POST', '/api/settings/users/team-sync', body, MAX_TEAM_SYNC_RESPONSE_BYTES, false, true) as TeamSyncResult;
   }
 
   /** The owner's per-source performance sync revisions. */

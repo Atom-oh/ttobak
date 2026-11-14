@@ -1378,3 +1378,68 @@ func (r *CustomerUpdateRepository) SetDecisionOutcome(ctx context.Context, userI
 	}
 	return nil
 }
+
+// decidedAccountsQueryInput reads one item's decision keys (SK
+// CUDEC#{urlHash}#{accountId}) that hold a final, live decision: not_needed,
+// or needed with outcome drafted or discarded, and not past the TTL (an
+// expired row is overwritable, so it does not count). The filter reads the
+// plaintext codes on the server; only the keys are returned.
+func decidedAccountsQueryInput(tableName, userID, urlHash string, now time.Time) (*dynamodb.QueryInput, error) {
+	if userID == "" || !urlHashPattern.MatchString(urlHash) {
+		return nil, invalidRun("decision key")
+	}
+	final := expression.Name("choice").Equal(expression.Value(model.UpdateChoiceNotNeeded)).
+		Or(expression.Name("outcome").In(expression.Value(model.UpdateOutcomeDrafted), expression.Value(model.UpdateOutcomeDiscarded)))
+	live := expression.AttributeNotExists(expression.Name(customerUpdateTTLAttribute)).
+		Or(expression.Name(customerUpdateTTLAttribute).GreaterThan(expression.Value(now.Unix())))
+	expr, err := expression.NewBuilder().
+		WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+			And(expression.Key("SK").BeginsWith(model.UpdateDecisionSK(urlHash, "")))).
+		WithFilter(final.And(live)).
+		WithProjection(expression.NamesList(expression.Name("PK"), expression.Name("SK"))).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build decided-accounts expression: %w", err)
+	}
+	return &dynamodb.QueryInput{
+		TableName: aws.String(tableName), ConsistentRead: aws.Bool(true),
+		KeyConditionExpression: expr.KeyCondition(), FilterExpression: expr.Filter(), ProjectionExpression: expr.Projection(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	}, nil
+}
+
+// decidedAccountIDs maps one item's decision keys to account ids, skipping a
+// key that is not CUDEC#{urlHash}#{valid account id}.
+func decidedAccountIDs(items []map[string]types.AttributeValue, urlHash string) []string {
+	prefix := model.UpdateDecisionSK(urlHash, "")
+	out := []string{}
+	for _, item := range items {
+		sk, _ := stringAttr(item, "SK")
+		if id, ok := strings.CutPrefix(sk, prefix); ok && accountIDPattern.MatchString(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ListDecidedAccounts returns the account ids whose pair with the item has a
+// final, live stored decision (decidedAccountsQueryInput); a deferred
+// decision does not count. Nothing is unsealed.
+func (r *CustomerUpdateRepository) ListDecidedAccounts(ctx context.Context, userID, urlHash string) ([]string, error) {
+	in, err := decidedAccountsQueryInput(r.tableName, userID, urlHash, r.clock())
+	if err != nil {
+		return nil, err
+	}
+	var items []map[string]types.AttributeValue
+	for {
+		res, err := r.client.Query(ctx, in)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query update decisions: %w", err)
+		}
+		items = append(items, res.Items...)
+		if len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		in.ExclusiveStartKey = res.LastEvaluatedKey
+	}
+	return decidedAccountIDs(items, urlHash), nil
+}

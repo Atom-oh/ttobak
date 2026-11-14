@@ -23,6 +23,9 @@ var errRunNoAccountsFit = errors.New("no account fits the run payload")
 type runPayloadItem struct {
 	URLHash string `json:"urlHash"`
 	URL     string `json:"url"`
+	// DecidedAccounts lists the payload accounts whose pair with the item
+	// already has a final stored decision; the runtime skips those pairs.
+	DecidedAccounts []string `json:"decidedAccounts"`
 }
 
 type runPayloadBudgets struct {
@@ -76,9 +79,33 @@ func runtimeValidURL(u string) bool {
 	return err == nil && parsed.Hostname() != ""
 }
 
+// withDecided sets p.Items from items: each item's decidedAccounts are its
+// decided accounts among p.Accounts, and an item whose every payload account
+// is decided is left out and returned in done.
+func withDecided(p runPayload, items []runPayloadItem, decided map[string]map[string]bool) (runPayload, []string) {
+	p.Items = make([]runPayloadItem, 0, len(items))
+	var done []string
+	for _, it := range items {
+		it.DecidedAccounts = []string{}
+		for _, a := range p.Accounts {
+			if decided[it.URLHash][a.AccountID] {
+				it.DecidedAccounts = append(it.DecidedAccounts, a.AccountID)
+			}
+		}
+		if len(it.DecidedAccounts) == len(p.Accounts) {
+			done = append(done, it.URLHash)
+			continue
+		}
+		p.Items = append(p.Items, it)
+	}
+	return p, done
+}
+
 // fitRunPayload keeps the packs (in order, at most 40) that are each at most
-// 8,000 bytes and drops accounts from the tail until the payload fits maxBytes.
-func fitRunPayload(p runPayload, maxBytes int) ([]byte, runPayload, error) {
+// 8,000 bytes and drops accounts from the tail until the payload fits
+// maxBytes, applying withDecided to the accounts kept. With no item left it
+// returns a nil body, the payload and the fully decided items.
+func fitRunPayload(p runPayload, items []runPayloadItem, decided map[string]map[string]bool, maxBytes int) ([]byte, runPayload, []string, error) {
 	kept := make([]AccountPack, 0, len(p.Accounts))
 	for _, a := range p.Accounts {
 		if len(kept) == model.MaxUpdateRunAccounts {
@@ -90,16 +117,20 @@ func fitRunPayload(p runPayload, maxBytes int) ([]byte, runPayload, error) {
 	}
 	p.Accounts = kept
 	for len(p.Accounts) > 0 {
-		b, err := marshalRunPayload(p)
+		q, done := withDecided(p, items, decided)
+		if len(q.Items) == 0 {
+			return nil, q, done, nil
+		}
+		b, err := marshalRunPayload(q)
 		if err != nil {
-			return nil, p, err
+			return nil, q, done, err
 		}
 		if len(b) <= maxBytes {
-			return b, p, nil
+			return b, q, done, nil
 		}
 		p.Accounts = p.Accounts[:len(p.Accounts)-1]
 	}
-	return nil, p, errRunNoAccountsFit
+	return nil, p, nil, errRunNoAccountsFit
 }
 
 // definiteRefusal reports whether an invoke failure is a definite answer, so
@@ -175,32 +206,69 @@ func (r *CustomerUpdateRuns) start(ctx context.Context, mark model.UpdatePending
 	if err != nil {
 		return "", err
 	}
+	if build.Failed > 0 {
+		// A failed account would silently miss every item of this batch:
+		// start nothing and retry the whole batch in an hour.
+		stats.BuildFailedHeld++
+		log.Printf("customer update run held user=%s failedAccounts=%d", userHashPrefix(userID), build.Failed)
+		return "", r.holdAll(ctx, userID, valid, now.Add(failedBuildHold), stats)
+	}
 	if len(packs) == 0 {
 		return "", r.noPacks(ctx, userID, valid, build, now, stats)
+	}
+	decided := map[string]map[string]bool{}
+	toSend := make([]runPayloadItem, 0, len(valid))
+	for _, it := range valid {
+		ids, err := repo.ListDecidedAccounts(ctx, userID, it.URLHash)
+		if err != nil {
+			return "", err
+		}
+		decided[it.URLHash] = map[string]bool{}
+		for _, id := range ids {
+			decided[it.URLHash][id] = true
+		}
+		toSend = append(toSend, runPayloadItem{URLHash: it.URLHash, URL: it.URL})
 	}
 	runID, err := r.newRunID()
 	if err != nil {
 		return "", err
 	}
 	p := runPayload{
-		Version: 1, RunID: runID, Items: make([]runPayloadItem, 0, len(valid)), Accounts: packs,
+		Version: 1, RunID: runID, Accounts: packs,
 		Budgets: runPayloadBudgets{
 			MaxResearchPairs: min(maxRunResearchPairs, researchLeft),
 			MaxDrafts:        min(maxRunDraftsBudget, maxDayDrafts-day.Total),
 		},
 	}
-	lease := &model.UpdateRun{RunID: runID, StartedAt: now, LeaseUntil: now.Add(runLeaseDuration)}
-	for _, it := range valid {
-		p.Items = append(p.Items, runPayloadItem{URLHash: it.URLHash, URL: it.URL})
-		lease.ItemHashes = append(lease.ItemHashes, it.URLHash)
-	}
-	body, p, err := fitRunPayload(p, r.maxPayloadBytes)
+	body, p, done, err := fitRunPayload(p, toSend, decided, r.maxPayloadBytes)
 	if err != nil {
 		return runID, err
+	}
+	// Every kept pair of these items was decided in an earlier run.
+	for _, h := range done {
+		if err := r.setItem(ctx, userID, h, model.UpdateItemDecided, 0); err != nil {
+			return "", err
+		}
+	}
+	if len(p.Items) == 0 {
+		return "", nil
+	}
+	lease := &model.UpdateRun{RunID: runID, StartedAt: now, LeaseUntil: now.Add(runLeaseDuration)}
+	inRun := map[string]bool{}
+	for _, it := range p.Items {
+		lease.ItemHashes = append(lease.ItemHashes, it.URLHash)
+		inRun[it.URLHash] = true
 	}
 	for _, a := range p.Accounts {
 		lease.AccountIDs = append(lease.AccountIDs, a.AccountID)
 	}
+	sent := make([]model.UpdateItem, 0, len(p.Items))
+	for _, it := range valid {
+		if inRun[it.URLHash] {
+			sent = append(sent, it)
+		}
+	}
+	valid = sent
 	if err := repo.CreateRunIfAbsent(ctx, userID, lease); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return runID, nil
@@ -254,16 +322,13 @@ func (r *CustomerUpdateRuns) holdAll(ctx context.Context, userID string, items [
 	return nil
 }
 
-// noPacks handles a user whose build produced no pack. Every in-scope account
-// at today's cap: hold the items until the next KST day (the mark stays). A
-// failed account read: hold the items for one hour. Nothing in scope: skip
-// the items (attempts unchanged).
+// noPacks handles a user whose build produced no pack and had no failed
+// account (start holds those for one hour). Every in-scope account at today's
+// cap: hold the items until the next KST day (the mark stays). Nothing in
+// scope: skip the items (attempts unchanged).
 func (r *CustomerUpdateRuns) noPacks(ctx context.Context, userID string, items []model.UpdateItem, build BuildStats, now time.Time, stats *RunStats) error {
-	switch {
-	case build.Capped > 0:
+	if build.Capped > 0 {
 		return r.holdAll(ctx, userID, items, nextKSTDayStart(now), stats)
-	case build.Failed > 0:
-		return r.holdAll(ctx, userID, items, now.Add(failedBuildHold), stats)
 	}
 	for _, it := range items {
 		if err := r.setItem(ctx, userID, it.URLHash, model.UpdateItemSkipped, 0); err != nil {

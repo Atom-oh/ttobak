@@ -27,6 +27,10 @@ export const INTAKE_CODES = [
   'SKIPPED_BY_USER',
   'PARTIAL_FAILURE',
   'SCHEDULE_FAILED',
+  'DIRECTORY_UNAVAILABLE',
+  'NOT_ADMIN',
+  'PREVIEW_EXPIRED',
+  'TOO_MANY_USERS',
 ] as const;
 
 export type IntakeCode = typeof INTAKE_CODES[number];

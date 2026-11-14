@@ -146,12 +146,18 @@ class _Run:
     def _find(self, url_hash):
         found = self.state.candidates.get(url_hash)
         if found is None:
+            # Pairs already decided in an earlier run are never scored, decided or
+            # researched again; an item with none left is not even read.
+            decided = self.state.items[url_hash].decided_accounts
+            open_accounts = [a for a in self.input.accounts if a.account_id not in decided]
+            if not open_accounts:
+                self.state.candidates[url_hash] = ()
+                return ()
             content = self.read(url_hash)
             found = ()
             if content.status == "ready":
                 try:
-                    found = tuple(gate.candidates(content, list(self.input.accounts),
-                                                  self.deps.gate))
+                    found = tuple(gate.candidates(content, open_accounts, self.deps.gate))
                 except gate.GateError:
                     # Not cached: the sweep retries once; the item is deferred if it fails again.
                     self.state.find_errors.add(url_hash)
@@ -301,7 +307,9 @@ class _Run:
     # Results.
 
     def item_state(self, url_hash):
-        content = self.state.contents[url_hash]
+        content = self.state.contents.get(url_hash)
+        if content is None:  # every pair was decided in an earlier run
+            return "decided", ""
         if content.status != "ready":
             return "skipped", content.status
         # A gate error defers the whole item (retried next run), even when other pairs decided.

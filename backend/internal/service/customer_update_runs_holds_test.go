@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -285,6 +286,100 @@ func TestUpdateRuns_OverlappingFinalizes(t *testing.T) {
 			}
 			if f.repo.days[runsDay].Total != wantTotal || f.repo.decisions[a.URLHash+"#acct-1"].Outcome != model.UpdateOutcomeDrafted {
 				t.Fatalf("day=%+v decision=%+v", f.repo.days[runsDay], f.repo.decisions[a.URLHash+"#acct-1"])
+			}
+		})
+	}
+}
+
+// ---- pre-decided pairs and failed packs ----
+
+func (f *runsFixture) storeDecision(h, acct, choice, outcome string) {
+	f.repo.decisions[h+"#"+acct] = &model.UpdateDecision{URLHash: h, AccountID: acct, Choice: choice, Outcome: outcome}
+}
+
+func TestUpdateRuns_StartSendsDecidedAccounts(t *testing.T) {
+	f := newRunsFixture()
+	a, b, c := runsItem(t, "a"), runsItem(t, "b"), runsItem(t, "c")
+	f.repo.items[a.URLHash], f.repo.items[b.URLHash], f.repo.items[c.URLHash] = a, b, c
+	f.ctx.packs = []AccountPack{runsPack("acct-1"), runsPack("acct-2")}
+	f.storeDecision(a.URLHash, "acct-1", model.UpdateChoiceNeeded, model.UpdateOutcomeDrafted)
+	f.storeDecision(a.URLHash, "acct-3", model.UpdateChoiceNotNeeded, "") // not in the payload
+	f.storeDecision(b.URLHash, "acct-1", model.UpdateChoiceNeeded, model.UpdateOutcomeDeferred)
+	f.storeDecision(b.URLHash, "acct-2", model.UpdateChoiceNeeded, "")
+	f.storeDecision(c.URLHash, "acct-1", model.UpdateChoiceNotNeeded, "")
+	f.storeDecision(c.URLHash, "acct-2", model.UpdateChoiceNeeded, model.UpdateOutcomeDiscarded)
+	f.tick(t)
+	if len(f.inv.calls) != 1 {
+		t.Fatalf("invokes = %d", len(f.inv.calls))
+	}
+	var p runPayload
+	if err := json.Unmarshal(f.inv.calls[0].payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, it := range p.Items {
+		got[it.URLHash] = it.DecidedAccounts
+	}
+	want := map[string][]string{a.URLHash: {"acct-1"}, b.URLHash: {}}
+	if !reflect.DeepEqual(got, want) || len(f.repo.run["u1"].ItemHashes) != 2 {
+		t.Fatalf("items = %v lease = %+v", got, f.repo.run["u1"])
+	}
+	if c.State != model.UpdateItemDecided || c.Attempts != 0 || a.State != model.UpdateItemNew {
+		t.Fatalf("a=%+v c=%+v", a, c)
+	}
+}
+
+func TestUpdateRuns_AllPairsDecidedStartsNothing(t *testing.T) {
+	f := newRunsFixture()
+	a := runsItem(t, "a")
+	f.repo.items[a.URLHash] = a
+	f.storeDecision(a.URLHash, "acct-1", model.UpdateChoiceNotNeeded, "")
+	f.tick(t)
+	if len(f.inv.calls) != 0 || f.repo.run["u1"] != nil || a.State != model.UpdateItemDecided {
+		t.Fatalf("invokes=%d lease=%+v item=%+v", len(f.inv.calls), f.repo.run["u1"], a)
+	}
+}
+
+func TestUpdateRuns_FailedPackHoldsBatch(t *testing.T) {
+	f := newRunsFixture()
+	a := runsItem(t, "a")
+	f.repo.items[a.URLHash] = a
+	f.ctx.failed = 1 // one pack built, one account failed
+	stats := f.tick(t)
+	if len(f.inv.calls) != 0 || f.repo.run["u1"] != nil || stats.BuildFailedHeld != 1 || stats.Held != 1 {
+		t.Fatalf("invokes=%d lease=%+v stats=%+v", len(f.inv.calls), f.repo.run["u1"], stats)
+	}
+	if a.State != model.UpdateItemNew || a.Attempts != 0 || !a.HeldUntil.Equal(runsNow.Add(time.Hour)) {
+		t.Fatalf("item = %+v", a)
+	}
+}
+
+func TestUpdateRuns_FinalizeWithPreDecidedPairs(t *testing.T) {
+	cases := []struct {
+		name, outcome, reason, itemRow, wantState string
+	}{
+		{"decided", model.UpdateOutcomeDrafted, "", "decided", model.UpdateItemDecided},
+		{"research budget stays new", model.UpdateOutcomeDeferred, runtimeResearchBudget, "deferred", model.UpdateItemNew},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRunsFixture()
+			a := runsItem(t, "a")
+			rows := f.doneRun([]*model.UpdateItem{a}, []string{"acct-1", "acct-2"})
+			f.storeDecision(a.URLHash, "acct-1", model.UpdateChoiceNotNeeded, "") // decided in an earlier run
+			rows.Decisions, rows.Drafts = rows.Decisions[1:], rows.Drafts[1:]     // no DEC row for acct-1
+			rows.Decisions[0].Outcome, rows.Decisions[0].DiscardReason = c.outcome, c.reason
+			if c.outcome != model.UpdateOutcomeDrafted {
+				rows.Drafts = nil
+			}
+			rows.Items[0].State = c.itemRow
+			f.ctx.packs = []AccountPack{runsPack("acct-1"), runsPack("acct-2")}
+			f.tick(t)
+			if a.Attempts != 0 || a.State != c.wantState || !a.HeldUntil.IsZero() {
+				t.Fatalf("item = %+v", a)
+			}
+			if d := f.repo.decisions[a.URLHash+"#acct-1"]; d.Choice != model.UpdateChoiceNotNeeded || d.Outcome != "" {
+				t.Fatalf("pre-decided pair changed: %+v", d)
 			}
 		})
 	}

@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
+import type { TeamSyncFinished, TeamSyncStateView } from './teamSync';
 
 interface TauriEvent<T> {
   payload: T;
@@ -905,4 +906,45 @@ export function onReportProgress(handler: (line: string) => void): () => void {
 
 export function onReportFinished(handler: (finished: ReportFinished) => void): () => void {
   return subscribeTauriEvent<ReportFinished, ReportFinished>('report://finished', (raw) => raw, handler);
+}
+
+// ---------------------------------------------------------------- Team sync
+// Commands and events of mac-app/src-tauri/src/team_sync_runner.rs.
+// Commands reject with a string code such as RUN_IN_PROGRESS.
+
+export function teamSyncRun(mode: 'preview' | 'apply', previewId?: string): Promise<void> {
+  return invoke<void>('team_sync_run', { mode, ...(previewId ? { previewId } : {}) });
+}
+
+export function teamSyncCancel(): Promise<boolean> {
+  return invoke<boolean>('team_sync_cancel');
+}
+
+export function teamSyncGetState(): Promise<TeamSyncStateView> {
+  return invoke<TeamSyncStateView>('team_sync_get_state');
+}
+
+/** False in a browser and in an app build without the team sync commands. */
+export async function hasTeamSyncCommand(): Promise<boolean> {
+  if (!isTauri()) return false;
+  try {
+    await invoke<TeamSyncStateView>('team_sync_get_state');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function onTeamSyncProgress(handler: (line: string) => void): () => void {
+  return subscribeTauriEvent<{ line?: unknown }, string>(
+    'team-sync://progress',
+    (raw) => (typeof raw?.line === 'string' ? raw.line : ''),
+    (line) => {
+      if (line) handler(line);
+    },
+  );
+}
+
+export function onTeamSyncFinished(handler: (finished: TeamSyncFinished) => void): () => void {
+  return subscribeTauriEvent<TeamSyncFinished, TeamSyncFinished>('team-sync://finished', (raw) => raw, handler);
 }

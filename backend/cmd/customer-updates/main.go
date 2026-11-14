@@ -26,6 +26,7 @@ type fanoutRunner interface {
 
 type runTicker interface {
 	Tick(ctx context.Context) (service.RunStats, error)
+	Enabled() bool
 }
 
 var (
@@ -38,12 +39,13 @@ const (
 	minFanoutBudget = 30 * time.Second
 )
 
-// fanoutContext bounds fan-out so the run phases keep time: its deadline is
-// the invocation deadline minus 150 seconds, but never less than 30 seconds
-// from now (and never after the invocation deadline).
-func fanoutContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// fanoutContext bounds fan-out so enabled run phases keep time: its deadline
+// is the invocation deadline minus 150 seconds, but never less than 30 seconds
+// from now (and never after the invocation deadline). With the run phases off
+// fan-out keeps the invocation deadline.
+func fanoutContext(ctx context.Context, reserve bool) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
-	if !ok {
+	if !ok || !reserve {
 		return context.WithCancel(ctx)
 	}
 	budget := max(time.Until(deadline)-runPhaseReserve, minFanoutBudget)
@@ -55,7 +57,7 @@ func fanoutContext(ctx context.Context) (context.Context, context.CancelFunc) {
 func handle(ctx context.Context, ev Event) error {
 	switch ev.Kind {
 	case "tick":
-		fanCtx, cancel := fanoutContext(ctx)
+		fanCtx, cancel := fanoutContext(ctx, runs != nil && runs.Enabled())
 		stats, fanErr := fanout.Run(fanCtx)
 		cancel()
 		log.Printf("customer updates tick: subs=%d delivered=%d rejected=%d skipped=%d",
@@ -64,9 +66,9 @@ func handle(ctx context.Context, ev Event) error {
 		if runs != nil {
 			var rs service.RunStats
 			rs, runErr = runs.Tick(ctx)
-			log.Printf("customer update runs: users=%d started=%d startFailed=%d startAmbiguous=%d finalized=%d expired=%d held=%d drafts=%d discarded=%d deferred=%d ignored=%d outOfScope=%d malformed=%d unreadable=%d oversized=%d leaked=%d servicesUnavailable=%d errors=%d itemErrors=%d",
+			log.Printf("customer update runs: users=%d started=%d startFailed=%d startAmbiguous=%d finalized=%d expired=%d held=%d drafts=%d discarded=%d deferred=%d ignored=%d outOfScope=%d malformed=%d unreadable=%d oversized=%d leaked=%d servicesUnavailable=%d errors=%d itemErrors=%d buildFailedHeld=%d",
 				rs.Users, rs.Started, rs.StartFailed, rs.StartAmbiguous, rs.Finalized, rs.Expired, rs.Held, rs.Drafts, rs.Discarded, rs.Deferred,
-				rs.Ignored, rs.OutOfScope, rs.Malformed, rs.Unreadable, rs.Oversized, rs.Leaked, rs.ServicesUnavailable, rs.Errors, rs.ItemErrors)
+				rs.Ignored, rs.OutOfScope, rs.Malformed, rs.Unreadable, rs.Oversized, rs.Leaked, rs.ServicesUnavailable, rs.Errors, rs.ItemErrors, rs.BuildFailedHeld)
 		}
 		return errors.Join(fanErr, runErr)
 	default:

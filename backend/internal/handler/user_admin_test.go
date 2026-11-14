@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,7 +64,7 @@ func (s *stubCognitoAdminAPI) AdminGetUser(_ context.Context, _ *cognitoidp.Admi
 		Enabled:    true,
 		UserStatus: s.getUserStatus,
 		UserAttributes: []cognitoidptypes.AttributeType{
-			{Name: aws.String("email"), Value: aws.String("invitee@example.com")},
+			{Name: aws.String("email"), Value: aws.String("invitee@amazon.com")},
 			{Name: aws.String("email_verified"), Value: aws.String("true")},
 		},
 	}, nil
@@ -252,3 +254,68 @@ func TestResetPasswordHandler_AllowsConfirmedUser(t *testing.T) {
 // this blank reference keeps goimports from flagging it if that helper ever
 // moves, without duplicating the helper here.
 var _ = middleware.UserIDKey
+
+func postTeamSync(h *UserAdminHandler, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/users/team-sync", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.SyncTeams(w, req)
+	return w
+}
+
+func TestTeamSyncHandler_ReturnsResult(t *testing.T) {
+	h := newTestUserAdminHandler(nil, "")
+	w := postTeamSync(h, `{"items":[{"userId":"user-1","team":"mihong","expected":""}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"updated", "unchanged", "conflicts", "rejected"} {
+		v, ok := raw[k]
+		if !ok || string(v) == "null" {
+			t.Errorf("field %q missing or null: %s", k, w.Body.String())
+		}
+	}
+	var resp model.TeamSyncResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Updated) != 1 || resp.Updated[0] != "user-1" {
+		t.Fatalf("unexpected result: %+v", resp)
+	}
+}
+
+func TestTeamSyncHandler_RejectsOversizedBody(t *testing.T) {
+	h := newTestUserAdminHandler(nil, "")
+	pad := strings.Repeat("a", 64<<10+1)
+	w := postTeamSync(h, `{"items":[{"userId":"`+pad+`","team":"t"}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestTeamSyncHandler_RejectsMalformedAndLimitErrors(t *testing.T) {
+	h := newTestUserAdminHandler(nil, "")
+	var many []string
+	for i := 0; i < 201; i++ {
+		many = append(many, fmt.Sprintf(`{"userId":"u%d","team":"t"}`, i))
+	}
+	bodies := map[string]string{
+		"invalid json":  `{"items":`,
+		"unknown field": `{"items":[],"extra":1}`,
+		"too many":      `{"items":[` + strings.Join(many, ",") + `]}`,
+		"empty":         `{"items":[]}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			w := postTeamSync(h, body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+			var e model.ErrorResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || e.Error.Code != model.ErrCodeBadRequest {
+				t.Fatalf("bad error shape: %s", w.Body.String())
+			}
+		})
+	}
+}

@@ -2232,7 +2232,22 @@ AdminUpdateUserAttributes, then the
 `USER#{id}/PROFILE` copy read by account people lists; a missing PROFILE row is
 not an error. A profile-sync failure after the Cognito write returns 500 and an
 identical retry converges. The caller's ID-token `name` changes on the next refresh.
-Both routes are non-delegable connector operations.
+Both display-name routes are non-delegable connector operations.
+
+Team sync: admin-only `POST /api/settings/users/team-sync` takes
+`{ "items": [{ "userId", "team", "expected" }] }` (at most 200 items, 64 KiB body,
+unknown fields rejected, no duplicate `userId`; violations return 400 BAD_REQUEST)
+and writes only Cognito `custom:department`. `team` must match
+`^[a-z0-9][a-z0-9-]{0,49}$`. Targets must have a verified `@amazon.com` email
+(case-insensitive). Per item, in order: user exists, directory user, valid team,
+`expected` equals the current value (else a conflict, nothing written), unchanged
+(counted), then the write. The 200 response is
+`{ updated: [userId], unchanged: n, conflicts: [userId], rejected: [{ userId, code }] }`
+with arrays never null; rejection codes are `NOT_FOUND`, `NOT_DIRECTORY_USER`,
+`INVALID_TEAM` and `COGNITO_ERROR`. A per-item failure does not stop later items.
+Each write logs an audit line with actor and target sub and old and new value, never
+an email. `GET /api/settings/users` rows include `department` (empty when unset).
+The connector operation `api.userAdmin.syncTeams` is read/write and non-delegable.
 
 ### Personal dictionary
 
@@ -2582,6 +2597,7 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | POST | `/api/settings/users/{userId}/resend-invite` | `userAdminHandler.ResendInvite` |
 | POST | `/api/settings/users/{userId}/reset-password` | `userAdminHandler.ResetPassword` |
 | PUT | `/api/settings/users/{userId}/name` | `userAdminHandler.UpdateUserName` |
+| POST | `/api/settings/users/team-sync` | `userAdminHandler.SyncTeams` |
 | POST | `/api/skill-packages/org/upload` | `skillPackageHandler.StartOrgUpload` |
 | POST | `/api/skill-packages/org/complete` | `skillPackageHandler.CompleteOrgUpload` |
 | GET | `/api/skill-packages/org/versions` | `skillPackageHandler.ListOrgVersions` |
