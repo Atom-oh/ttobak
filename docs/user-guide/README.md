@@ -9,10 +9,15 @@ public Korean language exception remains limited to the product HTML guide.
 Source inspection used main revision `caba6da9` (UI walkthrough initially used `fec64b30`); source configuration is not
 proof of production activation or acceptance.
 
-The standalone site has 28 chapters, full body/keyword search, keyboard contents,
+The standalone site has 28 web chapters plus a seven-chapter Mac app tab (`#mac`),
+full body/keyword search, keyboard contents,
 current-chapter links, mobile navigation, light/dark themes, copyable question
 examples and complete print/PDF output. No JavaScript is required to read the
 manual or follow its anchors. Search leaves all printable chapters intact.
+With JavaScript, the sidebar tabs show either the web chapters or the Mac
+chapters; a link, search result or back/forward step into the other part switches
+tabs first. Without JavaScript both parts stay visible, and print includes both.
+The in-app reader opens `index.html#mac` when it runs inside the Mac app.
 
 The application also bundles the same public asset allowlist under
 `/user-guide/`. Shared desktop/mobile/profile actions open it in a sandboxed
@@ -145,6 +150,7 @@ Submenus were cross-checked against their components, not inferred from names.
 | 22. Settings | Profile/theme, Notion, import, dictionary, Mac-only detection, crawler, connectors, MCP | `frontend/src/app/settings/page.tsx`; `frontend/src/components/IntegrationSettings.tsx`; `frontend/src/components/MeetingDetectionSettings.tsx`; `frontend/src/components/ConnectorSettings.tsx`; `frontend/src/components/McpGuide.tsx` |
 | 23. Admin | Invite, disable/delete boundaries, no automatic data erasure, role separation | `backend/internal/handler/user_admin.go`; `backend/internal/service/user_admin.go`; `docs/decisions/ADR-007-sign-up-identity-and-admin.md` |
 | 24. Devices | Web/mobile/Mac, profile menu, leftover WAV account caveat | `frontend/src/app/profile/page.tsx`; `frontend/src/lib/tauri.ts`; `mac-app/README.md`; `mac-app/src-tauri/src/leftover.rs` |
+| M1–M7. Mac app tab | Install/update, permissions, System recording and mic choice, sleep, leftovers, meeting detection, mute following, caption windows/translation, interpretation, local intake/report/MCP control, troubleshooting | `mac-app/scripts/install.sh`; `mac-app/src-tauri/src/update.rs`; `update_policy.rs`; `audio.rs`; `input_select.rs`; `sleep.rs`; `meeting.rs`; `meeting_detect.rs`; `zoom_mute.rs`; `meet_mute.rs`; `caption_translate.rs`; `frontend/src/app/record/page.tsx`; `frontend/src/components/IntakeSettings.tsx`; `frontend/src/components/record/CaptionOverlayPanel.tsx`; `frontend/src/lib/navigation.ts` |
 | 25. Security | Current-source authorization, external search, public link, issued JWT limits | `backend/python/qa/SOURCE_CONTRACT.md`; `backend/internal/service/summary_privacy.go`; `backend/internal/service/account.go`; `CLAUDE.md` |
 | 26–28. Operations | Team workflows, failure recovery, terms, version/activation limits | Cross-checks against the flows above; no invented deployment or compliance claims |
 
