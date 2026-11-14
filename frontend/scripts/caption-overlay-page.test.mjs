@@ -109,8 +109,9 @@ function loadPage(lang, { tauriWindow = true, invokeFails = false } = {}) {
     for (const l of listeners) if (l.event === event) l.handler({ event, payload });
   };
   const lines = () => box.children.map((c) => c.textContent);
+  const lineColors = () => box.children.map((c) => c.style.color ?? '');
   const runFrames = () => { for (const cb of frames.splice(0)) cb(); };
-  return { listeners, emit, lines, properties, grip, sizes, runFrames, rootClasses, frames, context, invokes, frameClasses };
+  return { listeners, emit, lines, lineColors, properties, grip, sizes, runFrames, rootClasses, frames, context, invokes, frameClasses };
 }
 
 const entry = (lang, id, text, isFinal, order = 0) => ({ lang, kind: 'entry', id, order, text, isFinal });
@@ -262,4 +263,16 @@ test('a failed idle report is retried on the next update', async () => {
   await new Promise((r) => setImmediate(r));
   page.emit('caption-update', entry('en', 'u1', 'Hello', false));
   assert.deepEqual(idleReports(page), [false, false]);
+});
+
+test('a speaker colours its line; the first voice and drafts keep the chosen colour', () => {
+  const page = loadPage('en');
+  page.emit('caption-update', { ...entry('en', 'u1', 'First', true, 0), speaker: 0 });
+  page.emit('caption-update', entry('en', 'u2', 'Second draft', false, 1));
+  page.emit('caption-update', { ...entry('en', 'u2', 'Second', true, 1), speaker: 1 });
+  assert.deepEqual(page.lineColors(), ['', '#7ee2a8']);
+  page.emit('caption-update', { ...entry('en', 'u3', 'Third', true, 2), speaker: 8 });
+  page.emit('caption-update', { ...entry('en', 'u4', 'Fourth', true, 3), speaker: 'x' });
+  assert.deepEqual(page.lines().slice(-2), ['Third', 'Fourth']);
+  assert.deepEqual(page.lineColors().slice(-2), ['#ffd166', ''], 'colours repeat after six; a non-number has none');
 });

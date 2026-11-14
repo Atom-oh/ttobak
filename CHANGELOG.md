@@ -29,7 +29,7 @@ manifests.
   system audio and shows live interpretation with no meeting; no audio file,
   transcript or upload is created. Needs a Mac app build with the
   `start_listening` command (#949).
-- Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes.
+- Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes. The floating caption windows show the same speaker colours from Mac app 0.2.2.
 
 ### Changed
 

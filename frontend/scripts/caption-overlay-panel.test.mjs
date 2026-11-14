@@ -30,7 +30,7 @@ function loadModule(path, dependencies = {}, globals = {}) {
 }
 
 const liveTranslation = loadModule('lib/liveTranslation.ts');
-const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation });
+const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation, './interpretSpeakers': loadModule('lib/interpretSpeakers.ts') });
 const layoutPrefs = loadModule('lib/recordLayoutPrefs.ts');
 const { CaptionOverlayPanel } = loadModule('components/record/CaptionOverlayPanel.tsx', {
   'react': React,
