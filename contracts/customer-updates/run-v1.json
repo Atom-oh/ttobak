@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "note": "Payload the Go worker sends to the customer-update agent runtime, and the sealed result rows the runtime writes under CURUN#{runId}.",
+  "example": {
+    "version": 1,
+    "runId": "0123456789abcdef0123456789abcdef",
+    "items": [
+      {
+        "urlHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "url": "https://example.com/news/bedrock-korea-launch"
+      }
+    ],
+    "accounts": [
+      {
+        "accountId": "acct-hanbit-retail",
+        "name": "한빛리테일",
+        "services": [
+          "Amazon Bedrock",
+          "Amazon OpenSearch Service"
+        ],
+        "opportunities": [
+          {
+            "projectId": "proj-0001",
+            "name": "상품 추천 고도화",
+            "stage": "Technical Validation"
+          }
+        ],
+        "news": [
+          {
+            "title": "한빛리테일, 온라인 물류센터 확장",
+            "summary": "신규 물류센터 가동으로 주문 처리량이 늘어날 전망."
+          }
+        ],
+        "insights": [
+          {
+            "type": "need",
+            "text": "고객 문의 응대 자동화에 관심이 있음."
+          }
+        ],
+        "notes": [
+          "지난 미팅에서 생성형 AI 도입 일정을 논의함."
+        ],
+        "blockList": [
+          "블루웨이브",
+          "Bluewave"
+        ],
+        "draftsRemaining": 3
+      }
+    ],
+    "budgets": {
+      "maxResearchPairs": 10,
+      "maxDrafts": 20
+    }
+  },
+  "limits": {
+    "items": {
+      "min": 1,
+      "max": 30
+    },
+    "accounts": {
+      "min": 1,
+      "max": 40
+    },
+    "accountMaxSerializedUtf8Bytes": 8000,
+    "accountIdPattern": "^[A-Za-z0-9_-]{1,64}$",
+    "runIdPattern": "^[0-9a-f]{32}$",
+    "urlHashPattern": "^[0-9a-f]{64}$",
+    "urlScheme": "https",
+    "blockList": "names (companies, people, products) never to mention; each entry is matched as an ASCII-case-insensitive substring of the draft body and why"
+  },
+  "budgets": {
+    "maxResearchPairs": {
+      "default": 10,
+      "min": 0,
+      "max": 10
+    },
+    "maxDrafts": {
+      "default": 30,
+      "min": 0,
+      "max": 30
+    },
+    "webSearchPerResearchedPair": 5,
+    "pageFetchesPerResearchedPair": 3,
+    "rewritesPerDraft": 1
+  },
+  "resultRows": {
+    "common": {
+      "PK": "CURUN#{runId}",
+      "pendingShareExpiresAt": "now + 2 days, integer epoch seconds",
+      "entityType": "row kind name"
+    },
+    "sealing": {
+      "binding": {
+        "purpose": "ttobak-customer-update-run",
+        "runId": "<runId>",
+        "sk": "<row SK>"
+      },
+      "envelope": "Format defined in backend/internal/sealing/envelope.go."
+    },
+    "rows": {
+      "CLAIM": {
+        "entityType": "UPDATE_RUN_CLAIM",
+        "plaintext": {
+          "claimedAt": "RFC 3339 UTC timestamp ending in Z"
+        },
+        "order": "written first, with ConditionExpression attribute_not_exists(PK)"
+      },
+      "ITEM#{urlHash}": {
+        "plaintext": {
+          "state": "decided | deferred | skipped",
+          "reason": "code, see reasons"
+        },
+        "entityType": "UPDATE_RUN_ITEM",
+        "reasons": {
+          "decided": [
+            ""
+          ],
+          "deferred": [
+            "budget",
+            "gate_error"
+          ],
+          "skipped": [
+            "insufficient",
+            "failed"
+          ],
+          "gate_error": "candidate scoring or a pair decision failed; the item is retryable in a later run, and a pair whose decision failed has no DEC row"
+        }
+      },
+      "DEC#{urlHash}#{accountId}": {
+        "plaintext": {
+          "choice": "needed | not_needed",
+          "score": "number",
+          "backend": "gate backend name",
+          "outcome": "\"\" | drafted | discarded | deferred",
+          "discardReason": "code only, see discardReasons"
+        },
+        "sealed": {
+          "reason": "text",
+          "gateInput": "present only when choice = needed"
+        },
+        "entityType": "UPDATE_RUN_DECISION",
+        "discardReasons": {
+          "outcome \"\" or drafted": [
+            ""
+          ],
+          "outcome discarded": [
+            "check codes from draft-checks-v1.json and why_invalid, joined by commas in fixed order",
+            "writer_error",
+            "pipeline_error",
+            "already_drafted",
+            "not_passed",
+            "review:review_rejected",
+            "review:review_error"
+          ],
+          "outcome deferred": [
+            "research_budget",
+            "draft_budget",
+            "account_budget"
+          ]
+        }
+      },
+      "DRAFT#{accountId}#{urlHash}": {
+        "plaintext": "keys only",
+        "sealed": {
+          "sourceUrl": "url",
+          "sourceTitle": "raw text",
+          "why": "raw text for the sender only: non-empty, at most 400 characters, and passes the same checks as body except link_missing and no_meeting_offer",
+          "body": "raw text; passes every draft check against links and fetchedUrls",
+          "links": "list",
+          "opportunityIds": "list",
+          "fetchedUrls": "ledger.allowed_urls(pair), recorded by code"
+        },
+        "entityType": "UPDATE_RUN_DRAFT"
+      },
+      "DONE": {
+        "plaintext": {
+          "finishedAt": "RFC 3339 UTC timestamp ending in Z",
+          "stats": "counts only"
+        },
+        "order": "written last",
+        "entityType": "UPDATE_RUN_DONE"
+      }
+    },
+    "rules": [
+      "A runId is single-use: the runtime writes CLAIM first, conditionally, before any model call or other row; a reused runId is refused (HTTP 409 RUN_EXISTS) and writes nothing.",
+      "A run without DONE is ignored (failed, timed out or still running).",
+      "A DRAFT row counts only when its DEC row says outcome drafted.",
+      "Sealed text fields are raw, unescaped. A consumer that posts through the Slack API escapes them with escape_slack (checks.py, draft-checks-v1.json escapeCases); the copy-to-clipboard path uses the raw text."
+    ]
+  }
+}
