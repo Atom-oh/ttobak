@@ -25,8 +25,8 @@ placeholder, the app disables update checks and `npm run release` refuses.
    `$USER`) or set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` per run. Never commit the key
    or password, or put them in env files.
 3. Put the public key in `tauri.conf.json` through a normal PR.
-4. Keep offline backups of the private key and a password-protected `.p12` export of
-   the "TTOBAK Dev" certificate.
+4. Back up the private key, its password and a password-protected `.p12` export of
+   the "TTOBAK Dev" identity ([Backup and restore](#backup-and-restore)).
 5. Export `TAURI_SIGNING_PRIVATE_KEY_PATH=~/.tauri/ttobak-updater.key` when releasing.
 
 ## Release
@@ -79,6 +79,44 @@ Old archives are kept. To roll back the announcement, upload the earlier
 `--cache-control no-cache,max-age=0,must-revalidate` and invalidate `/mac/latest.json`.
 Installed newer apps do not downgrade (`allowDowngrades` is off). Fix forward with a
 higher version.
+
+## Backup and restore
+
+Backups live in AWS Secrets Manager in the TTOBAK account, region `ap-northeast-2`,
+tagged `project=ttobak` and `purpose=mac-release-backup` (stored 2026-11-14):
+
+| Secret | Content |
+|---|---|
+| `ttobak/mac/updater-key` | Minisign private key (`~/.tauri/ttobak-updater.key`, no trailing newline) |
+| `ttobak/mac/updater-key-pub` | Matching public key (`~/.tauri/ttobak-updater.key.pub`) |
+| `ttobak/mac/updater-key-password` | Private key password (keychain service `ttobak-updater-key`) |
+| `ttobak/mac/dev-cert-p12` | Binary `.p12` of the "TTOBAK Dev" certificate and private key |
+| `ttobak/mac/dev-cert-p12-password` | The `.p12` export password |
+
+Anyone who can read these secrets in that account can sign releases. Keep read
+access to account administrators. Writing them is an owner action, run in the
+owner's own terminal.
+
+- **Back up:** create each secret with `aws secretsmanager create-secret --name …`.
+  Pass `--secret-string file://…` for the key files, and `--secret-binary fileb://…`
+  for the `.p12`. Export only the "TTOBAK Dev" identity, selected by its SHA-1, never
+  the whole keychain (`security export -t identities` exports every identity).
+- **Verify a backup without printing it:** compare SHA-256 digests. AWS CLI text
+  output adds a trailing newline, so strip it first:
+  `printf %s "$(aws secretsmanager get-secret-value --secret-id ttobak/mac/updater-key --query SecretString --output text)" | shasum -a 256`
+  must equal `shasum -a 256 < ~/.tauri/ttobak-updater.key`.
+- **Restore on a new Mac:**
+  1. Write the key files with `printf %s "$(aws … --query SecretString --output text)" > ~/.tauri/ttobak-updater.key`.
+     Use `chmod 700 ~/.tauri` and `chmod 600` on the private key.
+  2. Restore the keychain password with `security add-generic-password -s ttobak-updater-key -a "$USER" -w "<value>"`.
+  3. Write the `.p12` with `aws … --query SecretBinary --output text | base64 -d`, then
+     import it by double-clicking it with the stored password.
+  4. Trust the certificate for code signing:
+     `security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db <cert.pem>`.
+  5. Confirm `security find-identity -v -p codesigning` lists `C1D1D726…4A26`, then
+     delete the temporary `.p12`.
+- The `.p12` uses legacy RC2 encryption: Homebrew OpenSSL 3 needs `-legacy`, while
+  `/usr/bin/openssl` (LibreSSL) reads it directly.
 
 ## Key loss and expiry
 
