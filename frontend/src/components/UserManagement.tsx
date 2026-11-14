@@ -5,6 +5,9 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { adminUsersApi, type AdminUserSummary } from '@/lib/api';
 import { UserNameEditor } from '@/components/UserNameEditor';
+import { hasTeamSyncCommand } from '@/lib/tauri';
+import { TeamSyncPanel } from '@/components/TeamSyncPanel';
+import { TEAM_COLUMN_LABEL, teamSyncVisible, teamValue } from '@/lib/teamSync';
 
 // Dormancy is server-computed (see backend AdminUserSummary.dormant) — a
 // missing lastLoginAt never counts as dormant, since on day one after this
@@ -70,6 +73,14 @@ export function UserManagement() {
   // Tracks which user row currently has an action in flight, to disable its
   // buttons without blocking the rest of the table.
   const [actingOn, setActingOn] = useState<string | null>(null);
+  const isAdmin = !!currentUser?.isAdmin;
+  // Shown only to admins in a Mac app that has the command; the API enforces admin.
+  const [hasCommand, setHasCommand] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void hasTeamSyncCommand().then((ok) => { if (active) setHasCommand(ok); });
+    return () => { active = false; };
+  }, []);
 
   const fetchUsers = useCallback(async () => {
     const generation = ++requestGeneration.current;
@@ -174,6 +185,8 @@ export function UserManagement() {
         가입한 사용자 목록과 최종 로그인 시각을 확인하고, 이름 수정, 계정 활성화/비활성화, 삭제, 초대 재발송, 비밀번호 재설정을 관리할 수 있습니다.
       </p>
 
+      {teamSyncVisible(isAdmin, hasCommand) && <TeamSyncPanel onApplied={fetchUsers} />}
+
       {error && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
           <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
@@ -211,6 +224,7 @@ export function UserManagement() {
                 <tr className="bg-slate-50 dark:bg-surface-lowest border-b border-slate-200 dark:border-white/10">
                   <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">이메일</th>
                   <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">이름</th>
+                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">{TEAM_COLUMN_LABEL}</th>
                   <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">상태</th>
                   <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">최종 로그인</th>
                   <th className="text-right px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">작업</th>
@@ -236,6 +250,9 @@ export function UserManagement() {
                           disabled={busy}
                           onSave={(name) => handleRename(user, name)}
                         />
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-text-secondary">
+                        {teamValue(user.department)}
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge user={user} />

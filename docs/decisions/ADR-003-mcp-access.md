@@ -615,4 +615,21 @@ configuration.
   nothing inside a package is executed, and packages change a Mac only when
   its user presses [Setup]. Installing a package never widens the report
   run's tool allowlist (ADR-023).
+- Admin team sync: `ttobak-mcp team-sync run` (preview) and
+  `team-sync run --apply --preview-id <32 hex>` (`mcp-server/src/team-sync/`)
+  set each verified `@amazon.com` pool user's `custom:department` to their
+  directory manager's alias (a manager gets their own alias). The runner lists
+  users through the admin API (`RequireAdmin` stays the only authorization),
+  resolves `builder-mcp` on the Mac's PATH and calls exactly one allowlisted
+  tool, `ReadInternalWebsites`, sequentially with
+  `https://phonetool.amazon.com/users/<alias>`. Only the alias, the manager flag
+  and the manager alias are read from a directory answer; nothing else is
+  logged, stored or sent. At most 500 directory users per run (`TOO_MANY_USERS`).
+  Preview stores `{ previewId, createdAt, changes }` at 0600 in the intake store;
+  apply needs the matching ID within 15 minutes (`PREVIEW_EXPIRED`), sends
+  chunks of 200 `{ userId, team, expected }` items, then deletes the preview.
+  Only user IDs and team values leave the Mac; a changed value is a conflict,
+  not a write. Failures print `{ ok: false, code }` (`NOT_ADMIN`,
+  `DIRECTORY_UNAVAILABLE`, `AUTH_EXPIRED_MIDWAY`); progress is `team-sync: n/total`
+  on stderr without aliases.
 

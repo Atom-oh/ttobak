@@ -700,6 +700,8 @@ export interface AdminUserSummary {
   createdAt: string;
   lastLoginAt: string | null;
   dormant: boolean;
+  /** Team (custom:department); empty when unset. */
+  department: string;
 }
 
 export interface AdminUserListResponse {

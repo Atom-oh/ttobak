@@ -208,7 +208,8 @@ export class AuthStack extends cdk.Stack {
     // Every client may write only `name` and `email`. Unset WriteAttributes lets any
     // signed-in user call UpdateUserAttributes on every mutable attribute, including the
     // custom:* attributes cc-on-bedrock uses for authorization (department budgets, IAM
-    // role naming); those are set through Admin* APIs only. `email` must stay writable
+    // role naming); those are set through Admin* APIs only (the API writes just
+    // custom:department, via the admin team sync). `email` must stay writable
     // because it is a required attribute (Cognito rejects a client that cannot write a
     // required attribute); keepOriginal below holds an email change until it is verified.
     // The remaining self-service email change is an accepted risk (ADR-007).

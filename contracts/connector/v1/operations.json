@@ -176,6 +176,7 @@
     ["api.userAdmin.resendInvite", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/settings/users/{userId}/resend-invite"],
     ["api.userAdmin.resetPassword", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/settings/users/{userId}/reset-password"],
     ["api.userAdmin.updateUserName", "ttobak-api-bridge", ["read", "write"], false, "PUT", "/api/settings/users/{userId}/name"],
+    ["api.userAdmin.syncTeams", "ttobak-api-bridge", ["read", "write"], false, "POST", "/api/settings/users/team-sync"],
     ["api.dict.getDictionary", "ttobak-api-bridge", ["read"], false, "GET", "/api/settings/dictionary"],
     ["api.dict.updateDictionary", "ttobak-api-bridge", ["read", "write"], false, "PUT", "/api/settings/dictionary"],
     ["api.dict.deleteTerm", "ttobak-api-bridge", ["delete", "read"], false, "DELETE", "/api/settings/dictionary/term"],
