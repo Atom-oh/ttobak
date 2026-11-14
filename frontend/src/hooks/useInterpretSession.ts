@@ -9,6 +9,7 @@ import {
   startNativeListening, stopNativeListening, type NativeSelectedInput,
 } from '@/lib/tauri';
 import { InterpretController, type InterpretState } from '@/lib/interpretController';
+import { retryUntilLoaded } from '@/lib/interpretSession';
 
 export type { InterpretPhase } from '@/lib/interpretController';
 
@@ -95,11 +96,12 @@ export function useInterpretSession({
 
   useEffect(() => {
     if (!isTauri()) return;
-    let config: Promise<TranscribeStreamingConfig | null> | null = null;
+    // A failed load is retried by the next start instead of disabling the screen until a reload.
+    const loadConfig = retryUntilLoaded(loadTranscribeConfig);
     // Each caption session restarts its segment IDs; the prefix keeps them apart.
     let sttSession = 0;
     const controller: Controller = new InterpretController({
-      loadConfig: () => (config ??= loadTranscribeConfig().catch(() => null)),
+      loadConfig,
       startCapture: startNativeListening,
       stopCapture: stopNativeListening,
       createStt: (transcribeStreamingConfig, options, handlers) => {
@@ -135,6 +137,10 @@ export function useInterpretSession({
       subscribe: ({ onChunk, onStopped }) => {
         const unsubscribe = [onNativePcmChunk(onChunk), onNativeListeningStopped(onStopped)];
         return () => unsubscribe.forEach((stop) => stop());
+      },
+      onPageHide: (handler) => {
+        window.addEventListener('pagehide', handler);
+        return () => window.removeEventListener('pagehide', handler);
       },
       isCommandNotFound,
       versionSkewMessage: INTERPRET_VERSION_SKEW_MESSAGE,

@@ -389,3 +389,18 @@ test('the reconnecting notice does not outlive the session', async () => {
   assert.equal(failed.state().error, M.reconnectFailed);
   assert.equal(failed.state().notice, null);
 });
+
+test('the page going away stops a running capture', async () => {
+  const leaving = [];
+  const h = await started(harness({
+    onPageHide: (handler) => { leaving.push(handler); return () => { leaving.splice(leaving.indexOf(handler), 1); }; },
+  }));
+  assert.equal(leaving.length, 1);
+  leaving[0]();
+  await settle();
+  assert.equal(h.calls.stopCapture, 2, 'the mount-time stop plus the one for the page leaving');
+  assert.equal(h.sessions[0].stopped, true);
+  assert.equal(h.state().phase, 'idle');
+  await h.controller.dispose();
+  assert.equal(leaving.length, 0, 'dispose stops watching the page');
+});
