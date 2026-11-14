@@ -25614,7 +25614,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
   const remove = [];
   const held = {};
   const released = [];
-  const preview = [];
+  const preview2 = [];
   const seen = /* @__PURE__ */ new Set();
   const removeTracked = (id) => {
     if (!ledger[id] || remove.includes(id)) return false;
@@ -25637,7 +25637,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     if (item2.isCanceled) {
       released.push(item2.meetingId);
       if (!removeTracked(item2.meetingId)) counts.cancelledUntracked++;
-      else preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
+      else preview2.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
     if (excludedSensitivity(item2)) {
@@ -25655,7 +25655,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
       counts.excludedByResponse++;
       if (response === "decline") released.push(item2.meetingId);
       else held[item2.meetingId] = { fp: "", startsAt: start.toISOString(), endsAt: end.toISOString() };
-      if (removeTracked(item2.meetingId)) preview.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
+      if (removeTracked(item2.meetingId)) preview2.push({ title: item2.subject ?? UNTITLED, startsAt: item2.start, op: "remove" });
       continue;
     }
     if (end.getTime() - start.getTime() > LONG_EVENT_MS) {
@@ -25675,7 +25675,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
     const fp = fingerprint(event);
     if (ledger[event.externalId]?.fp === fp) {
       counts.unchanged++;
-      preview.push({ title: event.title, startsAt: event.startsAt, op: "unchanged" });
+      preview2.push({ title: event.title, startsAt: event.startsAt, op: "unchanged" });
       continue;
     }
     mutations.push({ op: "upsert", event });
@@ -25687,7 +25687,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
       ...share ? { share } : {}
     };
     counts.upserts++;
-    preview.push({ title: event.title, startsAt: event.startsAt, op: "upsert" });
+    preview2.push({ title: event.title, startsAt: event.startsAt, op: "upsert" });
   }
   for (const [id, entry2] of Object.entries(ledger)) {
     if (seen.has(id)) continue;
@@ -25696,7 +25696,7 @@ function planCalendar(items, ledger, window, zone, responses = DEFAULT_CALENDAR_
   }
   const key = (mutation) => mutation.op === "upsert" ? mutation.event.externalId : mutation.externalId;
   mutations.sort((first, second) => key(first) < key(second) ? -1 : key(first) > key(second) ? 1 : 0);
-  return { mutations, set: set2, remove, held, released, counts, preview };
+  return { mutations, set: set2, remove, held, released, counts, preview: preview2 };
 }
 function batches2(mutations) {
   return batches(mutations, MAX_BATCH2);
@@ -29970,14 +29970,14 @@ function loadIdentity(store, scope) {
 function loadSeen(store, scope) {
   const raw = store.read(...seenPath(scope));
   if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {}, unknown: {} };
-  const record19 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
-  if (raw.version !== 1 || !record19(raw.seen) || !record19(raw.pending) || !record19(raw.closing)) {
+  const record20 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+  if (raw.version !== 1 || !record20(raw.seen) || !record20(raw.pending) || !record20(raw.closing)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   raw.refreshed ??= {};
   raw.requestDue ??= {};
   raw.unknown ??= {};
-  if (!record19(raw.refreshed) || !record19(raw.requestDue) || !record19(raw.unknown) || raw.tracked !== void 0 && !record19(raw.tracked)) {
+  if (!record20(raw.refreshed) || !record20(raw.requestDue) || !record20(raw.unknown) || raw.tracked !== void 0 && !record20(raw.tracked)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   return raw;
@@ -30133,34 +30133,34 @@ var init_tasks = __esm({
           this.fallbackLogin = recorded?.login ?? "";
           throw new IntakeError(this.options.unavailable?.specreq ?? "NOT_SELECTED");
         }
-        let login3;
+        let login4;
         try {
-          login3 = await resolveMe(session);
+          login4 = await resolveMe(session);
         } catch (error3) {
           this.fallbackLogin = recorded?.login ?? "";
           throw error3;
         }
-        if (recorded && recorded.login !== login3) {
+        if (recorded && recorded.login !== login4) {
           throw new IntakeError("IDENTITY_MISMATCH", "the SpecReq login differs from the one recorded for this TTOBAK account");
         }
         if (!recorded) store.write(
-          { version: 1, login: login3, recordedAt: now.toISOString() },
+          { version: 1, login: login4, recordedAt: now.toISOString() },
           ...seenPath(scope, "identity.json")
         );
-        this.myLogin = login3;
+        this.myLogin = login4;
       }
       amazonLogin() {
         return this.myLogin || this.fallbackLogin || alias(this.options.me.email) || "";
       }
       /** Every address I may attend with, lowercased and deduplicated. */
       myEmails() {
-        const login3 = this.amazonLogin();
-        return [...new Set([this.options.me.email.trim().toLowerCase(), ...login3 ? [`${login3}@amazon.com`] : []].filter(Boolean))];
+        const login4 = this.amazonLogin();
+        return [...new Set([this.options.me.email.trim().toLowerCase(), ...login4 ? [`${login4}@amazon.com`] : []].filter(Boolean))];
       }
       /** The address the meetings provider expects; the TTOBAK email only when no Amazon login is known. */
       meetingsEmail() {
-        const login3 = this.amazonLogin();
-        return login3 ? `${login3}@amazon.com` : this.options.me.email;
+        const login4 = this.amazonLogin();
+        return login4 ? `${login4}@amazon.com` : this.options.me.email;
       }
       /** Records this sync's new occurrences first, so a failed step retries them next run. */
       register() {
@@ -31203,13 +31203,13 @@ async function openMeetingFacts(environment, store, selection, scope, me, now) {
   } catch {
     session = void 0;
   }
-  let login3 = "";
+  let login4 = "";
   try {
-    login3 = scope ? loadIdentity(store, scope)?.login ?? "" : "";
+    login4 = scope ? loadIdentity(store, scope)?.login ?? "" : "";
   } catch {
-    login3 = "";
+    login4 = "";
   }
-  const userEmail = login3 ? `${login3}@amazon.com` : me?.email ?? "";
+  const userEmail = login4 ? `${login4}@amazon.com` : me?.email ?? "";
   const active = session;
   const reader = active && userEmail ? {
     list: async (window) => resultJson(await active.call("list_meetings", {
@@ -33059,6 +33059,259 @@ var init_run2 = __esm({
   }
 });
 
+// src/team-sync/rule.ts
+function directoryAlias(user) {
+  if (user.emailVerified !== true || typeof user.email !== "string") return null;
+  const at = user.email.lastIndexOf("@");
+  if (at < 1 || user.email.slice(at + 1).toLowerCase() !== "amazon.com") return null;
+  const alias2 = user.email.slice(0, at).toLowerCase();
+  return TEAM_PATTERN.test(alias2) ? alias2 : null;
+}
+function teamFor(alias2, person) {
+  if (!person || person.login !== alias2) return null;
+  const team = person.isManager ? alias2 : person.managerLogin;
+  return team !== null && TEAM_PATTERN.test(team) ? team : null;
+}
+function planTeams(users, people) {
+  const plan = { changes: [], unchanged: 0, notFound: [], skippedNonDirectory: 0 };
+  for (const user of users) {
+    const alias2 = directoryAlias(user);
+    if (alias2 === null) {
+      plan.skippedNonDirectory++;
+      continue;
+    }
+    const team = teamFor(alias2, people.get(alias2) ?? null);
+    if (team === null) {
+      plan.notFound.push(alias2);
+      continue;
+    }
+    if (team === (user.department ?? "")) {
+      plan.unchanged++;
+      continue;
+    }
+    plan.changes.push({ userId: user.userId, alias: alias2, from: user.department ?? "", to: team });
+  }
+  plan.changes.sort((a, b) => a.alias.localeCompare(b.alias));
+  return plan;
+}
+var TEAM_PATTERN;
+var init_rule = __esm({
+  "src/team-sync/rule.ts"() {
+    "use strict";
+    TEAM_PATTERN = /^[a-z0-9][a-z0-9-]{0,49}$/;
+  }
+});
+
+// src/team-sync/directory.ts
+function record19(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function login3(value) {
+  return typeof value === "string" && TEAM_PATTERN.test(value.toLowerCase()) ? value.toLowerCase() : null;
+}
+function parsePerson(_alias, toolText) {
+  let value;
+  try {
+    value = JSON.parse(toolText);
+  } catch {
+    if (AUTH_PATTERN.test(toolText)) throw new IntakeError("AUTH_EXPIRED_MIDWAY", "the directory reported an authentication failure");
+    return null;
+  }
+  const outer = record19(value) ? value.content : void 0;
+  if (!record19(outer)) return null;
+  if (outer.status !== "success") {
+    if (typeof outer.status === "string" && AUTH_PATTERN.test(outer.status)) {
+      throw new IntakeError("AUTH_EXPIRED_MIDWAY", "the directory reported an authentication failure");
+    }
+    return null;
+  }
+  const person = outer.content;
+  if (!record19(person)) return null;
+  const own = login3(person.login);
+  if (own === null || typeof person.is_manager !== "boolean") return null;
+  const manager = record19(person.manager) ? login3(person.manager.login) : null;
+  return { login: own, isManager: person.is_manager, managerLogin: manager };
+}
+async function openDirectory(environment) {
+  const pathDirs = parsePathList(environment.env.PATH);
+  const command = resolveCommand(BUILDER_COMMAND, pathDirs, environment.home);
+  if (!command) throw new IntakeError("DIRECTORY_UNAVAILABLE", `${BUILDER_COMMAND} was not found on PATH`);
+  const session = await McpSession.open(
+    { command, args: [], env: {} },
+    BUILDER_COMMAND,
+    { pathDirs, allowedTools: [DIRECTORY_TOOL], callTimeoutMs: CALL_TIMEOUT_MS }
+  );
+  return {
+    async lookup(alias2) {
+      const result = await session.call(DIRECTORY_TOOL, { inputs: [`${DIRECTORY_URL_PREFIX}${alias2}`] });
+      const text5 = (result.content ?? []).map((item2) => item2.type === "text" ? item2.text : "").join("\n");
+      return parsePerson(alias2, text5);
+    },
+    close: () => session.close()
+  };
+}
+var DIRECTORY_TOOL, DIRECTORY_URL_PREFIX, CALL_TIMEOUT_MS, BUILDER_COMMAND;
+var init_directory = __esm({
+  "src/team-sync/directory.ts"() {
+    "use strict";
+    init_errors4();
+    init_hosts();
+    init_mcp_client();
+    init_rule();
+    DIRECTORY_TOOL = "ReadInternalWebsites";
+    DIRECTORY_URL_PREFIX = "https://phonetool.amazon.com/users/";
+    CALL_TIMEOUT_MS = 3e4;
+    BUILDER_COMMAND = "builder-mcp";
+  }
+});
+
+// src/team-sync/run.ts
+var run_exports3 = {};
+__export(run_exports3, {
+  MAX_USERS: () => MAX_USERS,
+  PREVIEW_FILE: () => PREVIEW_FILE,
+  PREVIEW_TTL_MS: () => PREVIEW_TTL_MS,
+  runTeamSync: () => runTeamSync
+});
+import { randomBytes as randomBytes4 } from "node:crypto";
+import { unlinkSync as unlinkSync4 } from "node:fs";
+import { join as join13 } from "node:path";
+function parseFlags(args) {
+  let apply2 = false;
+  let previewId;
+  for (let index = 0; index < args.length; index++) {
+    const name = args[index];
+    if (name === "--apply" && !apply2) apply2 = true;
+    else if (name === "--preview-id" && previewId === void 0) previewId = args[++index];
+    else throw new IntakeError("INVALID_ARGUMENT", "unexpected argument");
+  }
+  if (apply2 !== (previewId !== void 0) || previewId !== void 0 && !PREVIEW_ID.test(previewId)) {
+    throw new IntakeError("INVALID_ARGUMENT", "--apply and --preview-id <32 hex> go together");
+  }
+  return { apply: apply2, ...previewId !== void 0 ? { previewId } : {} };
+}
+async function adminCall(call) {
+  try {
+    return await call();
+  } catch (error3) {
+    if (error3 instanceof IntakeError) throw error3;
+    if (error3 instanceof ApiResponseError && error3.status === 403) throw new IntakeError("NOT_ADMIN");
+    const failure2 = deliveryFailure(error3);
+    if (failure2.kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    if (failure2.kind === "rejected") throw new IntakeError("TTOBAK_REJECTED");
+    throw new IntakeError("TTOBAK_UNAVAILABLE");
+  }
+}
+async function preview(environment, store) {
+  const { api } = await signIn(store.read("selection.json"), environment, false, true);
+  if (!api) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+  const listed2 = await adminCall(() => api.adminListUsers());
+  const users = Array.isArray(listed2.users) ? listed2.users : [];
+  const aliases = [...new Set(users.map(directoryAlias).filter((alias2) => alias2 !== null))];
+  if (aliases.length > MAX_USERS) throw new IntakeError("TOO_MANY_USERS", `more than ${MAX_USERS} directory users`);
+  const people = /* @__PURE__ */ new Map();
+  if (aliases.length) {
+    const directory = await (environment.openDirectory ?? (() => openDirectory(environment)))();
+    try {
+      for (const [index, alias2] of aliases.entries()) {
+        people.set(alias2, await directory.lookup(alias2));
+        environment.stderr?.(`team-sync: ${index + 1}/${aliases.length}`);
+      }
+    } finally {
+      await directory.close();
+    }
+  }
+  const plan = planTeams(users, people);
+  const previewId = randomBytes4(16).toString("hex");
+  const stored = { previewId, createdAt: environment.now().toISOString(), changes: plan.changes };
+  store.write(stored, PREVIEW_FILE);
+  return {
+    ok: true,
+    previewId,
+    changes: plan.changes.map(({ alias: alias2, from, to }) => ({ alias: alias2, from, to })),
+    unchanged: plan.unchanged,
+    notFound: plan.notFound,
+    skippedNonDirectory: plan.skippedNonDirectory,
+    truncated: listed2.truncated === true
+  };
+}
+function loadPreview(store, previewId, now) {
+  const stored = store.read(PREVIEW_FILE);
+  const created = stored ? Date.parse(stored.createdAt) : NaN;
+  if (!stored || stored.previewId !== previewId || !Number.isFinite(created) || now.getTime() - created > PREVIEW_TTL_MS || created - now.getTime() > 6e4 || !Array.isArray(stored.changes) || stored.changes.length > MAX_USERS) {
+    throw new IntakeError("PREVIEW_EXPIRED");
+  }
+  for (const change of stored.changes) {
+    if (typeof change?.userId !== "string" || typeof change.from !== "string" || typeof change.to !== "string" || !TEAM_PATTERN.test(change.to)) throw new IntakeError("PREVIEW_EXPIRED");
+  }
+  return stored.changes;
+}
+async function apply(previewId, environment, store) {
+  const changes = loadPreview(store, previewId, environment.now());
+  const total = { updated: [], unchanged: 0, conflicts: [], rejected: [] };
+  if (changes.length) {
+    const { api } = await signIn(store.read("selection.json"), environment, false, true);
+    if (!api) throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+    for (let start = 0; start < changes.length; start += CHUNK) {
+      const items = changes.slice(start, start + CHUNK).map((change) => ({ userId: change.userId, team: change.to, expected: change.from }));
+      const result = await adminCall(() => api.syncTeams({ items }));
+      total.updated.push(...result.updated);
+      total.unchanged += result.unchanged;
+      total.conflicts.push(...result.conflicts);
+      total.rejected.push(...result.rejected);
+      environment.stderr?.(`team-sync: ${Math.min(start + CHUNK, changes.length)}/${changes.length}`);
+    }
+  }
+  try {
+    unlinkSync4(join13(store.directory, PREVIEW_FILE));
+  } catch {
+  }
+  return { ok: true, ...total };
+}
+async function runTeamSync(args, environment) {
+  const [command, ...rest] = args;
+  if (command !== "run") {
+    environment.stdout(USAGE3);
+    return command === "--help" || command === "help" ? 0 : 2;
+  }
+  const store = new IntakeStore(environment.home);
+  let release;
+  try {
+    const options2 = parseFlags(rest);
+    release = store.lock("team-sync");
+    const result = options2.apply ? await apply(options2.previewId, environment, store) : await preview(environment, store);
+    environment.stdout(JSON.stringify(result));
+    return 0;
+  } catch (error3) {
+    const code = error3 instanceof IntakeError && error3.code === "LOCKED" ? "RUN_IN_PROGRESS" : intakeCode(error3);
+    environment.stdout(JSON.stringify({ ok: false, code }));
+    return 2;
+  } finally {
+    release?.();
+  }
+}
+var PREVIEW_FILE, MAX_USERS, PREVIEW_TTL_MS, CHUNK, PREVIEW_ID, USAGE3;
+var init_run3 = __esm({
+  "src/team-sync/run.ts"() {
+    "use strict";
+    init_api2();
+    init_batch();
+    init_errors4();
+    init_run();
+    init_store();
+    init_directory();
+    init_rule();
+    PREVIEW_FILE = "team-sync-preview.json";
+    MAX_USERS = 500;
+    PREVIEW_TTL_MS = 15 * 60 * 1e3;
+    CHUNK = 200;
+    PREVIEW_ID = /^[a-f0-9]{32}$/;
+    USAGE3 = `Usage:
+  ttobak-mcp team-sync run
+  ttobak-mcp team-sync run --apply --preview-id <32 hex>`;
+  }
+});
+
 // src/setup/errors.ts
 var SetupError;
 var init_errors6 = __esm({
@@ -33419,7 +33672,7 @@ var init_fetch = __esm({
 
 // src/setup/approvals.ts
 import { mkdirSync as mkdirSync7, readFileSync as readFileSync9, renameSync as renameSync5, statSync as statSync5, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 function readApprovals(home) {
   try {
     if (statSync5(file2(home)).size > MAX_BYTES) return /* @__PURE__ */ new Set();
@@ -33432,7 +33685,7 @@ function readApprovals(home) {
 function addApprovals(home, keys2) {
   const approved = readApprovals(home);
   for (const key of keys2) approved.add(key);
-  const directory = join13(home, ".ttobak", "setup");
+  const directory = join14(home, ".ttobak", "setup");
   mkdirSync7(directory, { recursive: true, mode: 448 });
   const temporary = `${file2(home)}.tmp-${process.pid}`;
   writeFileSync6(temporary, JSON.stringify({ approved: [...approved].slice(-MAX_KEYS) }) + "\n", { mode: 384 });
@@ -33444,13 +33697,13 @@ var init_approvals = __esm({
     "use strict";
     MAX_BYTES = 256 * 1024;
     MAX_KEYS = 500;
-    file2 = (home) => join13(home, ".ttobak", "setup", "approvals.json");
+    file2 = (home) => join14(home, ".ttobak", "setup", "approvals.json");
   }
 });
 
 // src/setup/servers.ts
 import { existsSync as existsSync5, readFileSync as readFileSync10, statSync as statSync6 } from "node:fs";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 function jsonKeys(path2, pick2) {
   try {
     if (statSync6(path2).size > MAX_CONFIG_BYTES2) return /* @__PURE__ */ new Set();
@@ -33471,8 +33724,8 @@ async function planServers(env, servers) {
   const aim = find("aim");
   const claude = find("claude");
   const approvals = readApprovals(env.home);
-  const registered = jsonKeys(join14(env.home, ".claude.json"), (value) => value.mcpServers);
-  const aimInstalled = jsonKeys(join14(env.home, ".aim", "config.json"), (value) => value.toolBundles);
+  const registered = jsonKeys(join15(env.home, ".claude.json"), (value) => value.mcpServers);
+  const aimInstalled = jsonKeys(join15(env.home, ".aim", "config.json"), (value) => value.toolBundles);
   const registries = toolbox ? (await listed(env, toolbox, ["registry", "list"])).flatMap((line) => line.trim().split(/\s+/)) : [];
   const tools = toolbox ? (await listed(env, toolbox, ["list", "--installed"])).map((line) => line.trim().split(/\s+/)[0]) : [];
   const actions = [];
@@ -33506,7 +33759,7 @@ async function planServers(env, servers) {
       register && claude ? [claude, "mcp", "add", "-s", "user", name, "--", name] : null
     ], install);
   }
-  const aimBinary = aim ?? (toolbox ? join14(dirname4(toolbox), "aim") : null);
+  const aimBinary = aim ?? (toolbox ? join15(dirname4(toolbox), "aim") : null);
   const installAim = !aim && toolbox && !tools.includes("aim") ? [toolbox, "install", "aim"] : null;
   for (const name of servers.aimServers) {
     if (aimInstalled.has(name)) continue;
@@ -33538,7 +33791,7 @@ async function applyServers(env, plan, approve) {
   if (plan.actions.length === 0) {
     return plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
   }
-  if (runnable.some((action) => action.midway) && !existsSync5(join14(env.home, ".midway", "cookie"))) {
+  if (runnable.some((action) => action.midway) && !existsSync5(join15(env.home, ".midway", "cookie"))) {
     return { id: "servers", status: "failed", code: "AUTH_EXPIRED_MIDWAY" };
   }
   addApprovals(env.home, runnable.filter((action) => confirmed.has(action.key)).map((action) => action.key));
@@ -33575,8 +33828,8 @@ var init_servers = __esm({
 });
 
 // src/setup/skills.ts
-import { cpSync, existsSync as existsSync6, lstatSync as lstatSync6, mkdirSync as mkdirSync8, readFileSync as readFileSync11, renameSync as renameSync6, unlinkSync as unlinkSync4, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join15 } from "node:path";
+import { cpSync, existsSync as existsSync6, lstatSync as lstatSync6, mkdirSync as mkdirSync8, readFileSync as readFileSync11, renameSync as renameSync6, unlinkSync as unlinkSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join16 } from "node:path";
 function skillFiles(manifest, name) {
   if (!manifest || !manifest.skills.includes(name)) return null;
   const prefix = `${manifest.root}/skills/${name}/`;
@@ -33598,8 +33851,8 @@ function planSkills(home, effective, packages) {
   return effective.map((skill) => {
     const files = skillFiles(packages[skill.source], skill.name);
     if (!files) return { name: skill.name, source: skill.source, state: "missing", files: [] };
-    const dir = join15(skillsRoot(home), skill.name);
-    const state = !existsSync6(dir) ? "install" : files.every((file3) => sameFile(join15(dir, file3.path), file3.data)) ? "current" : "update";
+    const dir = join16(skillsRoot(home), skill.name);
+    const state = !existsSync6(dir) ? "install" : files.every((file3) => sameFile(join16(dir, file3.path), file3.data)) ? "current" : "update";
     return { name: skill.name, source: skill.source, state, files };
   });
 }
@@ -33607,7 +33860,7 @@ function noLinks(home, path2) {
   const relative2 = path2.slice(home.length + 1).split("/");
   let current = home;
   for (const part of relative2) {
-    current = join15(current, part);
+    current = join16(current, part);
     try {
       if (lstatSync6(current).isSymbolicLink()) return false;
     } catch {
@@ -33622,9 +33875,9 @@ function stamp(now) {
 }
 function backup(home, name, now) {
   mkdirSync8(backupRoot(home), { recursive: true, mode: 448 });
-  let target = join15(backupRoot(home), `${name}-${stamp(now)}`);
-  for (let n = 2; existsSync6(target); n++) target = join15(backupRoot(home), `${name}-${stamp(now)}-${n}`);
-  cpSync(join15(skillsRoot(home), name), target, { recursive: true, verbatimSymlinks: true, errorOnExist: true });
+  let target = join16(backupRoot(home), `${name}-${stamp(now)}`);
+  for (let n = 2; existsSync6(target); n++) target = join16(backupRoot(home), `${name}-${stamp(now)}-${n}`);
+  cpSync(join16(skillsRoot(home), name), target, { recursive: true, verbatimSymlinks: true, errorOnExist: true });
 }
 function installSkills(home, plans, _packages, now) {
   if (plans.length === 0) return { id: "skills", status: "skipped" };
@@ -33632,27 +33885,27 @@ function installSkills(home, plans, _packages, now) {
   if (missing.length) return { id: "skills", status: "failed", code: "PACKAGE_INVALID", items: missing };
   const changed = plans.filter((plan) => plan.state !== "current");
   for (const plan of changed) {
-    const dir = join15(skillsRoot(home), plan.name);
-    const targets = plan.files.map((file3) => join15(dir, file3.path));
+    const dir = join16(skillsRoot(home), plan.name);
+    const targets = plan.files.map((file3) => join16(dir, file3.path));
     if (![skillsRoot(home), dir, ...targets].every((path2) => path2.startsWith(`${skillsRoot(home)}/`) || path2 === skillsRoot(home)) || ![backupRoot(home), ...targets].every((path2) => noLinks(home, path2))) {
       return { id: "skills", status: "failed", code: "SKILL_PATH_UNSAFE", items: [plan.name] };
     }
   }
   const installed = [];
   for (const plan of changed) {
-    const dir = join15(skillsRoot(home), plan.name);
+    const dir = join16(skillsRoot(home), plan.name);
     try {
       if (plan.state === "update") backup(home, plan.name, now);
       for (const file3 of plan.files) {
-        const target = join15(dir, file3.path);
-        mkdirSync8(join15(target, ".."), { recursive: true });
+        const target = join16(dir, file3.path);
+        mkdirSync8(join16(target, ".."), { recursive: true });
         const temporary = `${target}.tmp-${process.pid}`;
         writeFileSync7(temporary, file3.data, { mode: file3.mode & 73 ? 493 : 420, flag: "wx" });
         try {
           renameSync6(temporary, target);
         } catch (error3) {
           try {
-            unlinkSync4(temporary);
+            unlinkSync5(temporary);
           } catch {
           }
           throw error3;
@@ -33669,14 +33922,14 @@ var skillsRoot, backupRoot;
 var init_skills = __esm({
   "src/setup/skills.ts"() {
     "use strict";
-    skillsRoot = (home) => join15(home, ".claude", "skills");
-    backupRoot = (home) => join15(home, ".claude", "skills-backup");
+    skillsRoot = (home) => join16(home, ".claude", "skills");
+    backupRoot = (home) => join16(home, ".claude", "skills-backup");
   }
 });
 
 // src/setup/run.ts
-var run_exports3 = {};
-__export(run_exports3, {
+var run_exports4 = {};
+__export(run_exports4, {
   mergedServers: () => mergedServers,
   runSetup: () => runSetup
 });
@@ -33802,7 +34055,7 @@ async function setup2(args, environment, store) {
 }
 async function runSetup(args, environment) {
   if (args[0] === "--help" || args[0] === "help") {
-    environment.stdout(USAGE3);
+    environment.stdout(USAGE4);
     return 0;
   }
   try {
@@ -33814,8 +34067,8 @@ async function runSetup(args, environment) {
     return 2;
   }
 }
-var USAGE3, MAX_APPROVALS, MAX_KEY_BYTES, KNOWN_TOOLS;
-var init_run3 = __esm({
+var USAGE4, MAX_APPROVALS, MAX_KEY_BYTES, KNOWN_TOOLS;
+var init_run4 = __esm({
   "src/setup/run.ts"() {
     "use strict";
     init_errors4();
@@ -33826,7 +34079,7 @@ var init_run3 = __esm({
     init_fetch();
     init_servers();
     init_skills();
-    USAGE3 = `Usage:
+    USAGE4 = `Usage:
   ttobak-mcp setup plan [--noninteractive]
   ttobak-mcp setup apply [--approve <key>]... [--noninteractive]`;
     MAX_APPROVALS = 400;
@@ -37074,14 +37327,20 @@ async function main() {
     }
     return;
   }
+  if (cliArguments[0] === "team-sync") {
+    const { runTeamSync: runTeamSync2 } = await Promise.resolve().then(() => (init_run3(), run_exports3));
+    const { defaultEnvironment: defaultEnvironment2 } = await Promise.resolve().then(() => (init_run(), run_exports));
+    process.exitCode = await runTeamSync2(cliArguments.slice(1), defaultEnvironment2());
+    return;
+  }
   if (cliArguments[0] === "setup") {
-    const { runSetup: runSetup2 } = await Promise.resolve().then(() => (init_run3(), run_exports3));
+    const { runSetup: runSetup2 } = await Promise.resolve().then(() => (init_run4(), run_exports4));
     const { defaultEnvironment: defaultEnvironment2 } = await Promise.resolve().then(() => (init_run(), run_exports));
     process.exitCode = await runSetup2(cliArguments.slice(1), defaultEnvironment2());
     return;
   }
   if (cliArguments.includes("--help")) {
-    console.log("Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help | ttobak-mcp setup --help. Downloaded adapter: stdio only; HTTP requires the installed server package.");
+    console.log("Usage: ttobak-mcp [--transport stdio|http] | ttobak-mcp intake --help | ttobak-mcp report --help | ttobak-mcp setup --help | ttobak-mcp team-sync --help. Downloaded adapter: stdio only; HTTP requires the installed server package.");
     return;
   }
   if (cliArguments.length && (cliArguments.length !== 2 || cliArguments[0] !== "--transport")) {

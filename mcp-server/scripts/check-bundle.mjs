@@ -29,4 +29,9 @@ const setupHelp = execFileSync(process.execPath, [fileURLToPath(new URL('../dist
 });
 // The Mac app detects one-click setup support by this text in the adapter.
 assert.match(setupHelp, /ttobak-mcp setup apply/, 'The bundled setup command must start');
-console.log('Bundle reproducibility, stdio reading/calendar, intake/report/setup start and HTTP artifact tests passed.');
+const teamSyncHelp = execFileSync(process.execPath, [fileURLToPath(new URL('../dist/ttobak-mcp.mjs', import.meta.url)), 'team-sync', '--help'], {
+  cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '' },
+});
+// The Mac app detects admin team sync support by this text in the adapter.
+assert.match(teamSyncHelp, /ttobak-mcp team-sync run/, 'The bundled team-sync command must start');
+console.log('Bundle reproducibility, stdio reading/calendar, intake/report/setup/team-sync start and HTTP artifact tests passed.');
