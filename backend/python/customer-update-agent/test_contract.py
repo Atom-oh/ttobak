@@ -3,6 +3,7 @@ import json
 import unittest
 from pathlib import Path
 
+import contract
 from contract import ContractError, parse_run
 
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "contracts" / "customer-updates" / "run-v1.json"
@@ -175,6 +176,11 @@ class ParseRunTest(unittest.TestCase):
         p["items"][0]["url"] = "https://example.com/" + "a" * (2048 - len("https://example.com/"))
         parse_run(p)
 
+    def test_unknown_account_key(self):
+        p = example()
+        p["accounts"][0]["extra"] = 1
+        self.assertEqual(self.code_of(p), "shape")
+
     def test_unserializable_or_deep_account(self):
         p = example()
         p["accounts"][0]["notes"] = [object()]
@@ -209,6 +215,27 @@ class ParseRunTest(unittest.TestCase):
 
     def test_error_code_is_message(self):
         self.assertEqual(str(ContractError("items")), "items")
+
+
+class ValidUrlTest(unittest.TestCase):
+    # Same inputs as Go's TestUpdateRuns_RuntimeValidURL (runtimeValidURL mirrors _valid_url).
+    def test_item_url_rule(self):
+        cases = {
+            "https://example.com/a?q=hello": True,
+            "https://example.com/a?q=hello world": False,
+            "https://example.com/a?q=a b": False,
+            "https://example.com/a?q=a　b": False,
+            "https://example.com/a?q=a b": False,
+            "https://example.com/a?q=a\tb": False,
+            "https://example.com/a?q=a\x7fb": False,
+            "https://example.com/a?q=a\x01b": False,
+            "http://example.com/a": False,
+            "https:///a": False,
+            "https://example.com/" + "a" * 2028: True,
+            "https://example.com/" + "a" * 2029: False,
+        }
+        for url, want in cases.items():
+            self.assertEqual(contract._valid_url(url), want, url)
 
 
 if __name__ == "__main__":

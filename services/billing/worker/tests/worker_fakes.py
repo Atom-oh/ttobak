@@ -335,7 +335,8 @@ class Runner:
     """Plays the pipeline and agent children the worker spawns. hooks[tag](cmd, kw) runs at spawn time."""
 
     def __init__(self, cot_rc=0, cot_lines=None, ai="ok", reason=None, raise_on=None, block_on=None, cur_check_rc=0,
-                 hooks=None, line_hook=None, hold_on=None):
+                 hooks=None, line_hook=None, hold_on=None, services_rows=None):
+        self.services_rows = services_rows  # written as out/services.json by the COT and CUR dataset steps when set
         self.cmds, self.kw, self.procs = [], [], []
         self.hold_on = hold_on
         self.cot_rc, self.cot_lines, self.ai, self.reason = cot_rc, cot_lines, ai, reason
@@ -368,6 +369,8 @@ class Runner:
             write_json(out, "period.json", [{"entity": acct, "source": "cot", "months": ["2026-05", "2026-06"],
                                              "first": "2026-05", "prev": "2026-05", "last": "2026-06", "labels": {}}])
             write_json(out, "checks.json", [{"name": "x", "ok": self.cot_rc == 0}])
+            if self.services_rows is not None:
+                write_json(out, "services.json", self.services_rows)
             lines = self.cot_lines
             if lines is None:
                 lines = ["STEP %s %s" % (s, x) for s in ("validate", "extract", "datasets") for x in ("running", "done")]
@@ -384,6 +387,8 @@ class Runner:
         if tag == "datasets.py":
             out, acct = cmd[4], cmd[5]
             write_json(out, "cur_summary.json", [{"entity": acct}])
+            if self.services_rows is not None:
+                write_json(out, "services.json", self.services_rows)
             write_json(out, "period.json", [{"entity": acct, "source": "cur", "months": ["2026-06"], "first": "2026-06",
                                              "prev": None, "last": "2026-06", "labels": {}}])
             return 0, []

@@ -59,6 +59,9 @@ class MirrorTest(unittest.TestCase):
     def test_internal_suffix_mirror(self):
         self.assertEqual(list(checks.INTERNAL_SUFFIXES), load("internal-hosts-v1.json")["suffixes"])
 
+    def test_bare_host_tlds_mirror(self):
+        self.assertEqual(list(checks.BARE_HOST_TLDS), load("draft-checks-v1.json")["bareHostTlds"])
+
     def test_figure_examples_fail(self):
         for ex in load("draft-terms-ko-v1.json")["figureExamples"]:
             self.assertTrue(checks.has_figure(ex), ex)

@@ -16,6 +16,9 @@ _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _URL_HASH = re.compile(r"^[0-9a-f]{64}$")
 _ACCOUNT_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TOP_KEYS = {"version", "runId", "items", "accounts", "budgets"}
+_ACCOUNT_KEYS = {
+    "accountId", "name", "services", "opportunities", "news", "insights", "notes", "blockList", "draftsRemaining",
+}
 
 
 class ContractError(Exception):
@@ -126,6 +129,8 @@ def _parse_account(raw):
         raise ContractError("shape") from None
     if size > MAX_ACCOUNT_BYTES:
         raise ContractError("account_size")
+    if set(raw) - _ACCOUNT_KEYS:
+        raise ContractError("shape")
     name = raw.get("name")
     remaining = raw.get("draftsRemaining")
     if not isinstance(name, str) or not _is_int(remaining) or remaining < 0:
