@@ -24,6 +24,7 @@ manifests.
 
 ### Changed
 
+- Enable the project REA Claude plugin and permit standard PR merges while denying `--admin` merges; retain the existing review-size and secret-scan hooks.
 - The SA performance report accepts Claude Code 2.1.311 or newer (was 2.1.322); 2.1.311 has the same verified sandbox settings schema.
 
 ## [1.0.0] - 2026-11-11
