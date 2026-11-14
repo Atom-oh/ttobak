@@ -83,8 +83,25 @@ class _Failure(Exception):
         self.reason = reason
 
 
+class StoreError(Exception):
+    """A DynamoDB failure. It is contained to one feed and counted in the run
+    stats, but it says nothing about the feed itself, so it never reaches the
+    feed's failure state."""
+
+
+def _guarded(fn):
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except StoreError:
+            raise
+        except Exception as exc:  # botocore ClientError, without importing it here
+            raise StoreError(type(exc).__name__) from None
+    return wrapper
+
+
 class FeedStore:
-    """All DynamoDB access for the collector."""
+    """All DynamoDB access for the collector. Per-feed methods raise StoreError."""
 
     def __init__(self, table):
         self.table = table
@@ -113,10 +130,23 @@ class FeedStore:
                 return feeds
             kwargs["ExclusiveStartKey"] = last
 
+    @_guarded
     def get_state(self, feed_hash):
-        resp = self.table.get_item(Key={"PK": "CUFEED#" + feed_hash, "SK": STATE_SK})
+        # Strongly consistent: a stale read could miss a just-committed baseline.
+        resp = self.table.get_item(Key={"PK": "CUFEED#" + feed_hash, "SK": STATE_SK},
+                                   ConsistentRead=True)
         return resp.get("Item") or {}
 
+    @_guarded
+    def mark_writing(self, feed_hash, now):
+        """Write-intent marker, set before the first entry put of a run."""
+        self.table.update_item(
+            Key={"PK": "CUFEED#" + feed_hash, "SK": STATE_SK},
+            UpdateExpression="SET #h = :h, #t = :t, #w = :w",
+            ExpressionAttributeNames={"#h": "feedHash", "#t": "entityType", "#w": "writingAt"},
+            ExpressionAttributeValues={":h": feed_hash, ":t": STATE_ENTITY, ":w": _iso(now)})
+
+    @_guarded
     def put_entry(self, feed_hash, url, title, published_at, now):
         """Write one entry; False when it already exists."""
         entry_hash = _sha256(url)
@@ -139,14 +169,16 @@ class FeedStore:
             raise
         return True
 
+    @_guarded
     def update_state(self, feed_hash, now, *, failed=False, error=None,
-                     updated=False, resolved_url=None, links=None, drop_resolved=False):
-        """Attribute-level update; never replaces the whole state item."""
+                     updated_at=None, resolved_url=None, links=None, drop_resolved=False):
+        """Attribute-level update; never replaces the whole state item. It
+        always removes the write-intent marker, acknowledging the run."""
         sets = {"feedHash": feed_hash, "entityType": STATE_ENTITY,
                 "lastFetchedAt": _iso(now)}
-        removes = ["resolvedUrl"] if drop_resolved else []
-        if updated:
-            sets["updatedAt"] = _iso(now)
+        removes = ["writingAt"] + (["resolvedUrl"] if drop_resolved else [])
+        if updated_at is not None:
+            sets["updatedAt"] = _iso(updated_at)
         if resolved_url:
             sets["resolvedUrl"] = resolved_url
         if links is not None:
@@ -210,9 +242,17 @@ def _collect(url, kind, state):
     return None, page_links(doc.text, doc.final_url), None
 
 
+def _publish_at(pending, now, written):
+    """updatedAt to publish: this run's time when it wrote entries, never earlier
+    than an earlier unacknowledged run's write-intent time; None to publish nothing."""
+    times = [t for t in (pending, now if written > 0 else None) if t is not None]
+    return max(times) if times else None
+
+
 def process_feed(store, feed_hash, url, kind, now):
     """Collect one feed. Returns (outcome, written); outcome is fetched|skipped|failed."""
     written = 0
+    pending = None  # an earlier run's unacknowledged write-intent time
     # A stored resolvedUrl that fails or stops yielding a feed is dropped so the
     # next run rediscovers from the subscription URL.
     drop_resolved = False
@@ -226,12 +266,19 @@ def process_feed(store, feed_hash, url, kind, now):
         if (failures >= BACKOFF_FAILURES and last is not None
                 and now - last <= timedelta(seconds=BACKOFF_SECONDS)):
             return "skipped", 0
+        w = _parse_iso(state.get("writingAt"))
+        u = _parse_iso(state.get("updatedAt"))
+        if w is not None and (u is None or u < w):
+            pending = w
         drop_resolved = bool(state.get("resolvedUrl"))
         entries, links, resolved = _collect(url, kind, state)
         drop_resolved = False
         stored = None
         if entries is not None:
-            for e in recent(entries, now):
+            fresh_entries = list(recent(entries, now))
+            if fresh_entries:
+                store.mark_writing(feed_hash, now)
+            for e in fresh_entries:
                 if store.put_entry(feed_hash, e.url, e.title, e.published_at, now):
                     written += 1
         else:
@@ -245,6 +292,8 @@ def process_feed(store, feed_hash, url, kind, now):
                 # Only links delivered now become known; the rest of the page
                 # stays new and is delivered on later runs.
                 fresh = [(l, i) for l, i in zip(links, ids) if i not in known][:MAX_SITE_ENTRIES]
+                if fresh:
+                    store.mark_writing(feed_hash, now)
                 for link, i in fresh:
                     if store.put_entry(feed_hash, link, "", None, now):
                         written += 1
@@ -252,15 +301,21 @@ def process_feed(store, feed_hash, url, kind, now):
                 on_page = set(ids)
                 stored = merge_link_ids([i for i in ids if i in known],
                                         [i for i in old_ids if i not in on_page])
-        store.update_state(feed_hash, now, updated=written > 0,
+        store.update_state(feed_hash, now, updated_at=_publish_at(pending, now, written),
                            resolved_url=resolved, links=stored)
         return "fetched", written
+    except StoreError as exc:
+        # Not a feed failure: no lastError, no failure count. Any marker stays
+        # and the next run publishes the unacknowledged entries.
+        logger.error("feed=%s store error %s", feed_hash[:12], exc)
+        return "failed", written
     except Exception as exc:
         reason = exc.reason if isinstance(exc, _Failure) else "fetch"
         try:
             store.update_state(feed_hash, now, failed=True, error=reason,
-                               updated=written > 0, drop_resolved=drop_resolved)
-        except Exception:
+                               updated_at=_publish_at(pending, now, written),
+                               drop_resolved=drop_resolved)
+        except StoreError:
             logger.error("feed=%s state update failed", feed_hash[:12])
         logger.warning("feed=%s failed reason=%s", feed_hash[:12], reason)
         return "failed", written

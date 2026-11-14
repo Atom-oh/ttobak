@@ -23,6 +23,7 @@ class FakeTable:
         self.rows = {}
         self.page = page
         self.ops = []
+        self.consistent_reads = []
 
     def put_item(self, Item, ConditionExpression=None):
         self.ops.append("put_item")
@@ -31,8 +32,9 @@ class FakeTable:
             raise CondFailed()
         self.rows[key] = dict(Item)
 
-    def get_item(self, Key):
+    def get_item(self, Key, ConsistentRead=False):
         self.ops.append("get_item")
+        self.consistent_reads.append(ConsistentRead)
         row = self.rows.get((Key["PK"], Key["SK"]))
         return {"Item": dict(row)} if row else {}
 
@@ -385,10 +387,10 @@ class TestCollector(unittest.TestCase):
         register(t, "h2", "https://a.example/2")
         real = t.get_item
 
-        def flaky(Key):
+        def flaky(Key, ConsistentRead=False):
             if Key["PK"] == "CUFEED#h1":
                 raise RuntimeError("throttled")
-            return real(Key)
+            return real(Key, ConsistentRead)
         t.get_item = flaky
         result, calls = run(t, {"https://a.example/2": doc(rss())})
         self.assertEqual(calls, ["https://a.example/2"])
@@ -448,6 +450,126 @@ class TestCollector(unittest.TestCase):
         text = "\n".join(logs.output)
         self.assertNotIn("secret.example", text)
         self.assertIn("h" * 12, text)
+
+
+class FlakyTable(FakeTable):
+    """Raises a throttle-like error for chosen operations."""
+
+    def __init__(self, fail=(), **kw):
+        super().__init__(**kw)
+        self.fail = set(fail)
+        self.update_calls = 0
+
+    def get_item(self, Key, ConsistentRead=False):
+        if "get" in self.fail:
+            raise RuntimeError("throttled")
+        return super().get_item(Key, ConsistentRead)
+
+    def put_item(self, Item, ConditionExpression=None):
+        if "put" in self.fail:
+            raise RuntimeError("throttled")
+        return super().put_item(Item, ConditionExpression)
+
+    def update_item(self, **kw):
+        self.update_calls += 1
+        if "update" in self.fail or ("update_after_marker" in self.fail and self.update_calls > 1):
+            raise RuntimeError("throttled")
+        return super().update_item(**kw)
+
+
+URL = "https://a.example/feed"
+LATER = NOW + timedelta(hours=1)
+
+
+class TestHardening(unittest.TestCase):
+    def feed(self):
+        return doc(rss(("https://a.example/new", "New", pub(1))))
+
+    def test_state_read_is_consistent(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        run(t, {URL: self.feed()})
+        self.assertEqual(t.consistent_reads, [True])
+
+    def test_unacknowledged_run_published_by_next_run(self):
+        t = FlakyTable(fail={"update_after_marker"})
+        register(t, "h1", URL)
+        result, _ = run(t, {URL: self.feed()})
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(len(t.entries("h1")), 1)
+        self.assertEqual(t.state("h1")["writingAt"], "2026-11-13T10:20:47Z")
+        self.assertNotIn("updatedAt", t.state("h1"))
+        t.fail = set()
+        result, _ = run(t, {URL: self.feed()}, now=LATER)
+        self.assertEqual(result["entries"], 0)
+        st = t.state("h1")
+        self.assertEqual(st["updatedAt"], "2026-11-13T10:20:47Z")
+        self.assertNotIn("writingAt", st)
+
+    def test_normal_run_leaves_no_marker(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        run(t, {URL: self.feed()})
+        self.assertNotIn("writingAt", t.state("h1"))
+        self.assertIn("updatedAt", t.state("h1"))
+
+    def test_nothing_to_write_sets_no_marker(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        run(t, {URL: doc(rss(("https://a.example/old", "Old", pub(9))))})
+        self.assertNotIn("writingAt", t.state("h1"))
+        self.assertNotIn("updatedAt", t.state("h1"))
+        self.assertEqual(t.ops.count("update_item"), 1)
+
+    def test_pending_marker_published_on_fetch_failure(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        t.rows[("CUFEED#h1", "STATE")] = {"PK": "CUFEED#h1", "SK": "STATE",
+                                          "writingAt": "2026-11-13T09:00:00Z"}
+        run(t, {URL: FetchRejected("TIMEOUT")})
+        st = t.state("h1")
+        self.assertEqual(st["updatedAt"], "2026-11-13T09:00:00Z")
+        self.assertNotIn("writingAt", st)
+        self.assertEqual(st["lastError"], "fetch")
+
+    def test_acknowledged_marker_does_not_move_updated_at(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        t.rows[("CUFEED#h1", "STATE")] = {
+            "PK": "CUFEED#h1", "SK": "STATE", "writingAt": "2026-11-13T09:00:00Z",
+            "updatedAt": "2026-11-13T09:30:00Z"}
+        run(t, {URL: doc(rss())})
+        self.assertEqual(t.state("h1")["updatedAt"], "2026-11-13T09:30:00Z")
+        self.assertNotIn("writingAt", t.state("h1"))
+
+    def test_store_errors_are_not_feed_failures(self):
+        for fail in ({"get"}, {"put"}, {"update"}):
+            t = FlakyTable(fail=fail)
+            register(t, "h1", URL)
+            t.rows[("CUFEED#h1", "STATE")] = {"PK": "CUFEED#h1", "SK": "STATE",
+                                              "failures": 2}
+            result, _ = run(t, {URL: self.feed()})
+            self.assertEqual(result["failed"], 1, fail)
+            st = t.state("h1")
+            self.assertEqual(st.get("failures"), 2, fail)
+            self.assertNotIn("lastError", st, fail)
+
+    def test_store_error_contained_to_feed(self):
+        t = FlakyTable(fail={"get"})
+        register(t, "h1", URL)
+        result, _ = run(t, {URL: self.feed()})
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["feeds"], 1)
+
+    def test_fetch_and_parse_failures_still_count(self):
+        for exc_doc, reason in ((FetchRejected("TIMEOUT"), "fetch"),
+                                (doc("not a feed at all"), "parse")):
+            t = FakeTable()
+            register(t, "h1", URL)
+            result, _ = run(t, {URL: exc_doc})
+            self.assertEqual(result["failed"], 1)
+            self.assertEqual(t.state("h1")["lastError"], reason)
+            self.assertEqual(t.state("h1")["failures"], 1)
 
 
 if __name__ == "__main__":
