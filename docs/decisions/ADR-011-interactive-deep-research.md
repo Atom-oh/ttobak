@@ -29,6 +29,43 @@
   for a bounded time after a message on a finished report; the detail page
   polls every ten seconds while active.
 
+## Customer update agent runtime
+
+- A second AgentCore runtime, built from `backend/python/customer-update-agent`,
+  takes one `run-v1` payload of followed links and customer account packs. It
+  reads each link, decides per customer whether an update is worth a draft,
+  researches and writes affordable drafts and writes result rows under
+  `CURUN#{runId}`, with `DONE` last. It never sends anything to a customer.
+- Its execution role `ttobak-agentcore-customer-update-role` (CDK,
+  `CustomerUpdates`) reads and writes only `CURUN#` and `CUURL#` rows and never
+  `USER#`. Customer and draft text in result rows is sealed with a KMS data key;
+  the role has `kms:GenerateDataKey` bound to purpose
+  `ttobak-customer-update-run` and no Decrypt.
+- Egress is the validated `crawler/article_fetcher.py` for pages and the
+  web-search gateway for search. Bedrock access covers luna and Sonnet 5.5 only.
+- Code enforces the controls, not prompts: the decision gate (candidate and
+  needed thresholds), the run ledger budgets (research pairs, drafts, five
+  searches and three fetches per pair, one rewrite), the deterministic draft
+  checks including the link allowlist, and the reviewer failing closed. An
+  orchestrator agent may choose the order of work; a deterministic sweep
+  finishes every item either way.
+- A `runId` is single-use: the runtime writes `CURUN#{runId}/CLAIM`
+  conditionally before any model call or other row and answers 409
+  `RUN_EXISTS` on reuse. A DRAFT row counts only when its DEC row says
+  `drafted`; a run without `DONE` is ignored.
+- Bounds: per-role `max_tokens`; the orchestrator agent stops after 200 tool
+  calls or a third of `RUN_DEADLINE_SECONDS` (default 1500), the researcher
+  after 12 tool calls per pair; past the deadline the sweep writes no results
+  and no `DONE`.
+- A gate failure fails closed for drafting but is retryable: the item is
+  `deferred`/`gate_error` and a pair whose decision failed has no DEC row.
+- Sealed text is raw; a consumer posting through the Slack API escapes it.
+  The reviewer (no tools) also sees the account's insights and notes, fenced as
+  internal material it must not let the draft quote or paraphrase.
+- The runtime and its ECR repository are created by hand
+  ([runbook](../runbooks/customer-update-agent.md)); nothing invokes it until the
+  Go worker ships.
+
 ## Not implemented or off by default
 
 - Child depth is not limited: a sub-page can have its own sub-pages.
@@ -52,6 +89,18 @@
 - Stored chat text is later sent to the agent as user input.
 - The research workflow is one Lambda task with a 20-minute state-machine
   timeout and no configured retry or catch.
+- Customer update agent: a fetched page that steers the researcher's search
+  queries is defended at the prompt level only (fenced data blocks); budgets and
+  the link allowlist bound the effect but not the query text. Korean output is
+  enforced by prompts only. Strands tool calling by luna for the orchestrator is
+  unverified until the runbook smoke test; the sweep keeps results complete if it
+  fails.
+- Customer update agent: opportunity names and AWS service names are given to
+  the researcher and can therefore appear in web-search queries sent to the
+  search provider; opportunity names may contain the customer's name. The
+  customer name field, news, insights, notes and the opportunity stage never
+  reach an agent with tools. The fetch tool can request only URLs offered by
+  that pair's own search results or the article URL.
 
 ## Source
 
@@ -60,4 +109,5 @@
 `backend/internal/handler/chat_research.go`, `backend/cmd/research-worker/`,
 `backend/python/research-agent/` (`agent.py`, `tools.py`),
 `frontend/src/components/ResearchChat.tsx`, `infra/lib/gateway-stack.ts`,
-`ai-stack.ts`.
+`ai-stack.ts`. Customer update agent: `backend/python/customer-update-agent/`,
+`infra/lib/customer-updates.ts`, `.github/workflows/deploy-customer-update-agent.yml`.

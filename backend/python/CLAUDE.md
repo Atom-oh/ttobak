@@ -9,6 +9,7 @@ do not apply one runtime/library convention to every Python directory.
 | `crawler/` | Step Functions crawler stages and ingestion |
 | `document-extract/` | Bounded native-text parser, isolated child and async attachment worker |
 | `research-agent/` | ARM64 AgentCore Runtime container, FastAPI/Strands |
+| `customer-update-agent/` | Second ARM64 AgentCore container: customer update runs, sealed `CURUN#` results ([README](customer-update-agent/README.md)) |
 | `research-tools/` | Legacy Bedrock Agent tool handlers; check callers before changing |
 | `sim/` | Async worker for codegen and Code Interpreter execution |
 
@@ -17,8 +18,8 @@ research keeps health responsive. Its Dockerfile owns its Python version. Do not
 replace its FastAPI bootstrap based on an SDK recommendation without verifying
 startup/health behavior. Managed Lambda runtimes are configured in CDK.
 
-SigV4/MCP web-search plumbing is intentionally duplicated in crawler, research,
-and QA because they deploy separately. Keep fixes consistent. QA hash-redacts
+SigV4/MCP web-search plumbing is intentionally duplicated in four artifacts
+(crawler, research, QA and customer-update-agent) because they deploy separately. Keep fixes consistent. QA hash-redacts
 queries and enforces its per-user hourly abuse limit before gateway calls, with
 the accepted fail-open behavior documented in ADR-028.
 
@@ -79,6 +80,8 @@ From backend/python:
 
 ```bash
 (cd qa && python3 -m unittest test_handler -v)
+# Needs boto3<2, cryptography, fastapi, httpx.
+(cd customer-update-agent && python3 -m unittest discover -p 'test_*.py' -v)
 (cd document-extract && python3 -m pip install -r requirements-lambda.txt && python3 -m unittest test_extract test_worker test_handler -v)
 ```
 

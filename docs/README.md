@@ -41,6 +41,7 @@ Billing team access: [ADR-012](decisions/ADR-012-billing-origin-identity-and-tea
 | [Unverified account recovery](runbooks/unverified-account-recovery.md) | Identity-verified operator password recovery | Cognito and the authenticated verification flow |
 | [WebSocket runtime](runbooks/websocket-runtime.md) | CloudFront ingress, secret rotation, real acceptance | Frontend/Gateway stacks and ws-authorizer |
 | [Pipeline recovery](runbooks/pipeline-failure-recovery.md) | Failure queues, alarm routing and controlled replay | GatewayStack, failure construct and replay tool |
+| [Customer update agent](runbooks/customer-update-agent.md) | Role deploy, hand-created ECR repository and AgentCore runtime, workflow variables, smoke test, missing-DONE diagnosis, rollback | `backend/python/customer-update-agent/`, `CustomerUpdates`, `deploy-customer-update-agent.yml`, ADR-011 |
 | [Knowledge-grade news release](runbooks/knowledge-grade-news-release.md) | Canary acceptance, retained-legacy archive, verified prices and rollback | News runtime/recovery, ADR-004 |
 | [HTTP origin proof migration](runbooks/http-origin-secret-migration.md) | Consumer contract and coordinated rotation gates | Go/QA/MCP origin verifiers and deployment configuration |
 | [Connector capabilities](decisions/ADR-003-mcp-access.md) | Operation policy and recorded private-delegation delivery gates | Versioned inventory, generated tables and contract tests |

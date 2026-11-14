@@ -3,14 +3,20 @@ import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { CustomerUpdates } from '../lib/customer-updates';
 
-function build() {
+const GATEWAY_ARN = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test';
+const KEY_ARN = 'arn:aws:kms:ap-northeast-2:123456789012:key/test-key';
+
+function build(withRuntime = true) {
   const app = new cdk.App();
-  const stack = new cdk.Stack(app, 'T');
+  const stack = new cdk.Stack(app, 'T', { env: { account: '123456789012', region: 'ap-northeast-2' } });
   const table = new dynamodb.Table(stack, 'Table', {
     partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
     sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
   });
-  new CustomerUpdates(stack, 'CU', { table });
+  new CustomerUpdates(stack, 'CU', {
+    table,
+    agentRuntime: withRuntime ? { webSearchGatewayArn: GATEWAY_ARN, recordKeyArn: KEY_ARN } : undefined,
+  });
   return Template.fromStack(stack);
 }
 
@@ -154,11 +160,124 @@ describe('CustomerUpdates', () => {
     expect(target.RetryPolicy).toEqual({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 600 });
   });
 
+  test('the agent runtime adds no function', () => {
+    template.resourceCountIs('AWS::Lambda::Function', 2);
+    build(false).resourceCountIs('AWS::Lambda::Function', 2);
+  });
+
   test('no function URL, no public resource', () => {
     template.resourceCountIs('AWS::Lambda::Url', 0);
     template.resourceCountIs('AWS::EC2::SecurityGroup', 0);
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
     const perms = Object.values(template.findResources('AWS::Lambda::Permission')) as any[];
     for (const p of perms) expect(p.Properties.Principal).toBe('events.amazonaws.com');
+  });
+});
+
+describe('CustomerUpdates agent runtime role', () => {
+  const roles = template.findResources('AWS::IAM::Role', {
+    Properties: { RoleName: 'ttobak-agentcore-customer-update-role' },
+  });
+  const roleId = Object.keys(roles)[0];
+  const role = (Object.values(roles)[0] as any)?.Properties;
+  const all = roleId ? statements(roleId) : [];
+  const withAction = (prefix: string) =>
+    all.filter(s => asArray(s.Action).some((a: string) => a.startsWith(prefix)));
+
+  test('exists once, trusted only by AgentCore runtimes of this account', () => {
+    expect(Object.keys(roles)).toHaveLength(1);
+    const trust = role.AssumeRolePolicyDocument.Statement;
+    expect(trust).toHaveLength(1);
+    expect(trust[0].Principal).toEqual({ Service: 'bedrock-agentcore.amazonaws.com' });
+    expect(trust[0].Action).toBe('sts:AssumeRole');
+    expect(trust[0].Condition.StringEquals['aws:SourceAccount']).toBe('123456789012');
+    expect(JSON.stringify(trust[0].Condition.ArnLike['aws:SourceArn']))
+      .toContain(':bedrock-agentcore:ap-northeast-2:123456789012:runtime/*');
+    expect(Object.keys(trust[0].Condition).sort()).toEqual(['ArnLike', 'StringEquals']);
+    expect(role.ManagedPolicyArns).toBeUndefined();
+  });
+
+  test('absent without runtime props', () => {
+    expect(Object.keys(build(false).findResources('AWS::IAM::Role', {
+      Properties: { RoleName: 'ttobak-agentcore-customer-update-role' },
+    }))).toHaveLength(0);
+  });
+
+  test('DynamoDB: exactly Get/Put/Update on CURUN#* and CUURL#*', () => {
+    const dyn = dynamoStatements(roleId);
+    expect(dyn).toHaveLength(1);
+    expect(asArray(dyn[0].Action).slice().sort())
+      .toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']);
+    expect(leadingKeys(dyn[0]).slice().sort()).toEqual(['CURUN#*', 'CUURL#*']);
+    expect(dyn[0].Condition.Null).toEqual({ 'dynamodb:LeadingKeys': 'false' });
+    expect(JSON.stringify(dyn[0].Resource)).not.toContain('/index/');
+  });
+
+  test('no USER#, CUFEED or CUPENDING key anywhere in the role', () => {
+    const text = JSON.stringify(all);
+    for (const key of ['USER#', 'CUFEED', 'CUPENDING']) expect(text).not.toContain(key);
+  });
+
+  test('KMS: GenerateDataKey only, on the record key, bound to the run purpose', () => {
+    const kms = withAction('kms:');
+    expect(kms).toHaveLength(1);
+    expect(kms[0].Action).toBe('kms:GenerateDataKey');
+    expect(kms[0].Resource).toBe(KEY_ARN);
+    expect(kms[0].Condition).toEqual({
+      StringEquals: { 'kms:EncryptionContext:purpose': 'ttobak-customer-update-run' },
+    });
+  });
+
+  test('Bedrock: luna and Sonnet 5.5 exact resources, no wildcard', () => {
+    const bedrock = withAction('bedrock:');
+    expect(bedrock).toHaveLength(1);
+    expect(asArray(bedrock[0].Action).slice().sort())
+      .toEqual(['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream']);
+    const text = JSON.stringify(bedrock[0].Resource);
+    expect(text).not.toContain('*');
+    expect(text).toContain('inference-profile/global.openai.gpt-6-luna');
+    expect(text).toContain('inference-profile/global.anthropic.claude-sonnet-5-5');
+  });
+
+  test('web search gateway invoke on the gateway only', () => {
+    const gw = withAction('bedrock-agentcore:');
+    expect(gw).toHaveLength(1);
+    expect(gw[0].Action).toBe('bedrock-agentcore:InvokeGateway');
+    expect(gw[0].Resource).toBe(GATEWAY_ARN);
+  });
+
+  test('ECR pull on the agent repository; token and metrics only with conditions', () => {
+    const pull = all.find(s => asArray(s.Action).includes('ecr:BatchGetImage'))!;
+    expect(JSON.stringify(pull.Resource)).toContain(':repository/ttobak-customer-update-agent');
+    const token = all.find(s => asArray(s.Action).includes('ecr:GetAuthorizationToken'))!;
+    expect(token.Condition).toEqual({ StringEquals: { 'aws:RequestedRegion': 'ap-northeast-2' } });
+    const metrics = all.find(s => asArray(s.Action).includes('cloudwatch:PutMetricData'))!;
+    expect(metrics.Condition).toEqual({ StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } });
+  });
+
+  test('logs only under the AgentCore runtime log groups', () => {
+    const logStatements = withAction('logs:');
+    expect(logStatements.length).toBeGreaterThan(0);
+    for (const s of logStatements) {
+      const text = JSON.stringify(s.Resource);
+      if (asArray(s.Action).includes('logs:DescribeLogGroups')) {
+        expect(asArray(s.Action)).toEqual(['logs:DescribeLogGroups']);
+        expect(text).toContain(':log-group:*');
+      } else {
+        expect(text).toContain(':log-group:/aws/bedrock-agentcore/runtimes/');
+      }
+    }
+  });
+
+  test('no unconditioned wildcard resource, no wildcard action, no decrypt/S3/secrets', () => {
+    expect(all.length).toBeGreaterThan(0);
+    for (const s of all) {
+      if (asArray(s.Resource).includes('*')) expect(s.Condition).toBeDefined();
+      for (const a of asArray(s.Action)) {
+        expect(a).not.toMatch(/\*/);
+        expect(a).not.toMatch(/^(s3|secretsmanager|ssm|sts|iam|xray):/);
+        expect(a).not.toBe('kms:Decrypt');
+      }
+    }
   });
 });

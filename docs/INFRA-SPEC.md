@@ -937,6 +937,48 @@ cover Lambda's own retries. Both policies use `dynamodb:LeadingKeys` with a
 `Null` guard and have no KMS, S3, Bedrock or secret statement. Deploy
 TtobakCrawlerStack with `--exclusively`.
 
+### Customer update agent runtime role
+
+With `customerUpdateRecordKeyId` (wired from `aiStack.kmsKey.keyId` in
+`infra/bin/infra.ts`, a one-directional AiStack-to-CrawlerStack reference that
+reuses AiStack's existing key-ID export), `CustomerUpdates` also creates the
+execution role `ttobak-agentcore-customer-update-role` for the customer update
+agent (ADR-011). Its trust is `bedrock-agentcore.amazonaws.com` with
+`aws:SourceAccount` and `ArnLike aws:SourceArn ...:runtime/*`. Statements:
+
+- `GetItem`/`PutItem`/`UpdateItem` with `LeadingKeys` exactly `CURUN#*` and
+  `CUURL#*` (with the `Null` guard); no `USER#`, `CUFEED` or `CUPENDING` key, no
+  Query, Scan or Delete. The runtime's conditional `CURUN#{runId}/CLAIM` put
+  (single-use `runId`) needs no extra action.
+- `bedrock:InvokeModel`/`InvokeModelWithResponseStream` on
+  `extractionModelResources` for luna (`NEWS_MODEL_ID`) and
+  `global.anthropic.claude-sonnet-5-5`; no wildcard.
+- `bedrock-agentcore:InvokeGateway` on the web search gateway ARN.
+- `kms:GenerateDataKey` on the AiStack record key only, with
+  `kms:EncryptionContext:purpose = ttobak-customer-update-run`; no Decrypt.
+- ECR `BatchGetImage`/`GetDownloadUrlForLayer` on repository
+  `ttobak-customer-update-agent`; `ecr:GetAuthorizationToken` on `*` with
+  `aws:RequestedRegion`; logs under `/aws/bedrock-agentcore/runtimes/*` plus
+  `DescribeLogGroups`; `cloudwatch:PutMetricData` on `*` with
+  `cloudwatch:namespace = bedrock-agentcore`.
+
+CDK does not create the AgentCore runtime or its ECR repository; the owner
+creates both by hand ([runbook](runbooks/customer-update-agent.md)).
+`deploy-customer-update-agent.yml` (push to main touching the agent directory,
+`crawler/article_fetcher.py`, `crawler/news_pipeline.py` or the workflow, or
+`workflow_dispatch`, on the `ttobak-arm` runner like the research workflow)
+checks its variables before any AWS call: while `CUSTOMER_UPDATE_ECR_REPO`,
+`CUSTOMER_UPDATE_RUNTIME_ID` or a shared variable is unset it emits a notice
+and skips every later step (a green run that builds, pushes and deploys
+nothing), and it fails if `CUSTOMER_UPDATE_ECR_REPO` is set to anything other
+than `ttobak-customer-update-agent`. Once set up, it runs the unit
+tests, resolves `KMS_KEY_ID` from TtobakAiStack's `KmsKeyId` output, builds the
+ARM64 image from `backend/python`, pushes `latest` and the 8-character commit tag,
+and calls `update-agent-runtime` with this role, `PUBLIC` network mode and
+`TABLE_NAME`, `KMS_KEY_ID`, `WEB_SEARCH_GATEWAY_URL`,
+`WEB_SEARCH_GATEWAY_REGION=us-east-1` (plus optional `ORCHESTRATOR_MODEL_ID`).
+Nothing grants `InvokeAgentRuntime` on this runtime yet.
+
 ## Summary privacy writer activation
 
 GatewayStack also declares `AccountDescendantReadsEnabled` (`0` or `1`, default

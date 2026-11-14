@@ -30,6 +30,7 @@ describe('CrawlerStack', () => {
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
       webSearchGatewayArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test',
+      customerUpdateRecordKeyId: 'test-key-id',
     });
 
     template = Template.fromStack(stack);
@@ -37,6 +38,20 @@ describe('CrawlerStack', () => {
 
   test('creates 4 legacy, 6 private publication and 2 customer update Lambda functions', () => {
     template.resourceCountIs('AWS::Lambda::Function', 12);
+  });
+
+  test('creates the customer update agent runtime role with the record key ARN', () => {
+    const roles = template.findResources('AWS::IAM::Role', {
+      Properties: { RoleName: 'ttobak-agentcore-customer-update-role' },
+    });
+    expect(Object.keys(roles)).toHaveLength(1);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
+    const kms = policies
+      .filter(p => p.Properties.Roles.some((r: any) => r.Ref === Object.keys(roles)[0]))
+      .flatMap(p => p.Properties.PolicyDocument.Statement)
+      .filter((s: any) => s.Action === 'kms:GenerateDataKey');
+    expect(kms).toHaveLength(1);
+    expect(JSON.stringify(kms[0].Resource)).toContain(':key/test-key-id');
   });
 
   test('creates Step Functions state machine', () => {

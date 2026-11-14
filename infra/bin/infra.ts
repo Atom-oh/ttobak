@@ -199,6 +199,8 @@ const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   dataSourceId: knowledgeStack.dataSourceId,
   webSearchGatewayUrl: webSearchGatewayStack.gatewayUrl,
   webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
+  // One-directional AiStack -> CrawlerStack reference (already a dependency).
+  customerUpdateRecordKeyId: aiStack.kmsKey.keyId,
 });
 crawlerStack.addDependency(aiStack);
 crawlerStack.addDependency(storageStack);
