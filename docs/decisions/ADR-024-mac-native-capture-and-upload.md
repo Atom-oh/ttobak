@@ -55,7 +55,9 @@
   shares the one recorder slot, so it never captures alongside a recording.
   Nothing is written, and path-based code (status, upload, cleanup, leftover
   adoption, meeting detection) does not see it as a recording. A recording
-  start stops it first; `sleep.rs` stops it at will-sleep; the updater treats
+  start stops it first; `sleep.rs` ends it at will-sleep whenever no recording
+  runs (so a start still in flight is stopped once installed), as a task the
+  sleep deadline does not cancel; the updater treats
   it as busy; it holds its own idle-sleep assertion. Listening starts and
   stops run one at a time (`listening_lifecycle`), so a stop waits for a
   start still in flight and then stops the session it installed. `stop_listening` only
