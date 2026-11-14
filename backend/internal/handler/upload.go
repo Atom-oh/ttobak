@@ -70,6 +70,8 @@ func (h *UploadHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) 
 	response, err := h.uploadService.GeneratePresignedUploadURL(ctx, userID, &req)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid upload request")
 		case errors.Is(err, service.ErrMemberAudioUpload):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "오디오 업로드는 회의 생성자만 할 수 있습니다.")
 		case errors.Is(err, service.ErrNotFound):

@@ -189,6 +189,9 @@ func (s *UploadService) GeneratePresignedUploadURL(
 	userID string,
 	req *model.PresignedURLRequest,
 ) (*model.PresignedURLResponse, error) {
+	if req.MeetingID != "" && !readingID.MatchString(req.MeetingID) {
+		return nil, fmt.Errorf("%w: invalid meeting ID", ErrInvalidInput)
+	}
 	// Meeting uploads live under the creator's prefix, including uploads by a
 	// managing account member; a meeting that does not exist yet (a new
 	// recording) stays under the caller.
@@ -265,6 +268,16 @@ func (s *UploadService) GeneratePresignedUploadURL(
 	default:
 		return nil, fmt.Errorf("unsupported category: %s", req.Category)
 	}
+	keyCategory := strings.SplitN(s3Key, "/", 2)[0]
+	if _, err := privateFileKeyOwner(s3Key, keyCategory); err != nil {
+		return nil, fmt.Errorf("%w: invalid upload key", ErrInvalidInput)
+	}
+	if req.Category != "doc" {
+		parts := strings.Split(s3Key, "/")
+		if len(parts) != 4 || !ValidMeetingAssetKey(s3Key, keyCategory, keyOwner, parts[2]) {
+			return nil, fmt.Errorf("%w: invalid upload key", ErrInvalidInput)
+		}
+	}
 
 	// Generate presigned URL (valid for 1 hour)
 	expiresIn := presignExpiry(userID, keyOwner)
@@ -300,6 +313,10 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 		return fmt.Errorf("%w: cropped audio is immutable", ErrInvalidInput)
 	}
 	if (req.Category == "audio" || req.Category == "image") && !validMeetingUploadKey(req.Category, owner, req.MeetingID, req.Key) {
+		return ErrInvalidInput
+	}
+	if req.Category == "file" && (!ValidMeetingAssetKey(req.Key, "files", owner, req.MeetingID) ||
+		!validAttachmentSource(&model.Attachment{AttachmentID: "pending", MeetingID: req.MeetingID, UserID: owner, OriginalKey: req.Key})) {
 		return ErrInvalidInput
 	}
 	if req.Category == "image" || req.Category == "file" {
@@ -358,9 +375,6 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 		return s.emitImageUploadEvent(ctx, req.MeetingID, owner, req.Key)
 
 	case "file":
-		if !validAttachmentSource(&model.Attachment{AttachmentID: "pending", MeetingID: req.MeetingID, UserID: owner, OriginalKey: req.Key}) {
-			return ErrInvalidInput
-		}
 		att, err := s.repo.CreateFileAttachment(ctx, owner, userID, req, inferAttachTypeFromMime(req.MimeType))
 		if err != nil {
 			return err
@@ -403,6 +417,15 @@ func (s *UploadService) GeneratePresignedDownloadURLWithTTL(
 	s3Key string,
 	ttl time.Duration,
 ) (string, error) {
+	category := strings.SplitN(s3Key, "/", 2)[0]
+	switch category {
+	case "audio", "audio-playback", "images", "files", "docs", "docs-pdf", "skillpkg":
+		if _, err := privateFileKeyOwner(s3Key, category); err != nil {
+			return "", ErrInvalidInput
+		}
+	default:
+		return "", ErrInvalidInput
+	}
 	if signer := s.cloudFrontSigner(ctx); signer != nil {
 		return signer.SignedURL(s3Key, ttl)
 	}
@@ -545,12 +568,7 @@ func validMeetingUploadKey(category, userID, meetingID, key string) bool {
 	if !ok {
 		return false
 	}
-	owner, err := privateFileKeyOwner(key, prefix)
-	if err != nil || owner != userID {
-		return false
-	}
-	parts := strings.Split(key, "/")
-	return len(parts) == 4 && parts[2] == meetingID
+	return ValidMeetingAssetKey(key, prefix, userID, meetingID)
 }
 
 // sanitizeFileName removes or replaces invalid characters from filenames

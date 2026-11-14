@@ -389,7 +389,8 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 	if h.uploadService != nil {
 		for i := range result.Attachments {
 			att := &result.Attachments[i]
-			if att.OriginalKey != "" {
+			if service.ValidMeetingAssetKey(att.OriginalKey, "images", result.UserID, meetingID) ||
+				service.ValidMeetingAssetKey(att.OriginalKey, "files", result.UserID, meetingID) {
 				if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, att.OriginalKey); err == nil {
 					att.URL = url
 				}
@@ -674,6 +675,10 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 			if key == "" {
 				continue // skip pre-allocated empty slots
 			}
+			if !service.ValidMeetingAssetKey(key, "audio", result.UserID, meetingID) {
+				writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No audio files for this meeting")
+				return
+			}
 			// ADR-014: a current seekable copy when one exists, else the original.
 			url, urlErr := h.uploadService.GenerateAudioPlaybackURL(ctx, key)
 			if urlErr != nil {
@@ -691,7 +696,7 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Single-file (legacy)
-	if result.AudioKey == "" {
+	if !service.ValidMeetingAssetKey(result.AudioKey, "audio", result.UserID, meetingID) {
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No audio file for this meeting")
 		return
 	}

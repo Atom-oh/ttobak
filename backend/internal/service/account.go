@@ -1165,7 +1165,8 @@ func validateFileKeyOwnership(userID, fileKey string) error {
 // replaces the fileKey, so after such a replacement it can point at a
 // completely different user's file than the one now stored on the doc.
 func ownsFileKey(userID, fileKey string) bool {
-	return strings.HasPrefix(fileKey, "docs/"+userID+"/")
+	owner, err := privateFileKeyOwner(fileKey, "docs")
+	return err == nil && owner == userID
 }
 
 // putDoc is the shared create core for both account-scoped (accountID set)
