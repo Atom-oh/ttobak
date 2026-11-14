@@ -39,7 +39,7 @@ manifests.
 - Customer update run storage: per-user run lease, daily draft and research counters, pending marks with a rotation cursor, item holds and sealed decisions; no caller yet (#977).
 - Customer update context packs: per-account packs of account name, AWS service names, opportunity names and stages, public news, internal insights and readable meeting-note excerpts, built only for accounts the user can access; no caller yet (#979).
 - Customer update run phases in the worker: start and finalize agent runs with bounded retries, item holds, a 3-day backlog window and per-user daily draft and research caps; inactive until the runtime ARN is configured (#980).
-- Customer update run infrastructure and records: worker environment and least-privilege grants, the research cap setting (`CUSTOMER_UPDATE_RESEARCH_PAIRS_PER_DAY`, default 30), gate evaluation tools, the runbook and ADR-030; runs stay off until `customerUpdateRuntimeArn` is set (#981).
+- Customer update run infrastructure and records: worker environment and least-privilege grants, the research cap setting (`CUSTOMER_UPDATE_RESEARCH_PAIRS_PER_DAY`, default 30), gate evaluation tools, the runbook and ADR-030; runs stay off until `customerUpdateRuntimeArn` is set (#982).
 
 ### Changed
 
