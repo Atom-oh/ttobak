@@ -142,12 +142,13 @@ A hold wins over "left new", which wins over an attempt.
 - `errors`: a user's run failed this tick (logged with hashed ids and an error
   class); it is retried next tick.
 - `startFailed`: a definite failure, logged with its error code: a runtime
-  refusal, or an AWS API error such as a missing invoke grant, a wrong
-  qualifier, a validation error or throttling. The lease is deleted and items
+  refusal, or an AWS client-fault error such as a missing invoke grant, a
+  wrong qualifier, a validation error or throttling. The lease is deleted and items
   keep their attempts (only a contract rejection adds one). A run id is never
   retried; the next tick uses a new one.
-- `startAmbiguous`: no service response (timeout, transport error) or an
-  unreadable answer; the lease is kept, so a started run is finalized and one
+- `startAmbiguous`: no service response (timeout, transport error), an AWS
+  server fault or 5xx, or an unreadable answer; the lease is kept, so a
+  started run is finalized and one
   that never started expires after 30 minutes with one more attempt.
 - `errors` together with a run that has a `DONE` row: finalize keeps failing
   for that run; its rows expire after 2 days.

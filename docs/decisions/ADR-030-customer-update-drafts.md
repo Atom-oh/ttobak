@@ -46,9 +46,11 @@ linked, not restated:
     user-id order, starting after a saved cursor row (`CUPENDING` /
     `#CURSOR`) and saving the last user it served.
   - Invokes: a definite failure (a runtime answer that is not an acceptance,
-    or an AWS API error response) deletes the lease; only a contract
-    rejection adds attempts. No service response (timeout, transport error),
-    an unreadable or invalid answer, or `RUN_EXISTS` keeps the lease: a run
+    or an AWS client-fault API error such as access, validation, not found
+    or throttling) deletes the lease; only a contract rejection adds
+    attempts. No service response (timeout, transport error), an AWS server
+    fault or 5xx, an unreadable or invalid answer, or `RUN_EXISTS` keeps the
+    lease: a run
     that started is finalized; one that never started expires after the lease.
     Only items first seen within the last 3 days, with URLs the runtime's
     item rule accepts, are sent; older ones are skipped (attempts unchanged).
@@ -71,7 +73,14 @@ linked, not restated:
     never evaluated again: the payload item carries those account ids as
     `decidedAccounts`, the runtime skips them without spending budget, and an
     item whose every pair is decided is marked decided at start. A deferred
-    pair does not count.
+    pair does not count; when a later run reaches a final result for it, the
+    stored open decision is replaced under a condition that it is still open.
+  - An in-scope account left out of a payload (its day cap, or payload size)
+    while it still has an undecided pair with a sent item is recorded on the
+    lease (`uncovered`). Items the runtime then reports decided are held
+    until 00:00 KST next day (cap) or left new (size) instead of becoming
+    final, and fully decided items and accounts are dropped before the size
+    fit so the next run has room for the accounts left out.
   - Decisions and drafts are sealed with the record key (purposes
     `ttobak-customer-update-decision` and `ttobak-customer-update-draft`).
 - **Runtime role.** The runtime reads and writes only `CURUN#` and `CUURL#`
