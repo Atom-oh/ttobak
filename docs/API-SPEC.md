@@ -1789,7 +1789,10 @@ one row per feed hash, user and source; the feed hash is the normalized-URL
 hash, so equal URLs share one feed). Creating a source, changing its `status`
 and deleting it write the source row and the registry row in one transaction;
 a status change also creates the registry row of a source that predates it.
-Slack sources have no registry row. `GET .../sources` adds `feedError` to a
+Slack sources have no registry row. `GET .../sources` may write: it heals a
+source created before the feed registry existed by adding its registry row.
+Status changes and deletes resolve the source with a strongly consistent keyed
+read, so a just-created source is never missed. `GET .../sources` adds `feedError` to a
 non-Slack source while its feed state has `failures > 0` (the last fetch
 error text); it is omitted otherwise and never stored on the source row.
 

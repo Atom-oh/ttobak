@@ -28,6 +28,7 @@ ENTRY_ENTITY = "UPDATE_FEED_ENTRY"
 ENTRY_TTL_SECONDS = 7 * 24 * 3600
 MAX_SITE_ENTRIES = 30
 MAX_STORED_LINKS = 300
+MAX_STORED_LINK_BYTES = 200_000  # keeps the state item far below DynamoDB's 400 KB
 BACKOFF_FAILURES = 5
 BACKOFF_SECONDS = 24 * 3600
 MIN_REMAINING_MS = 270000  # one feed can take about 250 s (retries and redirects)
@@ -48,6 +49,20 @@ def _parse_iso(value):
 
 def _sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def budget_links(links):
+    """Keep links in order, at most MAX_STORED_LINKS and MAX_STORED_LINK_BYTES UTF-8."""
+    out, total = [], 0
+    for link in links:
+        if len(out) >= MAX_STORED_LINKS:
+            break
+        size = len(link.encode("utf-8"))
+        if total + size > MAX_STORED_LINK_BYTES:
+            break
+        out.append(link)
+        total += size
+    return out
 
 
 class _Failure(Exception):
@@ -123,7 +138,7 @@ class FeedStore:
         if resolved_url:
             sets["resolvedUrl"] = resolved_url
         if links is not None:
-            sets["links"] = list(links)[:MAX_STORED_LINKS]
+            sets["links"] = budget_links(links)
         if failed:
             sets["lastError"] = error
         else:

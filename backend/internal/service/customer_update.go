@@ -28,6 +28,7 @@ var updateURLHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 type customerUpdateRepo interface {
 	PutSourceIfAbsent(ctx context.Context, userID string, s *model.UpdateSource) error
 	ListSources(ctx context.Context, userID string, limit int) ([]model.UpdateSource, error)
+	GetSource(ctx context.Context, userID, sourceID string) (*model.UpdateSource, error)
 	UpdateSource(ctx context.Context, userID, sourceID string, label *string, status *string) error
 	DeleteSource(ctx context.Context, userID, sourceID string) error
 	PutSourceWithFeedSub(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) error
@@ -188,17 +189,11 @@ func feedHashOf(src *model.UpdateSource) (string, bool) {
 	return hash, true
 }
 
+// findSource resolves one source with a strongly consistent read, so a source
+// created moments ago is never missed (a missed source would skip its registry
+// write). It returns nil when the source is absent.
 func (s *CustomerUpdateService) findSource(ctx context.Context, userID, sourceID string) (*model.UpdateSource, error) {
-	sources, err := s.repo.ListSources(ctx, userID, model.MaxUpdateSources)
-	if err != nil {
-		return nil, err
-	}
-	for i := range sources {
-		if sources[i].SourceID == sourceID {
-			return &sources[i], nil
-		}
-	}
-	return nil, nil
+	return s.repo.GetSource(ctx, userID, sourceID)
 }
 
 // ListSources returns the user's sources. A non-Slack source whose feed keeps

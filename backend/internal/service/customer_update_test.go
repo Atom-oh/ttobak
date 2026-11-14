@@ -50,6 +50,7 @@ type mockUpdateRepo struct {
 	heals        []model.UpdateFeedSub
 	healErr      error
 	stateReads   int
+	listHidesAll bool // ListSources returns nothing (eventual consistency)
 }
 
 func newMockUpdateRepo() *mockUpdateRepo {
@@ -64,7 +65,18 @@ func (m *mockUpdateRepo) PutSourceIfAbsent(_ context.Context, _ string, s *model
 	return nil
 }
 func (m *mockUpdateRepo) ListSources(_ context.Context, _ string, _ int) ([]model.UpdateSource, error) {
+	if m.listHidesAll {
+		return nil, nil
+	}
 	return m.sources, nil
+}
+func (m *mockUpdateRepo) GetSource(_ context.Context, _, sourceID string) (*model.UpdateSource, error) {
+	for i := range m.sources {
+		if m.sources[i].SourceID == sourceID {
+			return &m.sources[i], nil
+		}
+	}
+	return nil, nil
 }
 func (m *mockUpdateRepo) UpdateSource(_ context.Context, _, _ string, label *string, status *string) error {
 	if label != nil {
@@ -1077,5 +1089,41 @@ func TestCustomerUpdateStoredFeedHashUsedForDeleteAndPause(t *testing.T) {
 	}
 	if len(repo.statusSubs) != 1 || repo.statusSubs[0].FeedHash != "storedhash" || len(repo.deletedFeeds) != 1 || repo.deletedFeeds[0] != "storedhash" {
 		t.Fatalf("statusSubs=%+v deleted=%v", repo.statusSubs, repo.deletedFeeds)
+	}
+}
+
+func TestCustomerUpdateSourceWritesIgnoreStaleList(t *testing.T) {
+	_, hash := feedTestHash(t, "https://example.com/feed")
+	newRepo := func() *mockUpdateRepo {
+		r := newMockUpdateRepo()
+		r.sources = []model.UpdateSource{{SourceID: "src1", Kind: "rss", URL: "https://example.com/feed"}}
+		r.listHidesAll = true
+		return r
+	}
+	disabled := model.UpdateSourceDisabled
+
+	repo := newRepo()
+	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.statusSubs) != 1 || repo.statusUpdate != 0 {
+		t.Fatalf("status: subs=%d plain=%d", len(repo.statusSubs), repo.statusUpdate)
+	}
+
+	repo = newRepo()
+	if err := newUpdateSvc(repo, &mockMembers{}).DeleteSource(context.Background(), "u1", "src1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.deletedFeeds) != 1 || repo.deletedFeeds[0] != hash || repo.plainDeletes != 0 {
+		t.Fatalf("delete: feeds=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
+	}
+
+	// An absent source keeps the plain, idempotent paths.
+	repo = newRepo()
+	if err := newUpdateSvc(repo, &mockMembers{}).DeleteSource(context.Background(), "u1", "absent"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.deletedFeeds) != 0 || repo.plainDeletes != 1 {
+		t.Fatalf("absent delete: feeds=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
 	}
 }

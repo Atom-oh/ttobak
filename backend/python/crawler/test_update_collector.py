@@ -188,6 +188,18 @@ class TestCollector(unittest.TestCase):
         _, calls = run(t, docs, now=NOW + timedelta(hours=1))
         self.assertEqual(calls, ["https://a.example/feed.xml"])
 
+    def test_budget_links_caps_count_and_bytes(self):
+        few = ["https://a.example/%d" % i for i in range(400)]
+        self.assertEqual(uc.budget_links(few), few[:uc.MAX_STORED_LINKS])
+        big = ["https://a.example/" + "é" * 900 + str(i) for i in range(300)]
+        kept = uc.budget_links(big)
+        self.assertEqual(kept, big[:len(kept)])
+        total = sum(len(l.encode("utf-8")) for l in kept)
+        self.assertLessEqual(total, uc.MAX_STORED_LINK_BYTES)
+        self.assertLess(len(kept), 300)
+        self.assertGreater(total + len(big[len(kept)].encode("utf-8")),
+                           uc.MAX_STORED_LINK_BYTES)
+
     def test_site_baseline_then_new_links(self):
         t = FakeTable()
         register(t, "h1", "https://a.example/", kind="site")

@@ -248,6 +248,9 @@ func (r *draftListRepo) PutSourceIfAbsent(context.Context, string, *model.Update
 func (r *draftListRepo) ListSources(context.Context, string, int) ([]model.UpdateSource, error) {
 	return nil, nil
 }
+func (r *draftListRepo) GetSource(context.Context, string, string) (*model.UpdateSource, error) {
+	return nil, nil
+}
 func (r *draftListRepo) UpdateSource(context.Context, string, string, *string, *string) error {
 	return nil
 }
