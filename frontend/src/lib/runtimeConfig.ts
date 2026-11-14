@@ -61,7 +61,7 @@ function envFallback(): RuntimeConfig {
 
 export function getRuntimeConfig(): Promise<RuntimeConfig> {
   if (cached) return cached;
-  cached = (async () => {
+  const attempt: Promise<RuntimeConfig> = (async () => {
     if (typeof window === 'undefined') return envFallback();
     try {
       const res = await fetch('/config.json', { cache: 'no-store' });
@@ -76,5 +76,11 @@ export function getRuntimeConfig(): Promise<RuntimeConfig> {
     }
     return envFallback();
   })();
-  return cached;
+  cached = attempt;
+  // A fallback with no user pool is the result of a failed fetch, not a
+  // configuration: keep it out of the cache so the next call fetches again.
+  void attempt.then((config) => {
+    if (!config.cognito.userPoolId && cached === attempt) cached = null;
+  });
+  return attempt;
 }
