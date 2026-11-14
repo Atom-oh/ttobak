@@ -755,7 +755,13 @@ class TestAmbiguousEntryPut(unittest.TestCase):
         self.assertIsNone(store.table.config)
         cfg = store.entry_table.config
         self.assertIsNotNone(cfg)
-        self.assertEqual(cfg.retries, {"max_attempts": 1, "mode": "standard"})
+        self.assertEqual(cfg.retries, {"total_max_attempts": 1, "mode": "standard"})
+        # botocore normalizes the setting; the client must end with one attempt.
+        from botocore.session import Session
+        client = Session().create_client(
+            "dynamodb", region_name="us-east-1", aws_access_key_id="x",
+            aws_secret_access_key="y", config=cfg)
+        self.assertEqual(client.meta.config.retries["total_max_attempts"], 1)
         self.assertEqual({t.name for t in tables}, {"tbl"})
         self.assertIsNot(store.table, store.entry_table)
 

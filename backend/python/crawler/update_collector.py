@@ -427,9 +427,11 @@ def collect(store, now, context=None, shuffle=random.shuffle):
     return result
 
 
-# One attempt only: a retried conditional put whose first attempt committed
+# One attempt in total: a retried conditional put whose first attempt committed
 # would read as "already exists" and the entry would never be published.
-ENTRY_PUT_RETRIES = {"max_attempts": 1, "mode": "standard"}
+# botocore's `max_attempts` counts retries after the first request, so the
+# total is pinned with `total_max_attempts`.
+ENTRY_PUT_RETRIES = {"total_max_attempts": 1, "mode": "standard"}
 
 
 def handler(event, context):

@@ -548,7 +548,8 @@ writer for the same rows.
   fetching, publishing or clearing it. A marker that appears after the run's
   read makes its own marker write fail (feed skipped) or its final update retry
   without publishing `updatedAt` or removing the marker. Entry puts use a
-  DynamoDB resource with SDK retries disabled (one attempt), so a put whose
+  DynamoDB resource limited to one attempt in total (`total_max_attempts: 1`;
+  `max_attempts` would still allow one retry), so a put whose
   response was lost surfaces as a store error instead of a retried conditional
   failure that reads as "already exists"; a store error leaves the marker, and
   the first run after the fence publishes it. The Go model ignores the
