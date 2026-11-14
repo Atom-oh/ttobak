@@ -218,7 +218,7 @@ class ParseRunTest(unittest.TestCase):
 
 
 class ValidUrlTest(unittest.TestCase):
-    # Same inputs as Go's TestUpdateRuns_RuntimeValidURL (runtimeValidURL mirrors _valid_url).
+    # The Go run worker applies the same rule to item URLs before it builds a payload.
     def test_item_url_rule(self):
         cases = {
             "https://example.com/a?q=hello": True,

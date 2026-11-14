@@ -88,9 +88,9 @@ class TestDerivedObject(Base):
         self.publish(Runner())
         self.assertEqual(self.store[KEY], b'{"old":1}')
 
-    def test_cur_source_is_recorded(self):
+    def test_cur_publish_never_writes_the_object(self):
         self.publish(Runner(services_rows=self.ROWS), src="cur")
-        self.assertEqual(json.loads(self.store[KEY])["source"], "cur")
+        self.assertNotIn(KEY, self.store)
 
     def test_no_services_dataset_writes_nothing(self):
         self.publish(Runner())
