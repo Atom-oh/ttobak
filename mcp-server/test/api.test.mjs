@@ -150,3 +150,19 @@ test('mergeProjectUpdate: field absent from both current and patch ends up empty
   assert.equal(merged.sfdcUrl, '');
   assert.equal(merged.stage, '');
 });
+
+test('syncTeams refuses more than 200 items before sending', async () => {
+  const { TtobakApi } = await import('../dist/api.js');
+  const auth = { getIdToken: async () => { throw new Error('must not authenticate'); } };
+  const api = new TtobakApi(auth, 'https://example.invalid');
+  const items = Array.from({ length: 201 }, (_, i) => ({ userId: `u${i}`, team: 'a', expected: '' }));
+  await assert.rejects(() => api.syncTeams({ items }), /limited to 200/);
+});
+
+test('syncTeams refuses a body above 64 KiB before sending', async () => {
+  const { TtobakApi } = await import('../dist/api.js');
+  const auth = { getIdToken: async () => { throw new Error('must not authenticate'); } };
+  const api = new TtobakApi(auth, 'https://example.invalid');
+  const items = [{ userId: 'u'.repeat(70_000), team: 'a', expected: '' }];
+  await assert.rejects(() => api.syncTeams({ items }), /64 KiB/);
+});
