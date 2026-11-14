@@ -536,12 +536,22 @@ writer for the same rows.
 - **Write intent.** Entries are written with put-if-absent, then the state's
   `updatedAt` is published. Before the first entry put of a run that has entries
   to write, the collector sets `writingAt` (the run's `seenAt` time) with an
-  attribute-level update; the run's final state update, on success or failure,
-  removes it. If a run leaves `writingAt` set and `updatedAt` missing or older,
-  the next run publishes `updatedAt` as the later of the stored `writingAt` and
-  its own time when it wrote entries, even when every put was a duplicate, and
-  removes the marker. Entries from a run whose acknowledgement was lost therefore
-  reach subscribers without waiting for a new entry. The Go model ignores the
+  attribute-level update conditioned on the stored marker still being absent or
+  the value the run read; the run's final state update, on success or failure,
+  removes it under the same condition (absent, or the value the run set or
+  read). An unacknowledged marker (`updatedAt` missing or older) is treated as
+  abandoned only when it is more than 20 minutes older than the run's time (the
+  function timeout is 10 minutes); the run then publishes `updatedAt` as the
+  later of that marker and its own time when it wrote entries, even when every
+  put was a duplicate, and removes the marker. A younger marker belongs to an
+  overlapping invocation: the run skips the feed (counted `skipped`) without
+  fetching, publishing or clearing it. A marker that appears after the run's
+  read makes its own marker write fail (feed skipped) or its final update retry
+  without publishing `updatedAt` or removing the marker. Entry puts use a
+  DynamoDB resource with SDK retries disabled (one attempt), so a put whose
+  response was lost surfaces as a store error instead of a retried conditional
+  failure that reads as "already exists"; a store error leaves the marker, and
+  the first run after the fence publishes it. The Go model ignores the
   attribute.
 - **Failures.** A failed run records one code (`fetch`, `content_type`, `too_large`, `parse` or `no_feed`) and
   a failure count on the state row; the source list shows it as a feed error.
@@ -565,6 +575,8 @@ writer for the same rows.
   `seenAt`, and a capped delivery sets `fannedAt` to the last delivered `seenAt`.
   Otherwise `fannedAt` becomes the state's `updatedAt` as read before the
   entries were listed, so entries still being written are read again next tick.
+  Both the state `GetItem` and the entry `Query` are strongly consistent, so a
+  lagging replica cannot omit entries the watermark then moves past.
 - **Legacy sources.** Non-Slack sources store their `feedHash` (not exposed in
   the API). A source without one predates the registry: listing sources heals it
   by upserting its registry row with its current status (keeping any `fannedAt`)
@@ -574,15 +586,21 @@ writer for the same rows.
   and registry row in one transaction. They use the stored hash, so a later
   normalization change cannot orphan a registry row.
   A feed state read failure omits that source's feed error.
-- **Logs.** Only the first 12 characters of the feed hash and counts; never URLs,
-  titles or user data.
+- **Logs.** Only the first 12 characters of the feed hash, counts and DynamoDB
+  error codes (for example `ProvisionedThroughputExceededException`); never
+  URLs, titles, keys, error messages or user data.
 - **IAM.** The collector role holds `Query` on leading key `CUFEEDS` and
   `GetItem`/`PutItem`/`UpdateItem`/`Query` on `CUFEED#*`. The worker role holds
-  `Query`/`GetItem`/`PutItem`/`UpdateItem` on `USER#*`, `CUFEEDS`, `CUFEED#*`,
-  `CUURL#*` and `CUPENDING`. Neither has KMS, S3, Bedrock or secret access;
-  neither has a function URL.
-- **Retries.** Both schedule targets and both functions' Lambda asynchronous
-  invocation configs use zero retries; the next scheduled run is the retry.
+  exactly the actions its repository uses per prefix: `PutItem`/`UpdateItem` on
+  `USER#*`, `Query`/`UpdateItem` on `CUFEEDS`, `GetItem`/`Query` on `CUFEED#*`
+  and `PutItem` on `CUURL#*` and `CUPENDING`. Neither has KMS, S3, Bedrock or
+  secret access; neither has a function URL.
+- **Retries and concurrency.** Both schedule targets and both functions' Lambda
+  asynchronous invocation configs use zero retries; the next scheduled run is
+  the retry. Both functions have reserved concurrency 1. Maximum event age is 30
+  minutes for the collector and 10 minutes for the worker, so a throttled event
+  does not run hours late. Reserved concurrency does not rule out every overlap
+  (at-least-once delivery), so the collector also keeps the marker fence above.
 
 Evidence: `backend/python/crawler/update_collector.py`,
 `backend/python/crawler/update_feeds.py`, `backend/cmd/customer-updates/main.go`,

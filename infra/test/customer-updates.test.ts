@@ -64,7 +64,7 @@ describe('CustomerUpdates', () => {
       Handler: 'bootstrap', ReservedConcurrentExecutions: 1,
     });
     expect(worker.props.Environment.Variables.TABLE_NAME).toBeDefined();
-    expect(collector.props.ReservedConcurrentExecutions).toBeUndefined();
+    expect(collector.props.ReservedConcurrentExecutions).toBe(1);
   });
 
   test('roles are distinct', () => {
@@ -104,22 +104,34 @@ describe('CustomerUpdates', () => {
     expect(leadingKeys(registry)).toEqual(['CUFEEDS']);
   });
 
-  test('worker leading keys are exactly the five prefixes', () => {
+  test('worker grants exactly the repository actions per prefix', () => {
     const dyn = dynamoStatements(workerRole);
-    expect(dyn).toHaveLength(1);
-    expect(leadingKeys(dyn[0])).toEqual(['USER#*', 'CUFEEDS', 'CUFEED#*', 'CUURL#*', 'CUPENDING']);
-    expect(asArray(dyn[0].Action).sort()).toEqual([
-      'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem']);
-    expect(dyn[0].Condition.Null).toEqual({ 'dynamodb:LeadingKeys': 'false' });
+    const grants: Record<string, string[]> = {};
+    for (const s of dyn) {
+      expect(s.Condition.Null).toEqual({ 'dynamodb:LeadingKeys': 'false' });
+      expect(JSON.stringify(s.Resource)).not.toContain('/index/');
+      for (const k of leadingKeys(s)) {
+        expect(grants[k]).toBeUndefined();
+        grants[k] = asArray(s.Action).slice().sort();
+      }
+    }
+    expect(grants).toEqual({
+      'USER#*': ['dynamodb:PutItem', 'dynamodb:UpdateItem'],
+      CUFEEDS: ['dynamodb:Query', 'dynamodb:UpdateItem'],
+      'CUFEED#*': ['dynamodb:GetItem', 'dynamodb:Query'],
+      'CUURL#*': ['dynamodb:PutItem'],
+      CUPENDING: ['dynamodb:PutItem'],
+    });
   });
 
-  test.each([['collector', collector], ['worker', worker]])(
-    '%s has Lambda async retries disabled', (_name, f) => {
+  test.each([['collector', collector, 1800], ['worker', worker, 600]])(
+    '%s has Lambda async retries disabled and a bounded event age', (_name, f, age) => {
       const configs = Object.values(template.findResources('AWS::Lambda::EventInvokeConfig', {
         Properties: { FunctionName: { Ref: f.id } },
       })) as any[];
       expect(configs).toHaveLength(1);
       expect(configs[0].Properties.MaximumRetryAttempts).toBe(0);
+      expect(configs[0].Properties.MaximumEventAgeInSeconds).toBe(age);
     });
 
   test('collect rule: hourly, no retries', () => {

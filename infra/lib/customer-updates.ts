@@ -54,9 +54,13 @@ export class CustomerUpdates extends Construct {
       role: collectorParts.role, logGroup: collectorParts.group,
       environment: { TABLE_NAME: props.table.tableName },
       timeout: cdk.Duration.minutes(10), memorySize: 512,
+      // One run at a time; the collector's 20-minute write-intent fence covers
+      // overlap that reserved concurrency cannot rule out.
+      reservedConcurrentExecutions: 1,
     });
-    // The EventBridge retryAttempts below does not stop Lambda's own async retries.
-    this.collector.configureAsyncInvoke({ retryAttempts: 0 });
+    // The EventBridge retryAttempts below does not stop Lambda's own async
+    // retries; a throttled event is dropped after 30 minutes, not six hours.
+    this.collector.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: cdk.Duration.minutes(30) });
     collectorParts.role.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query'], resources: [props.table.tableArn],
       conditions: leadingKeys(['CUFEEDS']),
@@ -85,12 +89,19 @@ export class CustomerUpdates extends Construct {
       timeout: cdk.Duration.minutes(5), memorySize: 512,
       reservedConcurrentExecutions: 1,
     });
-    this.worker.configureAsyncInvoke({ retryAttempts: 0 });
-    workerParts.role.addToPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
-      resources: [props.table.tableArn],
-      conditions: leadingKeys(['USER#*', 'CUFEEDS', 'CUFEED#*', 'CUURL#*', 'CUPENDING']),
-    }));
+    this.worker.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: cdk.Duration.minutes(10) });
+    // Exactly the actions the fan-out repository uses per key prefix.
+    const workerGrants: [string[], string[]][] = [
+      [['USER#*'], ['dynamodb:PutItem', 'dynamodb:UpdateItem']], // PutItemsIfAbsent
+      [['CUFEEDS'], ['dynamodb:Query', 'dynamodb:UpdateItem']], // ListFeedSubs, SetFeedSubFannedAt
+      [['CUFEED#*'], ['dynamodb:GetItem', 'dynamodb:Query']], // GetFeedState, entry Query
+      [['CUURL#*', 'CUPENDING'], ['dynamodb:PutItem']], // EnsureURLPending, MarkPending
+    ];
+    for (const [keys, actions] of workerGrants) {
+      workerParts.role.addToPolicy(new iam.PolicyStatement({
+        actions, resources: [props.table.tableArn], conditions: leadingKeys(keys),
+      }));
+    }
     new events.Rule(this, 'TickSchedule', {
       ruleName: 'ttobak-customer-update-tick',
       schedule: events.Schedule.rate(cdk.Duration.minutes(10)),
