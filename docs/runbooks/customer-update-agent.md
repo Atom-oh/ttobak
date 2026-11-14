@@ -4,8 +4,10 @@ One-time owner setup, smoke test, diagnosis and rollback for the customer update
 agent: the AgentCore Runtime container in
 [`backend/python/customer-update-agent`](../../backend/python/customer-update-agent/README.md).
 [ADR-011](../decisions/ADR-011-interactive-deep-research.md) records its data,
-egress and accepted limits. Nothing invokes the runtime until the Go worker that
-calls it ships; completing these steps does not establish consumer acceptance.
+egress and accepted limits; [ADR-030](../decisions/ADR-030-customer-update-drafts.md)
+records the Go worker's run phases. The worker invokes the runtime only after its
+ARN is configured ([switching the run phases on](#switching-the-run-phases-on));
+completing these steps does not establish consumer acceptance.
 
 The runtime and its ECR repository are created by hand. CDK creates only the
 execution role `ttobak-agentcore-customer-update-role` (`CustomerUpdates` in
@@ -21,7 +23,8 @@ fails the run.
 1. **Role.** Deploy TtobakCrawlerStack alone:
    `npx cdk deploy TtobakCrawlerStack --exclusively`. Never `--all`. The role's
    KMS statement reuses AiStack's existing key-ID export, so AiStack needs no
-   redeploy. Check the role and its inline policy in IAM.
+   redeploy. Check the role and its inline policy in IAM. The same deploy gives
+   the Go worker its run grants with the phases still off.
 2. **Repository.** Create the private ECR repository
    `ttobak-customer-update-agent` in the application Region (the role's pull
    grant names exactly this repository), with tag immutability off (the
@@ -53,8 +56,114 @@ fails the run.
    pushes and calls `update-agent-runtime`. The workflow replaces the whole
    environment on every run, so set values through it, not in the console.
 7. **Record.** Record the runtime ARN
-   (`arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>`) for the Go
-   worker plan; its invoke permission is granted there, not here.
+   (`arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>`); the next
+   section gives it to the Go worker.
+
+## Switching the run phases on
+
+The worker's run phases are off while CDK context `customerUpdateRuntimeArn`
+is unset: the worker gets no `CUSTOMER_UPDATE_RUNTIME_ARN` and no
+`InvokeAgentRuntime` grant, and fan-out continues. All other run grants and
+`KMS_KEY_ID` are already deployed. The deploy workflow passes no `-c` values;
+it synthesizes with `infra/cdk.json`.
+
+1. **Billing first.** Deploy the Billing stack that owns the worker writing the
+   names-only object (`TtobakBillingStack`, through its release runbook) with
+   `--exclusively`, and confirm after one publish that
+   `accounts/{accountId}/derived/services-in-use.json` exists and holds names
+   only. `BILLING_DATA_BUCKET` is resolved from
+   `/ttobak/billing/data-bucket-name` only when `ttobak:billingEnabled` is
+   `"true"`; before the Billing cutover that parameter names the companion
+   bucket, which has no services object, so drafts simply get no service
+   signal. After repointing it, redeploy TtobakCrawlerStack with `--force`.
+2. **Set the ARN.** Add `"customerUpdateRuntimeArn": "<runtime ARN>"` to the
+   `context` of `infra/cdk.json` in a reviewed PR (the CI deploy uses it), or
+   pass `-c customerUpdateRuntimeArn=<runtime ARN>` for a manual deploy. Synth
+   fails on anything but an exact runtime ARN.
+3. **Deploy** `npx cdk deploy TtobakCrawlerStack --exclusively`. Never `--all`.
+   Check the worker's environment (`CUSTOMER_UPDATE_RUNTIME_ARN`,
+   `CUSTOMER_UPDATE_ENDPOINT_NAME=DEFAULT`, `KMS_KEY_ID`) and that its role's
+   invoke statement names exactly the ARN and `ARN/*`.
+4. **Post-deploy check.** Let one tick run for a user who has a team-shared
+   meeting on an in-scope account (this exercises the GSI3 owner lookup and the
+   GSI1 account query), then search the worker log group
+   `/aws/lambda/ttobak-customer-updates` for `AccessDenied`. Any hit means a
+   worker role statement does not match a query; see the checklist below.
+5. **Invoke answers.** It is unverified whether AgentCore returns the
+   container's 400/409/503 as the response status or as a runtime client
+   error. On the first runs, check the start log lines: if `BUSY` or a
+   contract code appears as an AWS error code (`startFailed`) rather than as
+   `not_accepted:<code>`, the contract-rejection attempt never fires.
+
+**First day after switch-on.** Only items first seen within the last 3 days are
+processed; older inbox items are skipped. Each run sends at most 30 items and
+10 researched pairs; a user pauses for the KST day at 20 drafts or at the
+research cap (30 researched pairs by default).
+
+To switch off, remove the context value and redeploy the same way. With the
+ARN removed nothing processes leases: a lease row stays until its TTL (7 days
+after lease end), in-flight run rows expire after 2 days and their results are
+lost. Nothing blocks fan-out.
+
+**Meeting notes.** Packs include notes of the two newest readable account
+meetings while `CUSTOMER_UPDATE_INCLUDE_NOTES=1` (the default). Set context
+`customerUpdateIncludeNotes` to `false` and redeploy TtobakCrawlerStack to send
+`0` and leave notes out; no code change is needed.
+
+**Budgets and holds.** Per user and KST day: at most 20 drafts, 3 per account,
+and `CUSTOMER_UPDATE_RESEARCH_PAIRS_PER_DAY` researched pairs (decisions with
+outcome drafted or discarded; CDK sets 30; owner-tunable; 0 starts no runs).
+
+- Not started, not held: the user already has 20 drafts today at start; the
+  items are rescanned next tick.
+- Held until 00:00 KST, attempts unchanged: a Go `day_budget` or
+  `account_day_budget` deferral, a runtime `account_budget` or `draft_budget`
+  deferral, all in-scope accounts capped, or the research cap reached.
+- Held one hour, attempts unchanged: any in-scope account's scope or pack
+  read failed (`buildFailedHeld`); nothing starts for that user this tick. A
+  count that repeats every hour points to one broken account.
+- Left new, attempts unchanged: a runtime `research_budget` deferral. The
+  next run sends the item with `decidedAccounts`, so pairs already decided
+  are not researched again.
+- One more attempt: `gate_error`, a missing `ITEM` row, lease expiry, or a
+  contract rejection of the payload (HTTP 400/413). The third attempt skips
+  the item.
+
+A hold wins over "left new", which wins over an attempt.
+
+**No drafts appear.** Check in order, from the worker log line
+`customer update runs: ...` (counts only):
+
+- Every count 0: the runtime ARN is unset (the phases do nothing), or no user
+  has a pending mark (no new inbox item).
+- `started=0` with users: a run is still leased, every item is held (`held`),
+  or no account is in scope (direct membership, the account setting, and a
+  project with an SFDC opportunity id and an open stage).
+- `errors`: a user's run failed this tick (logged with hashed ids and an error
+  class); it is retried next tick.
+- `startFailed`: a definite failure, logged with its error code: a runtime
+  refusal, or an AWS client-fault error such as a missing invoke grant, a
+  wrong qualifier, a validation error or throttling. The lease is deleted and items
+  keep their attempts (only a contract rejection adds one). A run id is never
+  retried; the next tick uses a new one.
+- `startAmbiguous`: no service response (timeout, transport error), an AWS
+  server fault or 5xx, or an unreadable answer; the lease is kept, so a
+  started run is finalized and one
+  that never started expires after 30 minutes with one more attempt.
+- `errors` together with a run that has a `DONE` row: finalize keeps failing
+  for that run; its rows expire after 2 days.
+- `servicesUnavailable`: the services object read was denied (normal while it
+  is missing and the role has no `ListBucket`); drafts get no service signal.
+- `finalized` with `discarded`: Go rejected drafts; reasons are codes only.
+- `deferred`/`held`: day budgets; wait for the next KST day.
+- `unreadable`/`malformed`: KMS or row format; check the record key and the
+  worker's purpose conditions.
+- AccessDenied on the table or an index in the worker log: compare the failing
+  call with the worker role's statements (INFRA-SPEC "Customer update worker
+  run phases"): its leading-key prefix, the index ARN, and for GSI1/GSI3 the
+  allowed attribute list, which must name the table keys, the index keys and
+  every projected attribute.
+- A runtime-side failure leaves no `DONE` row; see the next sections.
 
 ## Smoke test
 

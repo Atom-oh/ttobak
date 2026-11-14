@@ -1804,7 +1804,9 @@ the caller is no longer a direct member of, and orders the rest open drafts
 ascending. Pages are cut from that ordered list; the cursor encodes an offset
 into it. An absent cursor starts at the first draft; a cursor that does not
 decode to a non-negative offset, or lies beyond the list, returns 400.
-`nextCursor` is `""` on the last page. Drafts always carry `opportunities` and
+`nextCursor` is `""` on the last page. `GET /api/customer-updates/drafts` adds
+`truncated: true` when the scan stopped at 1,000 rows with more remaining (it may
+also be set when exactly 1,000 rows exist); the per-account route omits it. Drafts always carry `opportunities` and
 `links` as arrays (never `null`).
 
 `urlHash` must match `^[0-9a-f]{64}$`. Bodies reject unknown fields; `PUT`

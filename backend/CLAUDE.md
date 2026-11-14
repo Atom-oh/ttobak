@@ -72,6 +72,18 @@ permissions must be inspected before alleging an authorization bypass.
   [QA rollout](../docs/runbooks/qa-current-source-rollout.md) runbooks distinguish
   deployed readiness from remaining acceptance. Existing `/api/kb/*` routes stay
   in the API Lambda; cmd/kb accepts stream/schedule/tick envelopes.
+- Customer update runs (ADR-030): scope is direct membership, the account
+  setting and an open SFDC opportunity, checked at build and finalize. Packs use
+  existing authorized services. Go re-validates every runtime row with the
+  shared draft checks; run ids are single-use, invokes never retried, and only
+  a definite failure (runtime answer or AWS API error) deletes the lease.
+  Stored final decisions go out as `decidedAccounts` and are never re-run; a
+  failed account pack holds the batch one hour instead of starting.
+  Finalize-time draft deferrals, all-capped accounts and the research day cap
+  hold items until the next KST day with attempts unchanged (20 drafts at
+  start only skips the tick); `research_budget` leaves them new; gate errors,
+  missing ITEM rows, lease expiry and contract rejections add an attempt
+  (skipped at 3). Decisions and drafts are sealed.
 
 Use [API contracts](../docs/API-SPEC.md),
 [index source/provider contracts](internal/service/INDEX_SOURCE_CONTRACT.md),

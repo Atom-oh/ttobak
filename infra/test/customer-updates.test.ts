@@ -1,12 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import { CustomerUpdates } from '../lib/customer-updates';
+import { CustomerUpdateRunsProps, CustomerUpdates } from '../lib/customer-updates';
 
 const GATEWAY_ARN = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test';
 const KEY_ARN = 'arn:aws:kms:ap-northeast-2:123456789012:key/test-key';
+const RUNTIME_ARN = 'arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/ttobakCustomerUpdate-abc123';
+const BUCKET = 'billing-data-test';
 
-function build(withRuntime = true) {
+function build(withRuntime = true, runs?: Partial<CustomerUpdateRunsProps>) {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'T', { env: { account: '123456789012', region: 'ap-northeast-2' } });
   const table = new dynamodb.Table(stack, 'Table', {
@@ -16,29 +18,32 @@ function build(withRuntime = true) {
   new CustomerUpdates(stack, 'CU', {
     table,
     agentRuntime: withRuntime ? { webSearchGatewayArn: GATEWAY_ARN, recordKeyArn: KEY_ARN } : undefined,
+    runs: runs ? { recordKeyId: 'test-key', recordKeyArn: KEY_ARN, ...runs } : undefined,
   });
   return Template.fromStack(stack);
 }
 
 const template = build();
 
-function fn(name: string): { id: string; props: any } {
-  const found = Object.entries(template.findResources('AWS::Lambda::Function', {
+function fnIn(t: Template, name: string): { id: string; props: any } {
+  const found = Object.entries(t.findResources('AWS::Lambda::Function', {
     Properties: { FunctionName: name },
   }));
   expect(found).toHaveLength(1);
   return { id: found[0][0], props: (found[0][1] as any).Properties };
 }
+const fn = (name: string) => fnIn(template, name);
 
-function statements(roleId: string): any[] {
+function statementsIn(t: Template, roleId: string): any[] {
   const out: any[] = [];
-  for (const policy of Object.values(template.findResources('AWS::IAM::Policy')) as any[]) {
+  for (const policy of Object.values(t.findResources('AWS::IAM::Policy')) as any[]) {
     if (policy.Properties.Roles.some((r: any) => r.Ref === roleId)) {
       out.push(...policy.Properties.PolicyDocument.Statement);
     }
   }
   return out;
 }
+const statements = (roleId: string) => statementsIn(template, roleId);
 
 function roleIdOf(f: { props: any }): string {
   return f.props.Role['Fn::GetAtt'][0];
@@ -279,5 +284,182 @@ describe('CustomerUpdates agent runtime role', () => {
         expect(a).not.toBe('kms:Decrypt');
       }
     }
+  });
+});
+
+describe('CustomerUpdates worker run phases', () => {
+  const on = build(true, { runtimeArn: RUNTIME_ARN, billingDataBucket: BUCKET });
+  const off = build(true, {});
+  const worker = (t: Template) => fnIn(t, 'ttobak-customer-updates');
+  const workerStatements = (t: Template) => statementsIn(t, roleIdOf(worker(t)));
+  const withAction = (t: Template, prefix: string) =>
+    workerStatements(t).filter(s => asArray(s.Action).some((a: string) => a.startsWith(prefix)));
+  const env = (t: Template) => worker(t).props.Environment.Variables;
+  const tableStatements = (t: Template) => workerStatements(t).filter(s =>
+    asArray(s.Action).some((a: string) => a.startsWith('dynamodb:')) && !JSON.stringify(s.Resource).includes('/index/'));
+  const indexStatements = (t: Template) => workerStatements(t).filter(s => JSON.stringify(s.Resource).includes('/index/'));
+
+  test('environment with the runtime ARN set', () => {
+    expect(env(on)).toMatchObject({
+      KMS_KEY_ID: 'test-key',
+      CUSTOMER_UPDATE_INCLUDE_NOTES: '1',
+      CUSTOMER_UPDATE_RESEARCH_PAIRS_PER_DAY: '30',
+      BILLING_DATA_BUCKET: BUCKET,
+      CUSTOMER_UPDATE_RUNTIME_ARN: RUNTIME_ARN,
+      CUSTOMER_UPDATE_ENDPOINT_NAME: 'DEFAULT',
+    });
+    expect(env(on).TABLE_NAME).toBeDefined();
+  });
+
+  test('runtime ARN unset: no runtime env, no invoke statement, everything else deployed', () => {
+    const vars = env(off);
+    expect(vars.CUSTOMER_UPDATE_RUNTIME_ARN).toBeUndefined();
+    expect(vars.CUSTOMER_UPDATE_ENDPOINT_NAME).toBeUndefined();
+    expect(vars.BILLING_DATA_BUCKET).toBeUndefined();
+    expect(vars).toMatchObject({ KMS_KEY_ID: 'test-key', CUSTOMER_UPDATE_INCLUDE_NOTES: '1' });
+    expect(withAction(off, 'bedrock-agentcore:')).toHaveLength(0);
+    expect(withAction(off, 's3:')).toHaveLength(0);
+    expect(withAction(off, 'kms:')).toHaveLength(2);
+    expect(tableStatements(off)).toEqual(tableStatements(on));
+    expect(indexStatements(off)).toEqual(indexStatements(on));
+  });
+
+  test('notes switch can be turned off', () => {
+    expect(env(build(true, { includeNotes: false })).CUSTOMER_UPDATE_INCLUDE_NOTES).toBe('0');
+  });
+
+  test('malformed runtime ARN is refused at synth', () => {
+    for (const bad of ['*', `${RUNTIME_ARN}/*`, 'arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/*']) {
+      expect(() => build(true, { runtimeArn: bad })).toThrow(/customerUpdateRuntimeArn/);
+    }
+  });
+
+  test('invoke targets only the runtime ARN and its endpoints', () => {
+    const invoke = withAction(on, 'bedrock-agentcore:');
+    expect(invoke).toHaveLength(1);
+    expect(invoke[0].Action).toBe('bedrock-agentcore:InvokeAgentRuntime');
+    expect(asArray(invoke[0].Resource).sort()).toEqual([RUNTIME_ARN, `${RUNTIME_ARN}/*`]);
+    expect(invoke[0].Condition).toBeUndefined();
+  });
+
+  test('S3: GetObject on the names-only services object only', () => {
+    const s3 = withAction(on, 's3:');
+    expect(s3).toHaveLength(1);
+    expect(s3[0].Action).toBe('s3:GetObject');
+    const resources = asArray(s3[0].Resource);
+    expect(resources).toHaveLength(1);
+    const r = resources[0];
+    const text: string = typeof r === 'string' ? r
+      : r['Fn::Join'][1].map((p: any) => (typeof p === 'string' ? p : '{token}')).join('');
+    expect(text.endsWith('/accounts/*/derived/services-in-use.json')).toBe(true);
+    expect(text).toBe(`arn:{token}:s3:::${BUCKET}/accounts/*/derived/services-in-use.json`);
+  });
+
+  test('KMS: exact actions on the record key with purpose conditions', () => {
+    const kms = withAction(on, 'kms:').map(s => ({
+      actions: asArray(s.Action).slice().sort(), resource: s.Resource, condition: s.Condition,
+    }));
+    expect(kms).toEqual([
+      { actions: ['kms:Decrypt'], resource: KEY_ARN,
+        condition: { StringEquals: { 'kms:EncryptionContext:purpose': 'ttobak-customer-update-run' } } },
+      { actions: ['kms:Decrypt', 'kms:GenerateDataKey'], resource: KEY_ARN,
+        condition: { StringEquals: { 'kms:EncryptionContext:purpose':
+          ['ttobak-customer-update-draft', 'ttobak-customer-update-decision'] } } },
+    ]);
+  });
+
+  test('table grants: one statement per prefix group, exact actions, Null guard', () => {
+    const grants: Record<string, string[]> = {};
+    for (const s of tableStatements(on)) {
+      expect(s.Condition.Null).toEqual({ 'dynamodb:LeadingKeys': 'false' });
+      expect(Object.keys(s.Condition).sort()).toEqual(['ForAllValues:StringLike', 'Null']);
+      for (const k of leadingKeys(s)) {
+        expect(grants[k]).toBeUndefined();
+        grants[k] = asArray(s.Action).slice().sort();
+      }
+    }
+    expect(grants).toEqual({
+      'USER#*': ['dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem'],
+      CUFEEDS: ['dynamodb:Query', 'dynamodb:UpdateItem'],
+      'CUFEED#*': ['dynamodb:GetItem', 'dynamodb:Query'],
+      'CUURL#*': ['dynamodb:PutItem'],
+      CUPENDING: ['dynamodb:DeleteItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+      'CURUN#*': ['dynamodb:BatchWriteItem', 'dynamodb:Query'],
+      'ACCOUNT#*': ['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:Query'],
+      'PROJECT#*': ['dynamodb:GetItem'],
+      'CRAWLER#*': ['dynamodb:BatchGetItem', 'dynamodb:GetItem', 'dynamodb:Query'],
+    });
+  });
+
+  test('read-only prefixes get no write action', () => {
+    const writes = /^dynamodb:(PutItem|UpdateItem|DeleteItem|BatchWriteItem|TransactWriteItems)$/;
+    for (const s of tableStatements(on)) {
+      if (leadingKeys(s).some(k => ['ACCOUNT#*', 'PROJECT#*', 'CRAWLER#*'].includes(k))) {
+        for (const a of asArray(s.Action)) expect(a).not.toMatch(writes);
+      }
+    }
+    for (const s of indexStatements(on)) expect(asArray(s.Action)).toEqual(['dynamodb:Query']);
+  });
+
+  test('index queries: GSI1 for the user partition and GSI3 owner lookup, projected attributes only', () => {
+    const byIndex: Record<string, any> = {};
+    for (const s of indexStatements(on)) {
+      const index = JSON.stringify(s.Resource).match(/\/index\/(\w+)/)![1];
+      expect(byIndex[index]).toBeUndefined();
+      byIndex[index] = s.Condition;
+    }
+    expect(Object.keys(byIndex).sort()).toEqual(['GSI1', 'GSI3']);
+    expect(byIndex.GSI1).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*'] },
+      'ForAllValues:StringEquals': { 'dynamodb:Attributes': ['PK', 'SK', 'GSI1PK', 'GSI1SK'] },
+      StringEqualsIfExists: { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+      Null: { 'dynamodb:LeadingKeys': 'false', 'dynamodb:Attributes': 'false' },
+    });
+    expect(byIndex.GSI3).toEqual({
+      'ForAllValues:StringEquals': { 'dynamodb:Attributes': ['PK', 'SK', 'meetingId', 'entityType', 'userId'] },
+      StringEqualsIfExists: { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+      Null: { 'dynamodb:Attributes': 'false' },
+    });
+  });
+
+  // DynamoDB requires an attribute allow-list to name every table key and
+  // every key of the index, besides what the Go query projects
+  // (QueryNavigationCandidates: PK, SK, GSI1PK, GSI1SK; GetMeetingByID:
+  // meetingId, userId). A missing key denies the query at runtime.
+  test.each([
+    ['GSI1', ['PK', 'SK', 'GSI1PK', 'GSI1SK'], ['PK', 'SK', 'GSI1PK', 'GSI1SK']],
+    ['GSI3', ['PK', 'SK', 'meetingId', 'entityType'], ['meetingId', 'userId']],
+  ])('%s attribute list covers table keys, index keys and the projection', (index, keys, projection) => {
+    const s = indexStatements(on).find(x => JSON.stringify(x.Resource).includes(`/index/${index}`))!;
+    const allowed: string[] = s.Condition['ForAllValues:StringEquals']['dynamodb:Attributes'];
+    for (const name of [...keys, ...projection]) expect(allowed).toContain(name);
+    expect(s.Condition.StringEquals).toBeUndefined();
+  });
+
+  test('no unconditioned wildcard resource, no wildcard action, no other services', () => {
+    for (const s of workerStatements(on)) {
+      if (asArray(s.Resource).includes('*')) expect(s.Condition).toBeDefined();
+      for (const a of asArray(s.Action)) {
+        expect(a).not.toMatch(/\*/);
+        expect(a).toMatch(/^(dynamodb|kms|s3|bedrock-agentcore|logs):/);
+        expect(a).not.toMatch(/^(s3:(?!GetObject$)|kms:(?!Decrypt$|GenerateDataKey$))/);
+      }
+    }
+  });
+
+  test('collector and agent runtime roles are unchanged', () => {
+    const roleIn = (t: Template) => Object.keys(t.findResources('AWS::IAM::Role', {
+      Properties: { RoleName: 'ttobak-agentcore-customer-update-role' },
+    }))[0];
+    const collectorOf = (t: Template) => roleIdOf(fnIn(t, 'ttobak-customer-update-collector'));
+    expect(statementsIn(on, collectorOf(on))).toEqual(statementsIn(template, collectorOf(template)));
+    expect(roleIn(on)).toEqual(roleIn(template));
+    expect(statementsIn(on, roleIn(on))).toEqual(statementsIn(template, roleIn(template)));
+    expect(collectorOf(on)).not.toEqual(roleIdOf(worker(on)));
+  });
+
+  test('timeout 5 minutes and reserved concurrency 1 unchanged', () => {
+    expect(worker(on).props).toMatchObject({ Timeout: 300, ReservedConcurrentExecutions: 1, MemorySize: 512 });
+    on.resourceCountIs('AWS::Lambda::Url', 0);
   });
 });

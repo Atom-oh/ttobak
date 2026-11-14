@@ -15,8 +15,9 @@ decision changes; version control keeps the earlier text.
 The earlier one-record-per-decision set (ADR-001 to ADR-073) was merged into
 the topic records below on 2026-11-11. The second column names the earlier
 records each one absorbed, so an old number found in history can be traced.
-ADR-026 and ADR-030 are unused. `scripts/docs/check_docs.py` fails when a
-record file is numbered outside 001 to 030 or when two files share a number.
+Every number from 001 to 030 is in use, so a new decision extends the record
+that owns its topic. `scripts/docs/check_docs.py` fails when a record file is
+numbered outside 001 to 030 or when two files share a number.
 
 | Record | Topic and origin |
 |---|---|
@@ -49,3 +50,4 @@ record file is numbered outside 001 to 030 or when two files share a number.
 | [ADR-027](ADR-027-edge-delivery-and-origin-proof.md) | Edge delivery: signed media URLs and the origin proof; absorbs the former ADR-050 (versioned HTTP origin proof rotation) |
 | [ADR-028](ADR-028-qa-search-indexing-and-sources.md) | QA: web search, note indexing and current-source answers; absorbs the former ADR-038 (canonical note indexing) and ADR-042 (current-source QA and history) |
 | [ADR-029](ADR-029-note-provenance-and-sharing-safety.md) | Note provenance and sharing safety; merges the former ADR-049 (summary sharing source provenance), ADR-059 (owner-approved account sharing) and ADR-070 (shareable-by-default note provenance) under a freed number |
+| [ADR-030](ADR-030-customer-update-drafts.md) | Customer update drafts: Go trust boundary, run phases, budgets, retention and accepted limits; links the collection (ADR-004), runtime (ADR-011), billing object (ADR-012) and draft storage (ADR-015) sections |

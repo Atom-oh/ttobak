@@ -207,6 +207,10 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.client.get("/invocations").status_code, 405)
 
 
+# Hand-run operator tools that stay out of the image.
+OPERATOR_TOOLS = {"eval_gate.py"}
+
+
 class DockerfileTest(unittest.TestCase):
     """The image copies every runtime module and the fetcher, and no tests."""
 
@@ -216,7 +220,8 @@ class DockerfileTest(unittest.TestCase):
             text = f.read()
         copied = set(re.findall(r"customer-update-agent/([a-z_]+\.py)", text))
         modules = {n for n in os.listdir(here)
-                   if n.endswith(".py") and not n.startswith("test_")}
+                   if n.endswith(".py") and not n.startswith("test_")
+                   and n not in OPERATOR_TOOLS}
         self.assertEqual(copied, modules)
         self.assertIn("crawler/article_fetcher.py crawler/news_pipeline.py", text)
         self.assertIn('CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]', text)

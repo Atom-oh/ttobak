@@ -89,6 +89,46 @@ stop against the real library and an offline fake model. Needs `boto3<2`,
 (cd backend/python/customer-update-agent && python3 -m unittest discover -p 'test_*.py' -v)
 ```
 
+## Evaluating a gate backend
+
+Two operator tools measure a candidate gate (for example a self-hosted model)
+against real outcomes. Neither is scheduled or deployed.
+
+```bash
+python3 scripts/customer-updates/export_labels.py --user-id USER_ID --key-id KMS_KEY_ID --out labels.jsonl
+(cd backend/python/customer-update-agent && python3 eval_gate.py --labels ../../../labels.jsonl --backend luna)
+```
+
+- Export reads the user's decisions and drafts and writes one line per labelled
+  pair: adopted drafts are `needed`, drafts dismissed as not relevant are
+  `not_needed`, everything else is excluded. Stdout shows counts only.
+- The labelled population is biased. Only decisions the live gate admitted (needed
+  at 0.7 or above) store their gate input, so every exported pair already passed
+  the live gate, and a `not_needed` label means the gate said needed and the user
+  said not relevant. Precision is the meaningful number. Recall is reported as
+  `recall (among pairs the live gate admitted)` and says nothing about articles
+  the live gate rejected.
+- `--key-id` (or env `KMS_KEY_ID`) is required and is passed to `Decrypt`. KMS
+  access or credential errors abort the run; other unopenable rows are counted as
+  `unreadable`, and rows with malformed gate input as `malformed`. The tool exits
+  non-zero when nothing was exported and some rows were unreadable. It never
+  follows a symlink at the output path.
+- The `luna` backend uses the production gate system prompt
+  (`gate.GATE_SYSTEM_PROMPT`). A backend error on one pair counts as
+  `not_needed` for that pair and is reported as `errors=N`.
+- The export contains customer context. It is written with mode 0600, refuses to
+  overwrite without `--force`, and must stay on the operator's machine.
+- It needs the operator's own AWS credentials with `dynamodb:Query` and
+  `kms:Decrypt` on the record key for the decision and draft sealing purposes.
+  The runtime and worker roles do not grant that to the operator, and this
+  tooling makes no IAM change.
+- `eval_gate.py --backend luna|module:Class` runs the stored question, options and
+  context through the backend, applies the gate's decision rule (`--threshold`,
+  default 0.7), and prints the pair count, precision and recall for `needed`, and
+  the same for the Korean subset (contexts with at least one Hangul syllable).
+  Rates with a zero denominator print `n/a`.
+- It exits 1 with `need at least 300 labelled pairs` when fewer are available.
+
 ## Image
 
 `Dockerfile` (Python 3.13, ARM64, port 8080, `uvicorn app:app`) builds from the
