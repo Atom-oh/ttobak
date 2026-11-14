@@ -63,13 +63,6 @@ type fanoutRun struct {
 	entries map[fanoutEntriesKey][]model.UpdateFeedEntry
 }
 
-func shortHash(h string) string {
-	if len(h) > 12 {
-		return h[:12]
-	}
-	return h
-}
-
 // Run fans out every active subscription once. A failing subscription is
 // logged by feed hash prefix and leaves its FannedAt unchanged; only a failure
 // to list subscriptions fails the run.

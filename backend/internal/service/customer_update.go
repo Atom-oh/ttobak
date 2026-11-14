@@ -619,3 +619,11 @@ func (s *CustomerUpdateService) PutAccountSetting(ctx context.Context, userID, a
 	}
 	return s.repo.PutAccountOpt(ctx, userID, accountID, enabled)
 }
+
+// shortHash is the feed hash prefix used in logs; logs never carry URLs.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
