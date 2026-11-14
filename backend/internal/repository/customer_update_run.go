@@ -251,6 +251,9 @@ func newItemsQueryInput(tableName, userID, startAfter, upTo string, limit int) (
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		Limit:                     aws.Int32(int32(limit)),
+		// Strongly consistent: the pending mark is cleared after a complete scan
+		// that found nothing, so a stale page must not hide a just-written item.
+		ConsistentRead: aws.Bool(true),
 	}
 	if startAfter != "" {
 		in.ExclusiveStartKey = updateUserKey(userID, startAfter)
