@@ -1037,8 +1037,12 @@ class Job:
 
     def publish_services_in_use(self, s3):
         """Best effort, after the version is published: accounts/{acct}/derived/services-in-use.json holds service names
-        only (ADR-012) for the customer-updates worker. Written only when the services dataset exists and yields names;
-        otherwise the previous object stays untouched (it is never deleted). A failure is logged with the account id and exception class and never fails the publish."""
+        only (ADR-012) for the customer-updates worker. Only a COT publish writes it: the CUR datasets have no
+        services dataset. Written only when the services dataset exists and yields names; otherwise the previous object
+        stays untouched (it is never deleted). A failure is logged with the account id and exception class and never
+        fails the publish."""
+        if self.src != "cot":
+            return
         try:
             rows = []
             each_regular(self.wd, ("out",), re.compile(r"services\.json"), names=["services.json"],
