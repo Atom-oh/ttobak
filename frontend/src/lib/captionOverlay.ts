@@ -6,6 +6,7 @@ import {
   type TranslateResponse,
   type TranslationEntry,
 } from './liveTranslation';
+import { MAX_SPEAKER_ENTRIES, speakerNumber } from './interpretSpeakers';
 
 // Bridge to the Mac app's floating caption windows. Nothing here runs unless
 // called, and caption text is never logged. Decision record: ADR-018 (Mac
@@ -131,10 +132,13 @@ export function setCaptionStyle(lang: CaptionLang, style: CaptionStyle): Promise
   return invoke<void>('caption_overlay_set_style', { lang, style });
 }
 
+/** `speaker` (zero-based) colours the line in the window; a Mac app without it ignores the field. */
 export function pushCaption(
   lang: CaptionLang, kind: CaptionPushKind, id: string, order: number, text: string, isFinal: boolean,
+  speaker?: number,
 ): Promise<void> {
-  return invoke<void>('caption_overlay_push', { lang, kind, id, order, text, isFinal });
+  const args = { lang, kind, id, order, text, isFinal };
+  return invoke<void>('caption_overlay_push', speaker === undefined ? args : { ...args, speaker });
 }
 
 export function translateCaption(
@@ -216,6 +220,9 @@ function rejectionCode(err: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+/** Highest speaker number the Mac app accepts (Transcribe labels up to 30 voices). */
+export const MAX_PUSH_SPEAKER = 29;
+
 interface ControllerDeps {
   translate: (
     text: string, sourceLang: string, targetLang: string, isFinal: boolean, context: string[],
@@ -230,6 +237,8 @@ interface ControllerDeps {
 export class CaptionOverlayController {
   private engines = new Map<CaptionLang, LiveTranslation>();
   private reported = new Set<string>();
+  /** Speaker number by segment ID, in memory only; the oldest are dropped. */
+  private speakers = new Map<string, number>();
   private deps: ControllerDeps;
 
   constructor(deps: Partial<ControllerDeps> & Pick<ControllerDeps, 'onError'>) {
@@ -283,17 +292,28 @@ export class CaptionOverlayController {
     if (!entry.translated) return;
     // The window shows the end of a long sentence; the Mac app rejects longer text.
     const text = utf8Tail(entry.translated, MAX_PUSH_TEXT_BYTES);
-    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal);
+    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal, this.speakers.get(entry.id));
   }
 
   private send(
     lang: CaptionLang, kind: CaptionPushKind, id: string, order: number, text: string, isFinal: boolean,
+    speaker?: number,
   ): Promise<void> {
     // A closed window or missing command must not break the live session.
-    return this.deps.push(lang, kind, id, order, text, isFinal).catch(() => undefined);
+    const sent = speaker === undefined
+      ? this.deps.push(lang, kind, id, order, text, isFinal)
+      : this.deps.push(lang, kind, id, order, text, isFinal, speaker);
+    return sent.catch(() => undefined);
   }
 
-  update(id: string, text: string, isFinal: boolean, detectedLanguage?: string): void {
+  /** `speaker` is the recognizer's label for a final segment, when it told voices apart. */
+  update(id: string, text: string, isFinal: boolean, detectedLanguage?: string, speaker?: string): void {
+    const number = isFinal ? speakerNumber(speaker) : null;
+    if (number !== null && number <= MAX_PUSH_SPEAKER) {
+      this.speakers.delete(id);
+      this.speakers.set(id, number);
+      if (this.speakers.size > MAX_SPEAKER_ENTRIES) this.speakers.delete(this.speakers.keys().next().value!);
+    }
     for (const engine of this.engines.values()) engine.update(id, text, isFinal, detectedLanguage);
   }
 
@@ -313,5 +333,6 @@ export class CaptionOverlayController {
   stop(): void {
     for (const engine of this.engines.values()) engine.stop();
     this.engines.clear();
+    this.speakers.clear();
   }
 }

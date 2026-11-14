@@ -27,7 +27,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await tick(); };
 
 function fixture(translateImpl) {
   const liveTranslation = loadModule('lib/liveTranslation.ts');
-  const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation });
+  const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation, './interpretSpeakers': loadModule('lib/interpretSpeakers.ts') });
   const calls = [];
   const pushes = [];
   const errors = [];
@@ -37,8 +37,8 @@ function fixture(translateImpl) {
       if (translateImpl) return translateImpl(text, sourceLang, targetLang);
       return { translatedText: `[${targetLang}] ${text}`, engine: 'llm' };
     },
-    push: async (lang, kind, id, order, text, isFinal) => {
-      pushes.push({ lang, kind, id, order, text, isFinal });
+    push: async (lang, kind, id, order, text, isFinal, ...rest) => {
+      pushes.push({ lang, kind, id, order, text, isFinal, ...(rest.length ? { speaker: rest[0] } : {}) });
     },
     onError: (code) => errors.push(code),
   });
@@ -208,7 +208,7 @@ test('error messages', () => {
 test('wrappers invoke the Mac commands with camelCase arguments', async () => {
   const liveTranslation = loadModule('lib/liveTranslation.ts');
   const invoked = [];
-  const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation }, {
+  const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation, './interpretSpeakers': loadModule('lib/interpretSpeakers.ts') }, {
     window: { __TAURI__: { core: { invoke: async (cmd, args) => { invoked.push([cmd, args]); return {}; } } } },
   });
   await overlay.openCaptionWindow('ko');
@@ -257,4 +257,19 @@ test('preview decision: recording start and stop clear the windows', () => {
 
 test('timed preview lasts about four seconds', () => {
   assert.equal(fixture().overlay.TIMED_PREVIEW_MS, 4000);
+});
+
+test('a final segment carries its speaker to the window; odd labels carry none', async () => {
+  const { controller, pushes } = fixture();
+  controller.setLanguages(['en']);
+  controller.update('s1', '안녕하세요 여러분 반갑습니다', true, 'ko-KR', '1');
+  await flush();
+  assert.equal(entryPushes(pushes, 'en').at(-1).speaker, 1);
+  for (const [id, label] of [['s2', undefined], ['s3', 'spk_0'], ['s4', '30']]) {
+    controller.update(id, '오늘 회의를 시작하겠습니다', true, 'ko-KR', label);
+    await flush();
+    const last = entryPushes(pushes, 'en').at(-1);
+    assert.equal(last.id, id);
+    assert.equal('speaker' in last, false, String(label));
+  }
 });

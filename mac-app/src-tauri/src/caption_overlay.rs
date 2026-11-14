@@ -170,10 +170,21 @@ struct CaptionUpdate {
     order: u32,
     text: String,
     is_final: bool,
+    /// Zero-based speaker number; the page colours the line by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker: Option<u8>,
 }
 
 impl CaptionUpdate {
-    fn new(lang: &str, kind: &str, id: &str, order: u32, text: &str, is_final: bool) -> Self {
+    fn new(
+        lang: &str,
+        kind: &str,
+        id: &str,
+        order: u32,
+        text: &str,
+        is_final: bool,
+        speaker: Option<u8>,
+    ) -> Self {
         Self {
             lang: lang.to_string(),
             kind: kind.to_string(),
@@ -181,8 +192,18 @@ impl CaptionUpdate {
             order,
             text: text.to_string(),
             is_final,
+            speaker: push_speaker(speaker),
         }
     }
+}
+
+/// Highest speaker number passed on (the recognizer labels up to 30 voices).
+pub const MAX_SPEAKER: u8 = 29;
+
+/// The speaker to show: a number above the limit is dropped, not an error,
+/// so an odd label never costs the audience a caption line.
+pub fn push_speaker(speaker: Option<u8>) -> Option<u8> {
+    speaker.filter(|s| *s <= MAX_SPEAKER)
 }
 
 /// `caption-style` payload: the style fields plus the window's language.
@@ -594,6 +615,7 @@ pub async fn caption_overlay_push(
     order: u32,
     text: String,
     is_final: bool,
+    speaker: Option<u8>,
 ) -> Result<(), CaptionError> {
     state.require_available()?;
     let label = gated_label(&state.snapshot(), &lang)?;
@@ -613,7 +635,7 @@ pub async fn caption_overlay_push(
     if kind == "clear" {
         set_pass_through(&window, true)?;
     }
-    let update = CaptionUpdate::new(&lang, &kind, &id, order, &text, is_final);
+    let update = CaptionUpdate::new(&lang, &kind, &id, order, &text, is_final, speaker);
     app.emit_to(EventTarget::webview_window(label), "caption-update", update)
         .map_err(|e| window_error("push", e))?;
     if let Some(shown) = visibility_after(&kind, &text) {
@@ -758,6 +780,25 @@ mod tests {
 
     #[test]
     fn push_rejects_bad_kind_and_oversized_fields() {
+        assert_eq!(push_speaker(Some(0)), Some(0));
+        assert_eq!(push_speaker(Some(MAX_SPEAKER)), Some(MAX_SPEAKER));
+        assert_eq!(push_speaker(Some(MAX_SPEAKER + 1)), None);
+        assert_eq!(push_speaker(None), None);
+        let plain =
+            serde_json::to_value(CaptionUpdate::new("ko", "entry", "a", 1, "x", true, None))
+                .unwrap();
+        assert!(plain.get("speaker").is_none());
+        let spoken = serde_json::to_value(CaptionUpdate::new(
+            "ko",
+            "entry",
+            "a",
+            1,
+            "x",
+            true,
+            Some(2),
+        ))
+        .unwrap();
+        assert_eq!(spoken["speaker"], 2);
         assert!(check_push("entry", "a1", "hello").is_ok());
         assert!(check_push("clear", "", "").is_ok());
         // Empty entry text removes that line from the window.
@@ -783,8 +824,9 @@ mod tests {
 
     #[test]
     fn payloads_carry_the_window_language() {
-        let update = serde_json::to_value(CaptionUpdate::new("en", "entry", "a1", 3, "hi", true))
-            .expect("json");
+        let update =
+            serde_json::to_value(CaptionUpdate::new("en", "entry", "a1", 3, "hi", true, None))
+                .expect("json");
         assert_eq!(update["lang"], "en");
         assert_eq!(update["kind"], "entry");
         assert_eq!(update["id"], "a1");

@@ -7,7 +7,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
-import { useCaptionOverlay, type CaptionOverlayState } from '@/hooks/useCaptionOverlay';
+import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { useInterpretSession } from '@/hooks/useInterpretSession';
 import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
 import { upsertCaptionLine, visibleCaptionLines } from '@/lib/interpretCaptions';
@@ -121,9 +121,9 @@ function Interpreter() {
   const getExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
   // Who said each line, by segment ID; in memory only, like the captions.
   const [speakers, setSpeakers] = useState<Record<string, string>>({});
-  const onSegment = useCallback((id: string, text: string, isFinal: boolean, languageCode?: string, speaker?: string) => {
+  const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode, speaker) => {
     if (isFinal && speaker) setSpeakers((previous) => rememberSpeaker(previous, id, speaker));
-    captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
+    captionLinkRef.current?.onSegment(id, text, isFinal, languageCode, speaker);
   }, []);
   // Spoken languages: one or two of four, kept as a per-viewer preference.
   const [speechLanguages, setSpeechLanguages] = useState<SpeechLanguage[]>(() => {
