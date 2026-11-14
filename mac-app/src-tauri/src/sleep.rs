@@ -6,6 +6,9 @@
 //! itself is resumed after wake: the app emits `native-system-wake` and the
 //! record page retries a pending upload. A closed lid that does not sleep
 //! (clamshell mode on an external display) keeps recording.
+//!
+//! Live interpretation (a listening session) has nothing to save: will-sleep
+//! ends it, including one whose start is still in flight.
 
 #[cfg(target_os = "macos")]
 pub use mac::start;
@@ -13,6 +16,45 @@ pub use mac::start;
 /// Sleep is delayed at most this long while the recording stops.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What the will-sleep notice does before sleep is allowed.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+enum WillSleep {
+    /// Stop the running recording and start its upload.
+    StopRecording,
+    /// End live interpretation. Chosen whenever no recording runs, not only
+    /// when a listening session shows in the snapshot: a listening start
+    /// still in flight is not in the snapshot yet, and `end_listening` waits
+    /// for it and stops the session it installs. With nothing to stop it
+    /// returns at once.
+    EndListening,
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn will_sleep_action(recording: bool) -> WillSleep {
+    if recording {
+        WillSleep::StopRecording
+    } else {
+        WillSleep::EndListening
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{will_sleep_action, WillSleep};
+
+    #[test]
+    fn a_recording_is_stopped_and_uploaded() {
+        assert_eq!(will_sleep_action(true), WillSleep::StopRecording);
+    }
+
+    #[test]
+    fn an_idle_looking_app_still_ends_listening() {
+        // Covers a listening start that has not installed its session yet.
+        assert_eq!(will_sleep_action(false), WillSleep::EndListening);
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -24,7 +66,7 @@ mod mac {
     use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSourceRef};
     use tauri::{AppHandle, Emitter, Manager};
 
-    use super::STOP_DEADLINE;
+    use super::{will_sleep_action, WillSleep, STOP_DEADLINE};
     use crate::control_proto::Action;
     use crate::RecorderState;
 
@@ -97,23 +139,34 @@ mod mac {
         match message {
             CAN_SYSTEM_SLEEP => allow(),
             SYSTEM_WILL_SLEEP => {
-                let snapshot = app.state::<RecorderState>().recorder.lock().snapshot();
-                if snapshot.listening {
+                let recording = app
+                    .state::<RecorderState>()
+                    .recorder
+                    .lock()
+                    .snapshot()
+                    .recording;
+                if will_sleep_action(recording) == WillSleep::EndListening {
                     // Live interpretation has nothing to save: stop the
                     // capture, tell the page why, then let the system sleep.
-                    log::info!("system will sleep while listening: stopping");
+                    // The stop runs as its own task, so the deadline only
+                    // ends the wait: a stop still waiting for a listening
+                    // start, or for a slow Core Audio teardown, finishes
+                    // (and reports to the page) instead of being dropped.
                     let app = app.clone();
+                    let stop = tauri::async_runtime::spawn(async move {
+                        crate::end_listening(&app, Some("system-sleep")).await
+                    });
                     tauri::async_runtime::spawn(async move {
-                        let stop = crate::end_listening(&app, Some("system-sleep"));
-                        if tokio::time::timeout(STOP_DEADLINE, stop).await.is_err() {
-                            log::warn!("listening stop not finished before the deadline");
+                        match tokio::time::timeout(STOP_DEADLINE, stop).await {
+                            Ok(Ok((true, _))) => log::info!("system will sleep: listening stopped"),
+                            Ok(Ok((false, _))) => {}
+                            Ok(Err(e)) => log::error!("listening stop task failed: {e}"),
+                            Err(_) => log::warn!(
+                                "listening stop not finished before the deadline; it continues"
+                            ),
                         }
                         allow();
                     });
-                    return;
-                }
-                if !snapshot.recording {
-                    allow();
                     return;
                 }
                 log::info!("system will sleep while recording: stopping and uploading");

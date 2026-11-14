@@ -12,7 +12,8 @@ export const INTERPRET_MESSAGES = {
   notSaved: '통역 내용과 소리는 저장되지 않습니다.',
   idleStopped: '10분 동안 인식된 말이 없어 통역을 멈췄습니다.',
   sleepStopped: 'Mac이 잠자기에 들어가 통역을 멈췄습니다.',
-  recordingStopped: '녹음이 시작되어 통역을 멈췄습니다.',
+  /** Shown when a recording start ended the session, whether or not that recording then started. */
+  recordingStopped: '녹음 시작 요청으로 통역을 멈췄습니다.',
   reconnecting: '다시 연결 중…',
   reconnectFailed: '실시간 자막 연결이 끊어져 통역을 멈췄습니다. 네트워크를 확인한 뒤 다시 시작해 주세요.',
   unavailable: '실시간 자막을 사용할 수 없어 통역을 시작할 수 없습니다 (AWS 인증/연결 필요).',
