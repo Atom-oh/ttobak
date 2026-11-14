@@ -188,17 +188,60 @@ class TestCollector(unittest.TestCase):
         _, calls = run(t, docs, now=NOW + timedelta(hours=1))
         self.assertEqual(calls, ["https://a.example/feed.xml"])
 
-    def test_budget_links_caps_count_and_bytes(self):
-        few = ["https://a.example/%d" % i for i in range(400)]
-        self.assertEqual(uc.budget_links(few), few[:uc.MAX_STORED_LINKS])
-        big = ["https://a.example/" + "é" * 900 + str(i) for i in range(300)]
-        kept = uc.budget_links(big)
-        self.assertEqual(kept, big[:len(kept)])
-        total = sum(len(l.encode("utf-8")) for l in kept)
-        self.assertLessEqual(total, uc.MAX_STORED_LINK_BYTES)
-        self.assertLess(len(kept), 300)
-        self.assertGreater(total + len(big[len(kept)].encode("utf-8")),
-                           uc.MAX_STORED_LINK_BYTES)
+    def test_large_page_makes_progress_and_never_redelivers(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/", kind="site")
+        base = "https://a.example/"
+        # 298 links (+ /seed and /late = page_links' 300 cap) of ~1.5 KB each: well over 200,000 bytes in total.
+        pad = "x" * 1500
+        paths = ["/%03d-%s" % (i, pad) for i in range(298)]
+        run(t, {base: doc(html("/seed"), "text/html", base)})
+        page = doc(html("/seed", *paths), "text/html", base)
+        self.assertGreater(sum(len(p) for p in paths), 200000)
+        delivered = []
+        for n in range(1, 13):
+            result, _ = run(t, {base: page}, now=NOW + timedelta(hours=n))
+            delivered.append(result["entries"])
+        self.assertEqual(delivered, [30] * 9 + [28, 0, 0])
+        urls = [e["url"] for e in t.entries("h1")]
+        self.assertEqual(len(urls), 298)
+        self.assertEqual(len(set(urls)), 298)
+        self.assertEqual(len(t.state("h1")["links"]), 299)
+        # A link appended later is collected.
+        page = doc(html("/seed", *paths, "/late"), "text/html", base)
+        result, _ = run(t, {base: page}, now=NOW + timedelta(hours=20))
+        self.assertEqual(result["entries"], 1)
+        self.assertIn("https://a.example/late", [e["url"] for e in t.entries("h1")])
+
+    def test_stored_links_cap_keeps_every_current_page_link(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/", kind="site")
+        base = "https://a.example/"
+        old = ["%016x" % i for i in range(uc.MAX_STORED_LINK_IDS + 500)]
+        uc.FeedStore(t).update_state("h1", NOW, links=old)
+        current = ["/p%d" % i for i in range(300)]
+        result, _ = run(t, {base: doc(html(*current), "text/html", base)},
+                        now=NOW + timedelta(hours=1))
+        self.assertEqual(result["entries"], 30)
+        stored = t.state("h1")["links"]
+        self.assertEqual(len(stored), uc.MAX_STORED_LINK_IDS)
+        ids = set(stored)
+        # Delivered links stay; undelivered current links stay new.
+        delivered = [e["url"] for e in t.entries("h1")]
+        self.assertTrue(all(uc.link_id(u) in ids for u in delivered))
+        self.assertEqual(sum(uc.link_id("https://a.example" + p) in ids for p in current), 30)
+
+    def test_unusable_stored_link_values_do_not_crash(self):
+        t = FakeTable()
+        register(t, "h1", "https://a.example/", kind="site")
+        base = "https://a.example/"
+        uc.FeedStore(t).update_state(
+            "h1", NOW, links=["https://a.example/a", "", None, 7, "zz"])
+        result, _ = run(t, {base: doc(html("/a", "/b"), "text/html", base)},
+                        now=NOW + timedelta(hours=1))
+        self.assertEqual(result["failed"], 0)
+        # A legacy URL value is treated as that link's identity.
+        self.assertEqual([e["url"] for e in t.entries("h1")], ["https://a.example/b"])
 
     def test_site_baseline_then_new_links(self):
         t = FakeTable()
@@ -209,7 +252,7 @@ class TestCollector(unittest.TestCase):
         self.assertEqual(result["entries"], 0)
         self.assertEqual(t.entries("h1"), [])
         self.assertEqual(sorted(t.state("h1")["links"]),
-                         ["https://a.example/a", "https://a.example/b"])
+                         sorted(uc.link_id(u) for u in ("https://a.example/a", "https://a.example/b")))
         self.assertNotIn("updatedAt", t.state("h1"))
         second = doc(html("/a", "/b", "/c", "/d"), "text/html", base)
         result, _ = run(t, {base: second}, now=NOW + timedelta(hours=1))
@@ -229,8 +272,8 @@ class TestCollector(unittest.TestCase):
         many = doc(html(*["/p%d" % i for i in range(60)]), "text/html", base)
         result, _ = run(t, {base: many}, now=NOW + timedelta(hours=1))
         self.assertEqual(result["entries"], 30)
-        self.assertNotIn("https://a.example/p30", t.state("h1")["links"])
-        self.assertIn("https://a.example/a", t.state("h1")["links"])
+        self.assertNotIn(uc.link_id("https://a.example/p30"), t.state("h1")["links"])
+        self.assertIn(uc.link_id("https://a.example/a"), t.state("h1")["links"])
         result, _ = run(t, {base: many}, now=NOW + timedelta(hours=2))
         self.assertEqual(result["entries"], 30)
         self.assertEqual(len(t.entries("h1")), 60)

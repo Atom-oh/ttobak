@@ -258,7 +258,7 @@ func (r *draftListRepo) DeleteSource(context.Context, string, string) error { re
 func (r *draftListRepo) PutSourceWithFeedSub(context.Context, string, *model.UpdateSource, *model.UpdateFeedSub) error {
 	return nil
 }
-func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub) error {
+func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub, *string) error {
 	return nil
 }
 func (r *draftListRepo) DeleteSourceWithFeedSub(context.Context, string, string, string) error {

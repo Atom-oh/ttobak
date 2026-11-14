@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import random
+import re
 from datetime import datetime, timedelta, timezone
 
 from article_fetcher import FetchRejected, fetch_feed_document
@@ -27,8 +28,7 @@ STATE_ENTITY = "UPDATE_FEED_STATE"
 ENTRY_ENTITY = "UPDATE_FEED_ENTRY"
 ENTRY_TTL_SECONDS = 7 * 24 * 3600
 MAX_SITE_ENTRIES = 30
-MAX_STORED_LINKS = 300
-MAX_STORED_LINK_BYTES = 200_000  # keeps the state item far below DynamoDB's 400 KB
+MAX_STORED_LINK_IDS = 2000  # 16-hex ids: 32 KB, far below DynamoDB's 400 KB item limit
 BACKOFF_FAILURES = 5
 BACKOFF_SECONDS = 24 * 3600
 MIN_REMAINING_MS = 270000  # one feed can take about 250 s (retries and redirects)
@@ -51,18 +51,30 @@ def _sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def budget_links(links):
-    """Keep links in order, at most MAX_STORED_LINKS and MAX_STORED_LINK_BYTES UTF-8."""
-    out, total = [], 0
-    for link in links:
-        if len(out) >= MAX_STORED_LINKS:
-            break
-        size = len(link.encode("utf-8"))
-        if total + size > MAX_STORED_LINK_BYTES:
-            break
-        out.append(link)
-        total += size
-    return out
+_LINK_ID = re.compile(r"[0-9a-f]{16}")
+
+
+def link_id(url):
+    """Bounded identity of a link URL: the first 16 hex characters of its SHA-256."""
+    return _sha256(url)[:16]
+
+
+def _stored_id(value):
+    """Normalize a stored baseline entry; None when it is not usable."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value if _LINK_ID.fullmatch(value) else link_id(value)
+
+
+def merge_link_ids(page_known, old_ids):
+    """Known ids on the current page first (all of them), then older ids no
+    longer on the page, deduplicated, at most MAX_STORED_LINK_IDS."""
+    out, seen = [], set()
+    for i in list(page_known) + list(old_ids):
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out[:max(MAX_STORED_LINK_IDS, len(list(page_known)))]
 
 
 class _Failure(Exception):
@@ -138,7 +150,7 @@ class FeedStore:
         if resolved_url:
             sets["resolvedUrl"] = resolved_url
         if links is not None:
-            sets["links"] = budget_links(links)
+            sets["links"] = list(links)
         if failed:
             sets["lastError"] = error
         else:
@@ -224,17 +236,22 @@ def process_feed(store, feed_hash, url, kind, now):
                     written += 1
         else:
             old = state.get("links")
-            stored = list(links)  # the first run records the page as the baseline
-            if old is not None:
-                known = set(old)
-                current = set(links)
+            ids = [link_id(l) for l in links]
+            # The first run records the page as the baseline.
+            stored = merge_link_ids(ids, [])
+            if isinstance(old, (list, tuple, set)):
+                old_ids = [i for i in (_stored_id(v) for v in old) if i]
+                known = set(old_ids)
                 # Only links delivered now become known; the rest of the page
                 # stays new and is delivered on later runs.
-                for link in [l for l in links if l not in known][:MAX_SITE_ENTRIES]:
+                fresh = [(l, i) for l, i in zip(links, ids) if i not in known][:MAX_SITE_ENTRIES]
+                for link, i in fresh:
                     if store.put_entry(feed_hash, link, "", None, now):
                         written += 1
-                    known.add(link)
-                stored = [l for l in links if l in known] + [l for l in old if l not in current]
+                    known.add(i)
+                on_page = set(ids)
+                stored = merge_link_ids([i for i in ids if i in known],
+                                        [i for i in old_ids if i not in on_page])
         store.update_state(feed_hash, now, updated=written > 0,
                            resolved_url=resolved, links=stored)
         return "fetched", written

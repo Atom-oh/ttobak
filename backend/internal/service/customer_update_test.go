@@ -40,6 +40,7 @@ type mockUpdateRepo struct {
 
 	subPuts      []model.UpdateFeedSub // PutSourceWithFeedSub registry rows
 	statusSubs   []model.UpdateFeedSub // SetSourceStatusWithFeedSub rows
+	statusLabels []*string             // labels passed with those rows
 	deletedFeeds []string              // DeleteSourceWithFeedSub feedHash
 	plainDeletes int
 	labelUpdates []string // UpdateSource labels
@@ -99,11 +100,12 @@ func (m *mockUpdateRepo) PutSourceWithFeedSub(_ context.Context, _ string, s *mo
 	m.subPuts = append(m.subPuts, *sub)
 	return nil
 }
-func (m *mockUpdateRepo) SetSourceStatusWithFeedSub(_ context.Context, _, _ string, sub *model.UpdateFeedSub) error {
+func (m *mockUpdateRepo) SetSourceStatusWithFeedSub(_ context.Context, _, _ string, sub *model.UpdateFeedSub, label *string) error {
 	if m.statusSubErr != nil {
 		return m.statusSubErr
 	}
 	m.statusSubs = append(m.statusSubs, *sub)
+	m.statusLabels = append(m.statusLabels, label)
 	return nil
 }
 func (m *mockUpdateRepo) DeleteSourceWithFeedSub(_ context.Context, _, _, feedHash string) error {
@@ -941,13 +943,14 @@ func TestCustomerUpdatePatchStatusUsesTransaction(t *testing.T) {
 		t.Fatal("status must not go through the plain update")
 	}
 
-	// Label and status in one PATCH: transaction first, then the label.
+	// Label and status in one PATCH commit in one transaction.
 	repo = newRepo()
 	if err := newUpdateSvc(repo, &mockMembers{}).UpdateSource(context.Background(), "u1", "src1", &model.PatchUpdateSourceRequest{Status: &disabled, Label: &label}); err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.statusSubs) != 1 || len(repo.labelUpdates) != 1 || repo.labelUpdates[0] != "New" || repo.statusUpdate != 0 {
-		t.Fatalf("subs=%d labels=%v statusUpdate=%d", len(repo.statusSubs), repo.labelUpdates, repo.statusUpdate)
+	if len(repo.statusSubs) != 1 || repo.statusLabels[0] == nil || *repo.statusLabels[0] != "New" ||
+		len(repo.labelUpdates) != 0 || repo.statusUpdate != 0 {
+		t.Fatalf("subs=%d txLabels=%v labels=%v statusUpdate=%d", len(repo.statusSubs), repo.statusLabels, repo.labelUpdates, repo.statusUpdate)
 	}
 
 	// A failed transaction applies no label.

@@ -32,7 +32,7 @@ type customerUpdateRepo interface {
 	UpdateSource(ctx context.Context, userID, sourceID string, label *string, status *string) error
 	DeleteSource(ctx context.Context, userID, sourceID string) error
 	PutSourceWithFeedSub(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) error
-	SetSourceStatusWithFeedSub(ctx context.Context, userID string, sourceID string, sub *model.UpdateFeedSub) error
+	SetSourceStatusWithFeedSub(ctx context.Context, userID string, sourceID string, sub *model.UpdateFeedSub, label *string) error
 	DeleteSourceWithFeedSub(ctx context.Context, userID, sourceID, feedHash string) error
 	HealSourceFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error
 	GetFeedState(ctx context.Context, feedHash string) (*model.UpdateFeedState, error)
@@ -270,17 +270,10 @@ func (s *CustomerUpdateService) UpdateSource(ctx context.Context, userID, source
 			hash, ok = feedHashOf(src)
 		}
 		if ok {
-			// The status change and the registry row commit together; the label
-			// follows, so a failed transaction never applies a label alone.
+			// Status, optional label and the registry row commit together.
 			sub := feedSubFor(src, userID, hash)
 			sub.Status = *req.Status
-			if err := s.repo.SetSourceStatusWithFeedSub(ctx, userID, sourceID, sub); err != nil {
-				return wrap(err)
-			}
-			if label == nil {
-				return nil
-			}
-			return wrap(s.repo.UpdateSource(ctx, userID, sourceID, label, nil))
+			return wrap(s.repo.SetSourceStatusWithFeedSub(ctx, userID, sourceID, sub, label))
 		}
 	}
 	return wrap(s.repo.UpdateSource(ctx, userID, sourceID, label, req.Status))
