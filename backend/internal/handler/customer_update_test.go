@@ -248,6 +248,9 @@ func (r *draftListRepo) PutSourceIfAbsent(context.Context, string, *model.Update
 func (r *draftListRepo) ListSources(context.Context, string, int) ([]model.UpdateSource, error) {
 	return nil, nil
 }
+func (r *draftListRepo) GetSource(context.Context, string, string) (*model.UpdateSource, error) {
+	return nil, nil
+}
 func (r *draftListRepo) UpdateSource(context.Context, string, string, *string, *string) error {
 	return nil
 }
@@ -255,7 +258,7 @@ func (r *draftListRepo) DeleteSource(context.Context, string, string) error { re
 func (r *draftListRepo) PutSourceWithFeedSub(context.Context, string, *model.UpdateSource, *model.UpdateFeedSub) error {
 	return nil
 }
-func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub) error {
+func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub, *string) error {
 	return nil
 }
 func (r *draftListRepo) DeleteSourceWithFeedSub(context.Context, string, string, string) error {

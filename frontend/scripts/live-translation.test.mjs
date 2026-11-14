@@ -362,6 +362,7 @@ test('streaming forwards segment language and ID and uses plural vocabularies wi
     },
     '@aws-sdk/credential-providers': { fromCognitoIdentityPool: () => ({}) },
     '@/lib/liveVocabulary': loadModule('lib/liveVocabulary.ts'),
+    '@/lib/interpretSpeakers': loadModule('lib/interpretSpeakers.ts'),
   });
   const session = new TranscribeStreamingSession({
     region: 'synthetic-region', identityPoolId: 'synthetic-identity', userPoolId: 'synthetic-user',

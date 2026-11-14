@@ -58,7 +58,7 @@ func TestPutSourceWithFeedSubItems(t *testing.T) {
 func TestSetSourceStatusWithFeedSubItemsUpsertsRegistry(t *testing.T) {
 	sub := feedTestSub()
 	sub.Status = model.UpdateSourceDisabled
-	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", sub, false)
+	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", sub, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestSetSourceStatusWithFeedSubItemsUpsertsRegistry(t *testing.T) {
 }
 
 func TestHealSourceFeedSubItemsKeepsStatusAndRequiresLegacyRow(t *testing.T) {
-	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", feedTestSub(), true)
+	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", feedTestSub(), nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,5 +214,28 @@ func TestFeedRowsRoundTripCamelCase(t *testing.T) {
 		if _, ok := av[k]; !ok {
 			t.Errorf("state lacks %s", k)
 		}
+	}
+}
+
+func TestSetSourceStatusWithFeedSubItemsFoldsLabel(t *testing.T) {
+	label := "New label"
+	items, err := setSourceStatusWithFeedSubItems("tbl", "u1", "s1", feedTestSub(), &label, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := items[0].Update
+	var sawLabelName, sawLabelValue bool
+	for _, n := range src.ExpressionAttributeNames {
+		if n == "label" {
+			sawLabelName = true
+		}
+	}
+	for _, v := range src.ExpressionAttributeValues {
+		if sv, ok := v.(*types.AttributeValueMemberS); ok && sv.Value == label {
+			sawLabelValue = true
+		}
+	}
+	if !sawLabelName || !sawLabelValue {
+		t.Fatalf("label not folded into source update: %v %v", src.ExpressionAttributeNames, src.ExpressionAttributeValues)
 	}
 }

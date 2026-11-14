@@ -9,6 +9,7 @@ import {
   startNativeListening, stopNativeListening, type NativeSelectedInput,
 } from '@/lib/tauri';
 import { InterpretController, type InterpretState } from '@/lib/interpretController';
+import { retryUntilLoaded } from '@/lib/interpretSession';
 
 export type { InterpretPhase } from '@/lib/interpretController';
 
@@ -18,9 +19,10 @@ interface UseInterpretSessionOptions {
   interimTranslation: boolean;
   /**
    * Every recognized segment, for the floating caption windows. The ID is
-   * unique within one interpretation run, across caption reconnects.
+   * unique within one interpretation run, across caption reconnects. A
+   * final segment also names its speaker when Transcribe told one apart.
    */
-  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
+  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string, speaker?: string) => void;
   /** Third recognition language chosen for the caption windows, read when a caption session starts. */
   getExtraLanguage?: () => ExtraLiveLanguage | undefined;
   /** The spoken languages to recognize (one or two); read when a caption session starts. */
@@ -95,11 +97,12 @@ export function useInterpretSession({
 
   useEffect(() => {
     if (!isTauri()) return;
-    let config: Promise<TranscribeStreamingConfig | null> | null = null;
+    // A failed load is retried by the next start instead of disabling the screen until a reload.
+    const loadConfig = retryUntilLoaded(loadTranscribeConfig);
     // Each caption session restarts its segment IDs; the prefix keeps them apart.
     let sttSession = 0;
     const controller: Controller = new InterpretController({
-      loadConfig: () => (config ??= loadTranscribeConfig().catch(() => null)),
+      loadConfig,
       startCapture: startNativeListening,
       stopCapture: stopNativeListening,
       createStt: (transcribeStreamingConfig, options, handlers) => {
@@ -121,8 +124,9 @@ export function useInterpretSession({
           transcribeStreamingConfig,
           extraLanguage: getExtraLanguageRef.current?.(),
           nativeLanguages: getSpeechLanguagesRef.current?.(),
-          onSegment: (id, text, isFinal, languageCode) =>
-            onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode),
+          speakerLabels: true,
+          onSegment: (id, text, isFinal, languageCode, speaker) =>
+            onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode, speaker),
         });
         return {
           start: () => manager.startNative('transcribe-streaming'),
@@ -135,6 +139,10 @@ export function useInterpretSession({
       subscribe: ({ onChunk, onStopped }) => {
         const unsubscribe = [onNativePcmChunk(onChunk), onNativeListeningStopped(onStopped)];
         return () => unsubscribe.forEach((stop) => stop());
+      },
+      onPageHide: (handler) => {
+        window.addEventListener('pagehide', handler);
+        return () => window.removeEventListener('pagehide', handler);
       },
       isCommandNotFound,
       versionSkewMessage: INTERPRET_VERSION_SKEW_MESSAGE,

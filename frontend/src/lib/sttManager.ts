@@ -40,8 +40,10 @@ export interface SttManagerConfig {
    * Fewer candidates recognize more accurately.
    */
   nativeLanguages?: LiveLanguage[];
+  /** Native captions only: label speakers; `onSegment` then reports one per final result. */
+  speakerLabels?: boolean;
   /** Per-segment hook fired for every transcript result (interim and final). */
-  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
+  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string, speaker?: string) => void;
   onProviderChange?: (provider: LiveSttProvider) => void;
   /**
    * Fired the moment a stall is FIRST detected, before the automatic
@@ -395,11 +397,11 @@ export class SttManager {
   private transcriptHandler() {
     const streamId = ++this.nextStreamId;
     let segmentIndex = 0;
-    return (text: string, isFinal: boolean, languageCode?: string, resultId?: string) => {
+    return (text: string, isFinal: boolean, languageCode?: string, resultId?: string, speaker?: string) => {
       const segmentId = `${streamId}:${resultId ?? segmentIndex}`;
       this.config.callbacks.onTranscript(text, isFinal);
       this.translation.update(segmentId, text, isFinal, languageCode);
-      this.config.onSegment?.(segmentId, text, isFinal, languageCode);
+      this.config.onSegment?.(segmentId, text, isFinal, languageCode, speaker);
       if (isFinal) segmentIndex++;
     };
   }
@@ -574,10 +576,11 @@ export class SttManager {
           : { multiLanguage: true, languageOptions: liveLanguageOptions(this.config.extraLanguage), preferredLanguage: 'ko-KR' }),
       vocabularies: this.vocabularyDisabled ? undefined : tsConfig.vocabularies,
       onVocabularyFallback: () => this.handleVocabularyFallback(session),
-      onTranscript: (text, isFinal, detectedLang, resultId) => {
+      showSpeakerLabel: this.config.speakerLabels,
+      onTranscript: (text, isFinal, detectedLang, resultId, speaker) => {
         if (this.stopped || this.transcribeSession !== session) return;
         // A single-language stream reports no language per result.
-        handleTranscript(text, isFinal, detectedLang ?? fixed, resultId);
+        handleTranscript(text, isFinal, detectedLang ?? fixed, resultId, speaker);
       },
       onError: (error) => {
         if (this.stopped || this.transcribeSession !== session) return;

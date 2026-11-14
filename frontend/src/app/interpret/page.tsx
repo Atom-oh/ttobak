@@ -7,10 +7,11 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
 import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
-import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
+import { useCaptionOverlay, type CaptionOverlayState } from '@/hooks/useCaptionOverlay';
 import { useInterpretSession } from '@/hooks/useInterpretSession';
 import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
 import { upsertCaptionLine, visibleCaptionLines } from '@/lib/interpretCaptions';
+import { rememberSpeaker, speakerColorIndex, speakerNumber } from '@/lib/interpretSpeakers';
 import { INTERPRET_MESSAGES, formatElapsed } from '@/lib/interpretSession';
 import {
   DEFAULT_SPEECH_LANGUAGES, MAX_SPEECH_LANGUAGES, SPEECH_LANGUAGES, SPEECH_LANGUAGE_KEY,
@@ -48,8 +49,20 @@ const CAPTION_LANGUAGE_LABELS: Record<CaptionLang, string> = { ko: '한국어', 
 
 type CaptionLines = Partial<Record<CaptionLang, TranslationEntry[]>>;
 
+// One text colour per speaker, readable on both themes; unlabelled lines keep the default.
+const SPEAKER_TEXT = [
+  'text-indigo-700 dark:text-indigo-300',
+  'text-emerald-700 dark:text-emerald-300',
+  'text-amber-700 dark:text-amber-300',
+  'text-rose-700 dark:text-rose-300',
+  'text-sky-700 dark:text-sky-300',
+  'text-fuchsia-700 dark:text-fuchsia-300',
+];
+
 /** One caption language's lines in large text; follows the newest line. */
-function CaptionColumn({ lang, lines, open }: { lang: CaptionLang; lines: TranslationEntry[]; open: boolean }) {
+function CaptionColumn({ lang, lines, open, speakers }: {
+  lang: CaptionLang; lines: TranslationEntry[]; open: boolean; speakers: Record<string, string>;
+}) {
   const endRef = useRef<HTMLDivElement>(null);
   const last = lines[lines.length - 1];
   useEffect(() => {
@@ -61,11 +74,22 @@ function CaptionColumn({ lang, lines, open }: { lang: CaptionLang; lines: Transl
         {CAPTION_LANGUAGE_LABELS[lang]}
       </h3>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-        {lines.map((line) => (
-          <p key={line.id} className={`text-2xl font-semibold leading-snug break-words ${line.isFinal ? 'text-slate-900 dark:text-text-main' : 'text-slate-500 dark:text-text-muted'}`}>
-            {line.translated}
-          </p>
-        ))}
+        {lines.map((line, at) => {
+          const speaker = speakers[line.id];
+          const color = speakerColorIndex(speaker);
+          const number = speakerNumber(speaker);
+          // The name tag appears where the speaker changes, so colour is not the only cue.
+          const changed = number !== null && speaker !== speakers[lines[at - 1]?.id];
+          const tone = !line.isFinal
+            ? 'text-slate-500 dark:text-text-muted'
+            : color === null ? 'text-slate-900 dark:text-text-main' : SPEAKER_TEXT[color];
+          return (
+            <p key={line.id} className={`text-2xl font-semibold leading-snug break-words ${tone}`}>
+              {changed && <span className="mb-0.5 block text-xs font-bold opacity-80">화자 {number + 1}</span>}
+              {line.translated}
+            </p>
+          );
+        })}
         {open && lines.length === 0 && (
           <p className="text-sm text-slate-500 dark:text-text-muted">통역을 시작하면 여기에 자막이 쌓여요.</p>
         )}
@@ -95,7 +119,10 @@ function Interpreter() {
   // segment handler; the ref breaks that cycle (as on the record page).
   const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
   const getExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
-  const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode) => {
+  // Who said each line, by segment ID; in memory only, like the captions.
+  const [speakers, setSpeakers] = useState<Record<string, string>>({});
+  const onSegment = useCallback((id: string, text: string, isFinal: boolean, languageCode?: string, speaker?: string) => {
+    if (isFinal && speaker) setSpeakers((previous) => rememberSpeaker(previous, id, speaker));
     captionLinkRef.current?.onSegment(id, text, isFinal, languageCode);
   }, []);
   // Spoken languages: one or two of four, kept as a per-viewer preference.
@@ -128,6 +155,7 @@ function Interpreter() {
   const start = () => {
     // A new run restarts the caption engines and their line order.
     setCaptionLines({});
+    setSpeakers({});
     void session.start(inputUid || undefined);
   };
   const languages = captionLanguages(captions.view?.settings.extraLanguage ?? null);
@@ -232,7 +260,7 @@ function Interpreter() {
       {/* The same languages as the caption windows, side by side in large text. */}
       <div className="grid min-h-0 flex-1 auto-rows-fr gap-4 md:grid-flow-col md:auto-cols-fr">
         {languages.map((lang) => (
-          <CaptionColumn key={lang} lang={lang} lines={visibleCaptionLines(captionLines[lang] ?? [])} open={captions.openLangs.includes(lang)} />
+          <CaptionColumn key={lang} lang={lang} lines={visibleCaptionLines(captionLines[lang] ?? [])} open={captions.openLangs.includes(lang)} speakers={speakers} />
         ))}
       </div>
     </div>

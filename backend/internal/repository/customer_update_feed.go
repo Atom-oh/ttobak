@@ -77,7 +77,7 @@ func putSourceWithFeedSubItems(tableName, userID string, s *model.UpdateSource, 
 // row, so a source created before the registry existed gains its row. An
 // existing fannedAt is kept. With heal, the status is left alone and the source
 // must still have sub.Status and no feedHash, so a concurrent change wins.
-func setSourceStatusWithFeedSubItems(tableName, userID, sourceID string, sub *model.UpdateFeedSub, heal bool) ([]types.TransactWriteItem, error) {
+func setSourceStatusWithFeedSubItems(tableName, userID, sourceID string, sub *model.UpdateFeedSub, label *string, heal bool) ([]types.TransactWriteItem, error) {
 	if err := validFeedSub(sub); err != nil {
 		return nil, err
 	}
@@ -88,6 +88,9 @@ func setSourceStatusWithFeedSubItems(tableName, userID, sourceID string, sub *mo
 			expression.AttributeNotExists(expression.Name("feedHash")))
 	} else {
 		srcUpdate = srcUpdate.Set(expression.Name("status"), expression.Value(sub.Status))
+		if label != nil {
+			srcUpdate = srcUpdate.Set(expression.Name("label"), expression.Value(*label))
+		}
 	}
 	srcExpr, err := expression.NewBuilder().WithUpdate(srcUpdate).WithCondition(srcCond).Build()
 	if err != nil {
@@ -178,10 +181,11 @@ func (r *CustomerUpdateRepository) PutSourceWithFeedSub(ctx context.Context, use
 }
 
 // SetSourceStatusWithFeedSub sets a source's status (it must exist) and upserts
-// its registry row; sub carries the new status. A missing source returns
+// its registry row; sub carries the new status. A non-nil label is set in the
+// same transaction. A missing source returns
 // ErrConditionFailed.
-func (r *CustomerUpdateRepository) SetSourceStatusWithFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error {
-	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub, false)
+func (r *CustomerUpdateRepository) SetSourceStatusWithFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub, label *string) error {
+	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub, label, false)
 	if err != nil {
 		return err
 	}
@@ -195,7 +199,7 @@ func (r *CustomerUpdateRepository) SetSourceStatusWithFeedSub(ctx context.Contex
 // and stores the feedHash, keeping the source's status (sub.Status). A source
 // that changed meanwhile returns ErrConditionFailed.
 func (r *CustomerUpdateRepository) HealSourceFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error {
-	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub, true)
+	items, err := setSourceStatusWithFeedSubItems(r.tableName, userID, sourceID, sub, nil, true)
 	if err != nil {
 		return err
 	}
