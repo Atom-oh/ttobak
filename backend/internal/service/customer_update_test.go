@@ -620,6 +620,34 @@ func TestCustomerUpdateListDrafts(t *testing.T) {
 		}
 	})
 
+	t.Run("all-accounts scan reports truncation", func(t *testing.T) {
+		cases := []struct {
+			rows    int
+			account string
+			want    bool
+		}{
+			{model.MaxUpdateDraftsScan + 1, "", true},
+			{model.MaxUpdateDraftsScan, "", false},
+			{model.MaxUpdateDraftsScan - 1, "", false},
+			{model.MaxUpdateDraftsScan + 1, "a1", false},
+		}
+		for _, c := range cases {
+			repo := newMockUpdateRepo()
+			repo.listPage = 300
+			for i := 0; i < c.rows; i++ {
+				repo.listed = append(repo.listed, model.UpdateDraft{AccountID: "a1", URLHash: fmt.Sprintf("h%04d", i), Status: model.UpdateDraftNew, CreatedAt: updateTestNow})
+			}
+			page, err := newUpdateSvc(repo, &mockMembers{}).ListDrafts(context.Background(), "u1", c.account, 10, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(page)
+			if page.Truncated != c.want || strings.Contains(string(b), `"truncated":true`) != c.want {
+				t.Fatalf("rows=%d account=%q truncated=%v json=%v", c.rows, c.account, page.Truncated, strings.Contains(string(b), "truncated"))
+			}
+		}
+	})
+
 	t.Run("nil slices are returned as empty arrays", func(t *testing.T) {
 		repo := newMockUpdateRepo()
 		repo.listed = []model.UpdateDraft{{AccountID: "a1", URLHash: "h1"}}
