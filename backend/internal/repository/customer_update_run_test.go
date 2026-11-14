@@ -608,7 +608,8 @@ func TestCustomerUpdateRunItemInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !hasValue(q.ExpressionAttributeValues, model.PrefixUpdateItem) || !hasValue(q.ExpressionAttributeValues, model.UpdateItemNew) ||
-		q.FilterExpression == nil || !strings.Contains(*q.KeyConditionExpression, "begins_with") || q.ExclusiveStartKey != nil || *q.Limit != 40 {
+		q.FilterExpression == nil || !strings.Contains(*q.KeyConditionExpression, "begins_with") || q.ExclusiveStartKey != nil || *q.Limit != 40 ||
+		q.ConsistentRead == nil || !*q.ConsistentRead {
 		t.Fatalf("query = %+v", q)
 	}
 	cur := model.UpdateItemSK(testHashA)
