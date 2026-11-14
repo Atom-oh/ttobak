@@ -33228,7 +33228,7 @@ async function preview(environment, store) {
   return {
     ok: true,
     previewId,
-    changes: plan.changes.map(({ alias: alias2, from, to }) => ({ alias: alias2, from, to })),
+    changes: plan.changes.map(({ userId, alias: alias2, from, to }) => ({ userId, alias: alias2, from, to })),
     unchanged: plan.unchanged,
     notFound: plan.notFound,
     skippedNonDirectory: plan.skippedNonDirectory,

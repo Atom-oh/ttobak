@@ -85,7 +85,7 @@ async function preview(environment: TeamSyncEnvironment, store: IntakeStore) {
   store.write(stored, PREVIEW_FILE);
   return {
     ok: true, previewId,
-    changes: plan.changes.map(({ alias, from, to }) => ({ alias, from, to })),
+    changes: plan.changes.map(({ userId, alias, from, to }) => ({ userId, alias, from, to })),
     unchanged: plan.unchanged, notFound: plan.notFound, skippedNonDirectory: plan.skippedNonDirectory,
     truncated: listed.truncated === true,
   };

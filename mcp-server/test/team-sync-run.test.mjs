@@ -82,9 +82,10 @@ test('preview stores changes and prints no directory extras', async t => {
   });
   assert.equal(await ctx.run(['run']), 0);
   const out = ctx.output();
-  assert.deepEqual(out, { ok: true, previewId: out.previewId, changes: [{ alias: 'alice', from: 'old', to: 'boss' }], unchanged: 1,
+  assert.deepEqual(out, { ok: true, previewId: out.previewId, changes: [{ userId: 'u1', alias: 'alice', from: 'old', to: 'boss' }], unchanged: 1,
     notFound: ['carol'], skippedNonDirectory: 2, truncated: true });
   assert.match(out.previewId, /^[a-f0-9]{32}$/);
+  assert.deepEqual(Object.keys(out.changes[0]).sort(), ['alias', 'from', 'to', 'userId']);
   for (const text of ctx.stdout) assert.doesNotMatch(text, /job_title|mobile|FAKE|@/);
   assert.deepEqual(ctx.lookups, ['alice', 'bob', 'carol']);
   assert.equal(ctx.closed(), 1);
