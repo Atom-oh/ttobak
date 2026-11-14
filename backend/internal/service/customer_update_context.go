@@ -145,8 +145,9 @@ type BuildStats struct {
 	// denied (AccessDenied: the normal "no object" answer without ListBucket).
 	ServicesUnavailable int
 	// Capped counts in-scope accounts left out because they already have
-	// their daily drafts.
-	Capped int
+	// their daily drafts; CappedAccounts holds their ids (not for logs).
+	Capped         int
+	CappedAccounts []string
 }
 
 // CustomerUpdateContext decides which accounts a user's run covers and builds
@@ -254,6 +255,7 @@ func (c *CustomerUpdateContext) BuildWithStats(ctx context.Context, userID strin
 				logPackFailure(account.AccountID, "scope", err)
 			} else if ok {
 				stats.Capped++
+				stats.CappedAccounts = append(stats.CappedAccounts, account.AccountID)
 			}
 			continue
 		}

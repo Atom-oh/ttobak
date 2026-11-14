@@ -139,6 +139,7 @@ type updateRunsRepo interface {
 	PutDecisionIfAbsent(ctx context.Context, userID string, d *model.UpdateDecision) error
 	GetDecision(ctx context.Context, userID, urlHash, accountID string) (*model.UpdateDecision, error)
 	ListDecidedAccounts(ctx context.Context, userID, urlHash string) ([]string, error)
+	ReplaceOpenDecision(ctx context.Context, userID string, d *model.UpdateDecision) error
 	SetDecisionOutcome(ctx context.Context, userID, urlHash, accountID, outcome, discardReason string) error
 	GetDraft(ctx context.Context, userID, accountID, urlHash string) (*model.UpdateDraft, error)
 	PutDraftIfAbsent(ctx context.Context, userID string, d *model.UpdateDraft) error

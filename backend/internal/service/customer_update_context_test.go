@@ -220,7 +220,7 @@ func TestUpdateContextCountsCappedInScopeAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := packIDs(packs); !reflect.DeepEqual(got, []string{"a2"}) || stats.Capped != 1 {
+	if got := packIDs(packs); !reflect.DeepEqual(got, []string{"a2"}) || stats.Capped != 1 || !reflect.DeepEqual(stats.CappedAccounts, []string{"a1"}) {
 		t.Fatalf("packs = %v capped = %d", got, stats.Capped)
 	}
 }

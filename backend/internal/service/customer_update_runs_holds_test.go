@@ -229,7 +229,8 @@ func TestUpdateRuns_CrashBetweenPutAndOutcome(t *testing.T) {
 		RunID: strings.Repeat("9", 32), Outcome: model.UpdateOutcomeDeferred, DiscardReason: "day_budget"}
 	f.repo.failOnce["SetDecisionOutcome"] = errors.New("crash")
 	f.tick(t)
-	if len(f.repo.drafts) != 1 || f.repo.decisions[key].Outcome != model.UpdateOutcomeDeferred {
+	// The open deferred row was replaced by this run's row, as a fresh one.
+	if len(f.repo.drafts) != 1 || f.repo.decisions[key].RunID != runsRunID {
 		t.Fatalf("crash tick: drafts=%d decision=%+v", len(f.repo.drafts), f.repo.decisions[key])
 	}
 	f.tick(t)
@@ -380,6 +381,147 @@ func TestUpdateRuns_FinalizeWithPreDecidedPairs(t *testing.T) {
 			}
 			if d := f.repo.decisions[a.URLHash+"#acct-1"]; d.Choice != model.UpdateChoiceNotNeeded || d.Outcome != "" {
 				t.Fatalf("pre-decided pair changed: %+v", d)
+			}
+		})
+	}
+}
+
+// ---- accounts left out of the payload ----
+
+func (f *runsFixture) lastPayload(t *testing.T) runPayload {
+	t.Helper()
+	var p runPayload
+	if err := json.Unmarshal(f.inv.calls[len(f.inv.calls)-1].payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func payloadAccounts(p runPayload) []string {
+	out := []string{}
+	for _, a := range p.Accounts {
+		out = append(out, a.AccountID)
+	}
+	return out
+}
+
+// finishRun installs DONE rows for the current lease: not_needed for each
+// leased account, the item decided.
+func (f *runsFixture) finishRun(h string) {
+	lease := f.repo.run["u1"]
+	rows := &model.RunRows{Done: true, Items: []model.RunItemRow{{URLHash: h, State: "decided"}}}
+	for _, a := range lease.AccountIDs {
+		f.ctx.scope[a] = true
+		rows.Decisions = append(rows.Decisions, model.RunDecisionRow{URLHash: h, AccountID: a, Choice: model.UpdateChoiceNotNeeded, Backend: "luna"})
+	}
+	f.repo.rows[lease.RunID] = rows
+}
+
+func TestUpdateRuns_CappedAccountSeesItemNextDay(t *testing.T) {
+	f := newRunsFixture()
+	a := runsItem(t, "a")
+	f.repo.items[a.URLHash] = a
+	f.ctx.packs = []AccountPack{runsPack("acct-a"), runsPack("acct-b")}
+	f.repo.days[runsDay] = &model.UpdateDay{Total: 3, PerAccount: map[string]int{"acct-a": 3}}
+	f.tick(t)
+	if got := payloadAccounts(f.lastPayload(t)); !reflect.DeepEqual(got, []string{"acct-b"}) || f.repo.run["u1"].Uncovered != model.UpdateRunUncoveredCapped {
+		t.Fatalf("accounts=%v lease=%+v", got, f.repo.run["u1"])
+	}
+	f.finishRun(a.URLHash)
+	f.tick(t)
+	if a.State != model.UpdateItemNew || a.Attempts != 0 || !a.HeldUntil.Equal(nextDayStart()) || len(f.inv.calls) != 1 {
+		t.Fatalf("item = %+v invokes=%d", a, len(f.inv.calls))
+	}
+	f.now = nextDayStart().Add(time.Minute)
+	f.tick(t)
+	// acct-b decided the only item, so it has nothing to do and is left out.
+	if p := f.lastPayload(t); len(f.inv.calls) != 2 || !reflect.DeepEqual(payloadAccounts(p), []string{"acct-a"}) ||
+		f.repo.run["u1"].Uncovered != "" {
+		t.Fatalf("day 2 payload = %+v lease=%+v", p, f.repo.run["u1"])
+	}
+}
+
+func TestUpdateRuns_StartHoldsDecidedItemForCappedAccount(t *testing.T) {
+	f := newRunsFixture()
+	x, y := runsItem(t, "x"), runsItem(t, "y")
+	f.repo.items[x.URLHash], f.repo.items[y.URLHash] = x, y
+	f.ctx.packs = []AccountPack{runsPack("acct-a"), runsPack("acct-b")}
+	f.repo.days[runsDay] = &model.UpdateDay{Total: 3, PerAccount: map[string]int{"acct-a": 3}}
+	f.storeDecision(x.URLHash, "acct-b", model.UpdateChoiceNotNeeded, "")
+	f.tick(t)
+	if !x.HeldUntil.Equal(nextDayStart()) || x.State != model.UpdateItemNew || !reflect.DeepEqual(f.repo.run["u1"].ItemHashes, []string{y.URLHash}) {
+		t.Fatalf("x=%+v lease=%+v", x, f.repo.run["u1"])
+	}
+}
+
+func TestUpdateRuns_TrimmedAccountsCoveredByLaterRun(t *testing.T) {
+	f := newRunsFixture()
+	a := runsItem(t, "a")
+	f.repo.items[a.URLHash] = a
+	f.ctx.packs = []AccountPack{runsPack("acct-a"), runsPack("acct-b"), runsPack("acct-c")}
+	size := func(n int) int {
+		b, _ := marshalRunPayload(runPayload{Version: 1, RunID: runsRunID, Accounts: f.ctx.packs[:n],
+			Items:   []runPayloadItem{{URLHash: a.URLHash, URL: a.URL, DecidedAccounts: []string{}}},
+			Budgets: runPayloadBudgets{MaxResearchPairs: 10, MaxDrafts: 20}})
+		return len(b)
+	}
+	f.runs.maxPayloadBytes = (size(2) + size(3)) / 2 // two packs fit
+	f.tick(t)
+	if got := payloadAccounts(f.lastPayload(t)); !reflect.DeepEqual(got, []string{"acct-a", "acct-b"}) || f.repo.run["u1"].Uncovered != model.UpdateRunUncoveredTrimmed {
+		t.Fatalf("run 1 accounts=%v lease=%+v", got, f.repo.run["u1"])
+	}
+	f.finishRun(a.URLHash)
+	f.tick(t) // finalize keeps the item new, then the next run covers acct-c
+	if got := payloadAccounts(f.lastPayload(t)); len(f.inv.calls) != 2 || !reflect.DeepEqual(got, []string{"acct-c"}) ||
+		a.State != model.UpdateItemNew || a.Attempts != 0 || f.repo.run["u1"].Uncovered != "" {
+		t.Fatalf("run 2 accounts=%v item=%+v", got, a)
+	}
+	f.finishRun(a.URLHash)
+	f.tick(t)
+	if a.State != model.UpdateItemDecided || len(f.inv.calls) != 2 {
+		t.Fatalf("item = %+v", a)
+	}
+}
+
+// ---- open stored decisions ----
+
+func TestUpdateRuns_OpenStoredDecisionTakesFinalAnswer(t *testing.T) {
+	older := strings.Repeat("9", 32)
+	cases := []struct {
+		name                     string
+		stored, choice, outcome  string
+		race                     bool
+		wantChoice, wantOutcome  string
+		wantDrafts, wantResearch int
+		wantIgnored              int
+	}{
+		{"deferred to discarded", model.UpdateOutcomeDeferred, model.UpdateChoiceNeeded, model.UpdateOutcomeDiscarded, false, model.UpdateChoiceNeeded, model.UpdateOutcomeDiscarded, 0, 1, 0},
+		{"deferred to not needed", model.UpdateOutcomeDeferred, model.UpdateChoiceNotNeeded, "", false, model.UpdateChoiceNotNeeded, "", 0, 0, 0},
+		{"deferred to drafted", model.UpdateOutcomeDeferred, model.UpdateChoiceNeeded, model.UpdateOutcomeDrafted, false, model.UpdateChoiceNeeded, model.UpdateOutcomeDrafted, 1, 1, 0},
+		{"final stays final", model.UpdateOutcomeDiscarded, model.UpdateChoiceNeeded, model.UpdateOutcomeDrafted, false, model.UpdateChoiceNeeded, model.UpdateOutcomeDiscarded, 0, 1, 1}, // DRAFT row ignored
+		{"another finalize won", model.UpdateOutcomeDeferred, model.UpdateChoiceNeeded, model.UpdateOutcomeDiscarded, true, model.UpdateChoiceNeeded, model.UpdateOutcomeDrafted, 0, 1, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRunsFixture()
+			a := runsItem(t, "a")
+			rows := f.doneRun([]*model.UpdateItem{a}, []string{"acct-1"})
+			key := a.URLHash + "#acct-1"
+			f.repo.decisions[key] = &model.UpdateDecision{URLHash: a.URLHash, AccountID: "acct-1", Choice: model.UpdateChoiceNeeded, RunID: older, Outcome: c.stored}
+			rows.Decisions[0].Choice, rows.Decisions[0].Outcome = c.choice, c.outcome
+			if c.outcome != model.UpdateOutcomeDrafted {
+				rows.Drafts = nil
+			}
+			if c.race {
+				f.repo.before["ReplaceDecision"] = func() { f.repo.decisions[key].Outcome = model.UpdateOutcomeDrafted }
+			}
+			stats := f.tick(t)
+			d := f.repo.decisions[key]
+			if d.Choice != c.wantChoice || d.Outcome != c.wantOutcome || len(f.repo.drafts) != c.wantDrafts || stats.Ignored != c.wantIgnored {
+				t.Fatalf("decision=%+v drafts=%d stats=%+v", d, len(f.repo.drafts), stats)
+			}
+			if day := f.repo.days[runsDay]; c.wantResearch > 0 && (day == nil || day.Researched != c.wantResearch) {
+				t.Fatalf("day = %+v", day)
 			}
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -252,6 +255,19 @@ func (m *mockRunsRepo) PutDecisionIfAbsent(_ context.Context, _ string, d *model
 	m.decisions[key] = &c
 	return nil
 }
+func (m *mockRunsRepo) ReplaceOpenDecision(_ context.Context, _ string, d *model.UpdateDecision) error {
+	if err := m.hook("ReplaceDecision"); err != nil {
+		return err
+	}
+	m.record("ReplaceDecision", d.URLHash, d.AccountID, d.Outcome, 0)
+	key := d.URLHash + "#" + d.AccountID
+	if s := m.decisions[key]; s == nil || finalDecision(s.Choice, s.Outcome) {
+		return repository.ErrConditionFailed
+	}
+	c := *d
+	m.decisions[key] = &c
+	return nil
+}
 func (m *mockRunsRepo) GetDecision(_ context.Context, _, urlHash, accountID string) (*model.UpdateDecision, error) {
 	if d := m.decisions[urlHash+"#"+accountID]; d != nil {
 		c := *d
@@ -331,6 +347,7 @@ func (m *mockRunsContext) BuildWithStats(_ context.Context, _ string, dayCounts 
 		left := customerUpdateDailyDrafts - dayCounts[p.AccountID]
 		if left <= 0 {
 			stats.Capped++
+			stats.CappedAccounts = append(stats.CappedAccounts, p.AccountID)
 			continue
 		}
 		p.DraftsRemaining = left
@@ -585,6 +602,11 @@ func TestUpdateRuns_FreshRunIDPerAttempt(t *testing.T) {
 	}
 }
 
+func httpStatusErr(code int) error {
+	return &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: code}}, Err: errors.New("synthetic")}}
+}
+
 func TestUpdateRuns_InvokeFailures(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -602,6 +624,9 @@ func TestUpdateRuns_InvokeFailures(t *testing.T) {
 		{"api access denied", &smithy.GenericAPIError{Code: "AccessDeniedException"}, false, 0},
 		{"api throttling", fmt.Errorf("invoke: %w", &smithy.GenericAPIError{Code: "ThrottlingException"}), false, 0},
 		{"api validation", &smithy.GenericAPIError{Code: "ValidationException"}, false, 0},
+		{"api server fault", &smithy.GenericAPIError{Code: "InternalServerException", Fault: smithy.FaultServer}, true, 0},
+		{"http 503", httpStatusErr(503), true, 0},
+		{"http 403", httpStatusErr(403), false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

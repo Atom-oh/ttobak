@@ -688,6 +688,27 @@ func TestCustomerUpdateRunItemInputs(t *testing.T) {
 	}
 }
 
+func TestCustomerUpdateReplaceOpenDecisionInput(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	d := &model.UpdateDecision{URLHash: testHashA, AccountID: testAccount, Choice: model.UpdateChoiceNotNeeded, Reason: "secret", RunID: testRunID}
+	in, err := decisionReplaceOpenInput(context.Background(), runTestSealer{}, "tbl", "u1", d, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := condString(in.ConditionExpression)
+	if !strings.Contains(c, "attribute_exists") || !strings.Contains(c, "NOT") || strings.Contains(c, "attribute_not_exists") ||
+		!hasValue(in.ExpressionAttributeValues, "needed") || !hasValue(in.ExpressionAttributeValues, "drafted") ||
+		!hasValue(in.ExpressionAttributeValues, "discarded") || !hasValue(in.ExpressionAttributeValues, "1800000000") {
+		t.Fatalf("condition = %s %v", c, in.ExpressionAttributeValues)
+	}
+	if got, err := decisionFromItem(context.Background(), runTestSealer{}, "u1", in.Item); err != nil || got.Reason != "secret" || got.Choice != d.Choice {
+		t.Fatalf("row = %+v %v", got, err)
+	}
+	if _, err := decisionReplaceOpenInput(context.Background(), nil, "tbl", "u1", d, now); !errors.Is(err, ErrUpdateDraftEncryptionUnavailable) {
+		t.Fatalf("no sealer: %v", err)
+	}
+}
+
 func TestCustomerUpdateRunDecisionRoundTrip(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	d := &model.UpdateDecision{
