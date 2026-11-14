@@ -36,7 +36,7 @@ manifests.
 - Customer update agent runtime: an AgentCore container that reads followed links, decides per customer whether an update is worth a draft, and writes sealed run results; not invoked by anything yet (#972, #973, #974, #975).
 - Billing ingest writes a per-account `services_in_use` object (service names only, no amounts) and the backend gains Go draft checks that match the agent's shared contract; nothing reads either yet (#976).
 - Customer update run storage: per-user run lease, daily draft and research counters, pending marks with a rotation cursor, item holds and sealed decisions; no caller yet (#977).
-- Customer update context packs: per-account packs of account name, AWS service names, opportunity names and stages, public news, internal insights and readable meeting-note excerpts, built only for accounts the user can access; no caller yet (#978).
+- Customer update context packs: per-account packs of account name, AWS service names, opportunity names and stages, public news, internal insights and readable meeting-note excerpts, built only for accounts the user can access; no caller yet (#979).
 
 ### Changed
 
