@@ -5,6 +5,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
+import https from 'node:https';
+import { syncBuiltinESMExports } from 'node:module';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import { randomUUID } from 'node:crypto';
 import { guardUploadPath, resolveFileMeta, mergeProjectUpdate, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES } from '../dist/api.js';
 
 test('resolveFileMeta: extensionless name with explicit fileType survives intact', () => {
@@ -165,4 +170,26 @@ test('syncTeams refuses a body above 64 KiB before sending', async () => {
   const api = new TtobakApi(auth, 'https://example.invalid');
   const items = [{ userId: 'u'.repeat(70_000), team: 'a', expected: '' }];
   await assert.rejects(() => api.syncTeams({ items }), /64 KiB/);
+});
+
+test('syncTeams parses a response where all 200 items are rejected', async t => {
+  const original = https.request;
+  const rejected = Array.from({ length: 200 }, () => ({ userId: randomUUID(), code: 'NOT_DIRECTORY_USER' }));
+  const payload = JSON.stringify({ updated: [], unchanged: 0, conflicts: [], rejected });
+  https.request = (_options, respond) => {
+    const req = new EventEmitter(); req.destroy = () => {}; req.write = () => {};
+    req.end = () => queueMicrotask(() => {
+      const res = new Readable({ read() {} }); res.statusCode = 200; res.headers = {};
+      respond(res);
+      res.push(Buffer.from(payload)); res.push(null);
+    });
+    return req;
+  };
+  syncBuiltinESMExports();
+  t.after(() => { https.request = original; syncBuiltinESMExports(); });
+  const { TtobakApi } = await import('../dist/api.js');
+  const api = new TtobakApi({ getIdToken: async () => 'token' }, 'https://example.invalid');
+  const items = rejected.map(r => ({ userId: r.userId, team: 'a', expected: '' }));
+  const result = await api.syncTeams({ items });
+  assert.deepEqual(result.rejected, rejected);
 });

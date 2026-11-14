@@ -315,6 +315,7 @@ export interface TeamSyncResult {
 }
 const MAX_TEAM_SYNC_ITEMS = 200;
 const MAX_TEAM_SYNC_BODY_BYTES = 64 * 1024;
+const MAX_TEAM_SYNC_RESPONSE_BYTES = 64 * 1024;
 const MAX_ADMIN_USERS_BYTES = 2 * 1024 * 1024;
 
 export class TtobakApi {
@@ -345,7 +346,7 @@ export class TtobakApi {
   async syncTeams(body: TeamSyncBody): Promise<TeamSyncResult> {
     if (body.items.length > MAX_TEAM_SYNC_ITEMS) throw new Error(`team sync is limited to ${MAX_TEAM_SYNC_ITEMS} items`);
     if (Buffer.byteLength(JSON.stringify(body)) > MAX_TEAM_SYNC_BODY_BYTES) throw new Error('team sync body exceeds 64 KiB');
-    return await this.request('POST', '/api/settings/users/team-sync', body, MAX_PERFORMANCE_API_BYTES, false, true) as TeamSyncResult;
+    return await this.request('POST', '/api/settings/users/team-sync', body, MAX_TEAM_SYNC_RESPONSE_BYTES, false, true) as TeamSyncResult;
   }
 
   /** The owner's per-source performance sync revisions. */

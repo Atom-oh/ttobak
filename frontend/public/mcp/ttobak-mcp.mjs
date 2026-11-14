@@ -23963,7 +23963,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, MAX_TEAM_SYNC_ITEMS, MAX_TEAM_SYNC_BODY_BYTES, MAX_ADMIN_USERS_BYTES, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, MAX_TEAM_SYNC_ITEMS, MAX_TEAM_SYNC_BODY_BYTES, MAX_TEAM_SYNC_RESPONSE_BYTES, MAX_ADMIN_USERS_BYTES, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -24023,6 +24023,7 @@ var init_api2 = __esm({
     };
     MAX_TEAM_SYNC_ITEMS = 200;
     MAX_TEAM_SYNC_BODY_BYTES = 64 * 1024;
+    MAX_TEAM_SYNC_RESPONSE_BYTES = 64 * 1024;
     MAX_ADMIN_USERS_BYTES = 2 * 1024 * 1024;
     TtobakApi = class {
       constructor(auth, baseUrl, options2 = {}) {
@@ -24062,7 +24063,7 @@ var init_api2 = __esm({
       async syncTeams(body) {
         if (body.items.length > MAX_TEAM_SYNC_ITEMS) throw new Error(`team sync is limited to ${MAX_TEAM_SYNC_ITEMS} items`);
         if (Buffer.byteLength(JSON.stringify(body)) > MAX_TEAM_SYNC_BODY_BYTES) throw new Error("team sync body exceeds 64 KiB");
-        return await this.request("POST", "/api/settings/users/team-sync", body, MAX_PERFORMANCE_API_BYTES, false, true);
+        return await this.request("POST", "/api/settings/users/team-sync", body, MAX_TEAM_SYNC_RESPONSE_BYTES, false, true);
       }
       /** The owner's per-source performance sync revisions. */
       async performanceSources() {
