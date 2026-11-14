@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "note": "Envelope seal vectors shared by backend/python/customer-update-agent/sealing.py and backend/internal/sealing. Go opens each with a fake KMS whose Decrypt returns dataKeyHex for wrappedKeyHex under the binding as encryption context. The AAD is Go json.Marshal of the [key, value] pairs sorted by key.",
+  "vectors": [
+    {
+      "name": "ascii",
+      "dataKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "wrappedKeyHex": "0102030405060708090a0b0c0d0e0f10111213",
+      "nonceHex": "a0a1a2a3a4a5a6a7a8a9aaab",
+      "binding": {
+        "purpose": "ttobak-customer-update-run",
+        "runId": "0123456789abcdef0123456789abcdef",
+        "sk": "DRAFT#acct-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "plaintextUtf8": "{\"body\":\"plain ascii draft\",\"links\":[\"https://example.com/a\"]}",
+      "sealedBase64": "AQATAQIDBAUGBwgJCgsMDQ4PEBESE6ChoqOkpaanqKmqq506HkIhsiCFQBXrsm4U4L8DzzB5stMwDfp6BKpdxxxvuQVlxfQAO0kr7HfyJlXmgSZ2NiQH/nkRLHFqfPkNpXYY1qxjEosoOdu8Pkom2A=="
+    },
+    {
+      "name": "korean_html_chars",
+      "dataKeyHex": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "wrappedKeyHex": "ffffffc8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "nonceHex": "0c0b0a090807060504030201",
+      "binding": {
+        "purpose": "ttobak-customer-update-run",
+        "runId": "fedcba9876543210fedcba9876543210",
+        "sk": "DEC#고객<A&B>",
+        "가나다": "값 <&> 한글"
+      },
+      "plaintextUtf8": "{\"reason\":\"고객사 <하나> & 파트너 > 기대\",\"gateInput\":\"Bedrock 도입 & 확장\"}",
+      "sealedBase64": "AQAr////yMnKy8zNzs/Q0dLT1NXW19jZ2tvc3d7f4OHi4+Tl5ufo6err7O3u7wwLCgkIBwYFBAMCAWd24vtOCdrhW3SC1fkhrgqbxpZT2Ozzc55TNmgftLicjdphywZZdnfDnzIbfhCB2CVwrn1Tkjah/bGCdpHJu8LdyCvoBHfQ9lUVPbH/Kcmq3vP3c7g16zg5qF02lhFPqNJHmYczuOr7PJw="
+    },
+    {
+      "name": "control_and_separators",
+      "dataKeyHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "wrappedKeyHex": "77726170706564",
+      "nonceHex": "000000000000000000000000",
+      "binding": {
+        "purpose": "ttobak-customer-update-run",
+        "Z": "tab\tnl\nbs\bff\fcr\r\u0001\u001f quote\" back\\ del",
+        "sep": "line para end"
+      },
+      "plaintextUtf8": "본문\n <script>&amp;</script>",
+      "sealedBase64": "AQAHd3JhcHBlZAAAAAAAAAAAAAAAAC3KY/IR7R8Hn4LYfxRCw4q/Sa9nUsS3H0IZJcfut4NpFuTcQugvURr2yfgzq/H4/w=="
+    }
+  ]
+}
