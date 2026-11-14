@@ -1197,7 +1197,7 @@ pub(crate) async fn execute(
     let on_line = move |line: String| {
         let state = line_app.state::<IntakeState>();
         if progress && state.run_gen.load(Ordering::SeqCst) == gen {
-            let _ = line_app.emit(PROGRESS_EVENT, json!({ "line": line }));
+            let _ = line_app.emit_to("main", PROGRESS_EVENT, json!({ "line": line }));
             state.progress.lock().push(line);
         }
     };
@@ -1249,7 +1249,7 @@ fn start_job(
         });
         *state.last_result.lock() = Some(payload.clone());
         state.end();
-        let _ = app.emit(FINISHED_EVENT, payload);
+        let _ = app.emit_to("main", FINISHED_EVENT, payload);
         if state.retry_after_run.swap(false, Ordering::SeqCst) {
             state.poke(true);
         }
