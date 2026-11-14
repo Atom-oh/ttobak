@@ -40,12 +40,12 @@ recording. See [ADR-024](../docs/decisions/ADR-024-mac-native-capture-and-upload
 
 When Zoom, Teams, Webex, Slack, FaceTime, Chime or Discord starts using the
 microphone, or a browser does with a Google Meet, Teams or Zoom web tab open, the
-app posts a notification and the window shows a prompt to start recording. It
+app shows a floating prompt to start recording. It
 never records without confirmation. When the meeting ends, a running recording
 stops and uploads after a 30-second countdown unless you keep recording.
 Listen-only participation (app audio output) also counts. In System Audio mode the
 recording microphone defaults to the one the meeting app uses; pick another in
-the record screen if needed. Switching microphones mid-recording is not supported yet.
+the record screen if needed, also during a recording.
 Browser detection asks for Automation permission per browser; its script keeps
 only meeting URLs and discards the rest; Firefox is not detected. Turn it off in Settings. Reset browser
 permission with `tccutil reset AppleEvents click.atomai.ttobak.mac`. See

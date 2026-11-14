@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { isTauri } from '@/lib/tauri';
 
 type Variant = 'sidebar' | 'header' | 'sheet' | 'profile';
 
@@ -72,7 +73,9 @@ function UserGuideDialog({ onClose }: { onClose: () => void }) {
         <iframe
           ref={frameRef}
           title="TTOBAK 사용 설명서"
-          src="/user-guide/index.html"
+          // The dialog renders only after a click, so this client-only check cannot
+          // break hydration. The Mac app opens the guide on its own tab.
+          src={isTauri() ? '/user-guide/index.html#mac' : '/user-guide/index.html'}
           sandbox="allow-scripts allow-modals"
           referrerPolicy="no-referrer"
           className="w-full min-h-0 flex-1 border-0 bg-white"
