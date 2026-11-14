@@ -836,3 +836,33 @@ func TestTeamSync_RequestLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestTeamSync_RejectsNonSubUserIDsWithoutCognitoCalls(t *testing.T) {
+	svc, cognito := teamSyncService(map[string]*cognitoidp.AdminGetUserOutput{"u1": teamSyncUser("a@amazon.com", true, "")})
+	getCalls := 0
+	inner := cognito.adminGetUserFn
+	cognito.adminGetUserFn = func(ctx context.Context, in *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+		getCalls++
+		if strings.Contains(aws.ToString(in.Username), "@") || strings.TrimSpace(aws.ToString(in.Username)) == "" {
+			t.Errorf("Cognito called with non-sub username %q", aws.ToString(in.Username))
+		}
+		return inner(ctx, in)
+	}
+	resp, err := svc.SyncTeams(context.Background(), "admin", []model.TeamSyncItem{
+		{UserID: "x@amazon.com", Team: "t"}, {UserID: "  ", Team: "t"}, {UserID: "u1", Team: "t"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Rejected) != 2 || resp.Rejected[0].Code != "NOT_FOUND" || resp.Rejected[1].Code != "NOT_FOUND" {
+		t.Fatalf("rejected = %+v", resp.Rejected)
+	}
+	for _, r := range resp.Rejected {
+		if strings.Contains(r.UserID, "@") {
+			t.Fatalf("email echoed in rejection: %+v", r)
+		}
+	}
+	if getCalls != 1 || len(cognito.updateAttrCalls) != 1 || len(resp.Updated) != 1 || resp.Updated[0] != "u1" {
+		t.Fatalf("getCalls=%d updates=%d updated=%v", getCalls, len(cognito.updateAttrCalls), resp.Updated)
+	}
+}

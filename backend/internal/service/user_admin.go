@@ -569,6 +569,12 @@ func (s *UserAdminService) SyncTeams(ctx context.Context, actorUserID string, it
 	}
 
 	for _, it := range items {
+		// Cognito resolves an email alias as a Username; only subs are valid
+		// targets, and an email must never reach Cognito or the logs.
+		if strings.TrimSpace(it.UserID) == "" || strings.Contains(it.UserID, "@") {
+			resp.Rejected = append(resp.Rejected, model.TeamSyncRejection{UserID: "", Code: "NOT_FOUND"})
+			continue
+		}
 		current, err := s.cognito.AdminGetUser(ctx, &cognitoidp.AdminGetUserInput{
 			UserPoolId: aws.String(s.poolID),
 			Username:   aws.String(it.UserID),
