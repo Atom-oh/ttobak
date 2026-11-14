@@ -46,6 +46,21 @@ func assertAbsentOrExpired(t *testing.T, in *dynamodb.PutItemInput, now time.Tim
 	}
 }
 
+func TestItemPutInputOmitsZeroHold(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	in, err := itemPutInput("tbl", "u1", &model.UpdateItem{URLHash: "h1"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := in.Item["heldUntil"]; ok {
+		t.Fatalf("zero heldUntil written: %v", in.Item["heldUntil"])
+	}
+	held, err := itemPutInput("tbl", "u1", &model.UpdateItem{URLHash: "h1", HeldUntil: now}, now)
+	if err != nil || held.Item["heldUntil"] == nil {
+		t.Fatalf("set heldUntil dropped: %v", err)
+	}
+}
+
 func TestCustomerUpdateCreatesTreatExpiredRowsAsAbsent(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	item, err := itemPutInput("tbl", "u1", &model.UpdateItem{URLHash: "h1", SourceIDs: []string{"s1"}}, now)

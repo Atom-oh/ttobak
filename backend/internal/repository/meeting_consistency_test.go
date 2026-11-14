@@ -34,6 +34,11 @@ func TestMeetingReadsUseStrongCanonicalNotesRevision(t *testing.T) {
 							t.Fatalf("snapshot did not read the exact strong primary key: %+v", input)
 						}
 						body = `{"Item":{"meetingId":{"S":"m"},"userId":{"S":"owner"},"notes":{"S":"acknowledged"},"notesRevision":{"S":"current-version"}}}`
+					} else if req.Header.Get("X-Amz-Target") == "DynamoDB_20120810.Query" {
+						var input struct{ IndexName, Select string }
+						if err := json.NewDecoder(req.Body).Decode(&input); err != nil || input.IndexName != "GSI3" || input.Select != "SPECIFIC_ATTRIBUTES" {
+							t.Fatalf("GSI3 lookup must select specific attributes: %+v %v", input, err)
+						}
 					} else if req.Header.Get("X-Amz-Target") != "DynamoDB_20120810.Query" {
 						t.Fatalf("unexpected operation %s", req.Header.Get("X-Amz-Target"))
 					}

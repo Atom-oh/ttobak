@@ -23,6 +23,7 @@ func TestNavigationSDKReconstructsScopedKeysAndKeepsQueriesBounded(t *testing.T)
 					calls++
 					var input struct {
 						IndexName                string
+						Select                   string
 						ConsistentRead           bool
 						Limit                    int
 						ExclusiveStartKey        map[string]map[string]string
@@ -30,6 +31,9 @@ func TestNavigationSDKReconstructsScopedKeysAndKeepsQueriesBounded(t *testing.T)
 					}
 					if json.NewDecoder(req.Body).Decode(&input) != nil {
 						t.Fatal("invalid wire request")
+					}
+					if input.Select != "SPECIFIC_ATTRIBUTES" {
+						t.Fatalf("Select = %q, want SPECIFIC_ATTRIBUTES", input.Select)
 					}
 					indexed := kind == "accounts" || kind == "direct"
 					if input.Limit != 2 || indexed != (input.IndexName == "GSI1") || indexed == input.ConsistentRead {

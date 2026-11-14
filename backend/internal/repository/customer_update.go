@@ -281,6 +281,10 @@ func itemPutInput(tableName, userID string, it *model.UpdateItem, now time.Time)
 	} else {
 		delete(av, "sourceIds")
 	}
+	if row.HeldUntil.IsZero() {
+		// omitempty does not drop a zero time.Time; a held-until of year 1 is never written.
+		delete(av, "heldUntil")
+	}
 	in, err := putIfAbsentOrExpired(tableName, av, now)
 	if err != nil {
 		return nil, fmt.Errorf("build create-item condition: %w", err)
@@ -369,17 +373,11 @@ func (r *CustomerUpdateRepository) EnsureURLPending(ctx context.Context, urlHash
 	return nil
 }
 
-// MarkPending records that the user has pending update work.
+// MarkPending records that the user has pending update work. Each mark
+// rewrites updatedAt with a nanosecond timestamp, which ClearPending compares
+// so a mark written during a tick is not lost.
 func (r *CustomerUpdateRepository) MarkPending(ctx context.Context, userID string) error {
-	_, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item: map[string]types.AttributeValue{
-			"PK":         &types.AttributeValueMemberS{Value: model.PKUpdatePending},
-			"SK":         &types.AttributeValueMemberS{Value: userID},
-			"entityType": &types.AttributeValueMemberS{Value: "UPDATE_PENDING"},
-			"updatedAt":  &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
-		},
-	})
+	_, err := r.client.PutItem(ctx, pendingMarkInput(r.tableName, userID, r.clock()))
 	if err != nil {
 		return fmt.Errorf("failed to mark update pending: %w", err)
 	}

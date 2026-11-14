@@ -35,6 +35,7 @@ manifests.
   subscriber's inbox (#970).
 - Customer update agent runtime: an AgentCore container that reads followed links, decides per customer whether an update is worth a draft, and writes sealed run results; not invoked by anything yet (#972, #973, #974, #975).
 - Billing ingest writes a per-account `services_in_use` object (service names only, no amounts) and the backend gains Go draft checks that match the agent's shared contract; nothing reads either yet (#976).
+- Customer update run storage: per-user run lease, daily draft and research counters, pending marks with a rotation cursor, item holds and sealed decisions; no caller yet (#977).
 
 ### Changed
 
