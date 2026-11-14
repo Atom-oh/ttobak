@@ -38,6 +38,7 @@ manifests.
 - Billing ingest writes a per-account `services_in_use` object (service names only, no amounts) and the backend gains Go draft checks that match the agent's shared contract; nothing reads either yet (#976).
 - Customer update run storage: per-user run lease, daily draft and research counters, pending marks with a rotation cursor, item holds and sealed decisions; no caller yet (#977).
 - Customer update context packs: per-account packs of account name, AWS service names, opportunity names and stages, public news, internal insights and readable meeting-note excerpts, built only for accounts the user can access; no caller yet (#979).
+- Customer update run phases in the worker: start and finalize agent runs with bounded retries, item holds, a 3-day backlog window and per-user daily draft and research caps; inactive until the runtime ARN is configured (#980).
 
 ### Changed
 

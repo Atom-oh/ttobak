@@ -576,6 +576,11 @@ func validateRun(userID string, run *model.UpdateRun) error {
 			return invalidRun("accountId")
 		}
 	}
+	switch run.Uncovered {
+	case "", model.UpdateRunUncoveredCapped, model.UpdateRunUncoveredTrimmed:
+	default:
+		return invalidRun("uncovered")
+	}
 	return nil
 }
 
@@ -1225,6 +1230,57 @@ func validOutcome(o string) bool {
 // decisionPutInput builds the sealed create-if-absent-or-expired write. The
 // caller's decision is not mutated.
 func decisionPutInput(ctx context.Context, s sealing.Sealer, tableName, userID string, d *model.UpdateDecision, now time.Time) (*dynamodb.PutItemInput, error) {
+	av, err := decisionItem(ctx, s, userID, d, now)
+	if err != nil {
+		return nil, err
+	}
+	in, err := putIfAbsentOrExpired(tableName, av, now)
+	if err != nil {
+		return nil, fmt.Errorf("build create-decision condition: %w", err)
+	}
+	return in, nil
+}
+
+// decisionReplaceOpenInput builds the same sealed row as decisionPutInput,
+// written only over a live open decision: needed with an outcome other than
+// drafted or discarded (deferred, or none).
+func decisionReplaceOpenInput(ctx context.Context, s sealing.Sealer, tableName, userID string, d *model.UpdateDecision, now time.Time) (*dynamodb.PutItemInput, error) {
+	av, err := decisionItem(ctx, s, userID, d, now)
+	if err != nil {
+		return nil, err
+	}
+	cond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name(customerUpdateTTLAttribute).GreaterThan(expression.Value(now.Unix()))).
+		And(expression.Name("choice").Equal(expression.Value(model.UpdateChoiceNeeded))).
+		And(expression.Not(expression.Name("outcome").In(expression.Value(model.UpdateOutcomeDrafted), expression.Value(model.UpdateOutcomeDiscarded))))).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build replace-decision condition: %w", err)
+	}
+	return &dynamodb.PutItemInput{
+		TableName: aws.String(tableName), Item: av, ConditionExpression: cond.Condition(),
+		ExpressionAttributeNames: cond.Names(), ExpressionAttributeValues: cond.Values(),
+	}, nil
+}
+
+// ReplaceOpenDecision overwrites a live open (needed, not drafted or
+// discarded) decision with d, sealed as a fresh row; any other stored state
+// returns ErrConditionFailed.
+func (r *CustomerUpdateRepository) ReplaceOpenDecision(ctx context.Context, userID string, d *model.UpdateDecision) error {
+	in, err := decisionReplaceOpenInput(ctx, r.sealer, r.tableName, userID, d, r.clock())
+	if err != nil {
+		return err
+	}
+	if _, err := r.client.PutItem(ctx, in); err != nil {
+		if isConditionFailed(err) {
+			return fmt.Errorf("%w: update decision is not open", ErrConditionFailed)
+		}
+		return fmt.Errorf("failed to replace update decision: %w", err)
+	}
+	return nil
+}
+
+// decisionItem validates and seals one decision row.
+func decisionItem(ctx context.Context, s sealing.Sealer, userID string, d *model.UpdateDecision, now time.Time) (map[string]types.AttributeValue, error) {
 	if userID == "" || d == nil {
 		return nil, invalidRun("decision")
 	}
@@ -1264,11 +1320,7 @@ func decisionPutInput(ctx context.Context, s sealing.Sealer, tableName, userID s
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal update decision: %w", err)
 	}
-	in, err := putIfAbsentOrExpired(tableName, av, now)
-	if err != nil {
-		return nil, fmt.Errorf("build create-decision condition: %w", err)
-	}
-	return in, nil
+	return av, nil
 }
 
 // PutDecisionIfAbsent creates a decision; a live decision for the same (URL,
@@ -1377,4 +1429,69 @@ func (r *CustomerUpdateRepository) SetDecisionOutcome(ctx context.Context, userI
 		return fmt.Errorf("failed to set update decision outcome: %w", err)
 	}
 	return nil
+}
+
+// decidedAccountsQueryInput reads one item's decision keys (SK
+// CUDEC#{urlHash}#{accountId}) that hold a final, live decision: not_needed,
+// or needed with outcome drafted or discarded, and not past the TTL (an
+// expired row is overwritable, so it does not count). The filter reads the
+// plaintext codes on the server; only the keys are returned.
+func decidedAccountsQueryInput(tableName, userID, urlHash string, now time.Time) (*dynamodb.QueryInput, error) {
+	if userID == "" || !urlHashPattern.MatchString(urlHash) {
+		return nil, invalidRun("decision key")
+	}
+	final := expression.Name("choice").Equal(expression.Value(model.UpdateChoiceNotNeeded)).
+		Or(expression.Name("outcome").In(expression.Value(model.UpdateOutcomeDrafted), expression.Value(model.UpdateOutcomeDiscarded)))
+	live := expression.AttributeNotExists(expression.Name(customerUpdateTTLAttribute)).
+		Or(expression.Name(customerUpdateTTLAttribute).GreaterThan(expression.Value(now.Unix())))
+	expr, err := expression.NewBuilder().
+		WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+			And(expression.Key("SK").BeginsWith(model.UpdateDecisionSK(urlHash, "")))).
+		WithFilter(final.And(live)).
+		WithProjection(expression.NamesList(expression.Name("PK"), expression.Name("SK"))).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build decided-accounts expression: %w", err)
+	}
+	return &dynamodb.QueryInput{
+		TableName: aws.String(tableName), ConsistentRead: aws.Bool(true),
+		KeyConditionExpression: expr.KeyCondition(), FilterExpression: expr.Filter(), ProjectionExpression: expr.Projection(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	}, nil
+}
+
+// decidedAccountIDs maps one item's decision keys to account ids, skipping a
+// key that is not CUDEC#{urlHash}#{valid account id}.
+func decidedAccountIDs(items []map[string]types.AttributeValue, urlHash string) []string {
+	prefix := model.UpdateDecisionSK(urlHash, "")
+	out := []string{}
+	for _, item := range items {
+		sk, _ := stringAttr(item, "SK")
+		if id, ok := strings.CutPrefix(sk, prefix); ok && accountIDPattern.MatchString(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ListDecidedAccounts returns the account ids whose pair with the item has a
+// final, live stored decision (decidedAccountsQueryInput); a deferred
+// decision does not count. Nothing is unsealed.
+func (r *CustomerUpdateRepository) ListDecidedAccounts(ctx context.Context, userID, urlHash string) ([]string, error) {
+	in, err := decidedAccountsQueryInput(r.tableName, userID, urlHash, r.clock())
+	if err != nil {
+		return nil, err
+	}
+	var items []map[string]types.AttributeValue
+	for {
+		res, err := r.client.Query(ctx, in)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query update decisions: %w", err)
+		}
+		items = append(items, res.Items...)
+		if len(res.LastEvaluatedKey) == 0 {
+			break
+		}
+		in.ExclusiveStartKey = res.LastEvaluatedKey
+	}
+	return decidedAccountIDs(items, urlHash), nil
 }
