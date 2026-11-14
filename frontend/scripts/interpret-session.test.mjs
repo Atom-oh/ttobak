@@ -112,3 +112,27 @@ test('elapsed time is formatted as HH:MM:SS', () => {
   assert.equal(m.formatElapsed(12 * 60_000 + 41_000 + 999), '00:12:41');
   assert.equal(m.formatElapsed(3 * 3_600_000 + 5_000), '03:00:05');
 });
+
+const { retryUntilLoaded } = m;
+
+test('a failed load is retried on the next call; a loaded value is kept', async () => {
+  const results = [null, new Error('offline'), { region: 'r' }, { region: 'other' }];
+  let calls = 0;
+  const load = retryUntilLoaded(async () => {
+    const next = results[calls++];
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  assert.equal(await load(), null);
+  assert.equal(await load(), null, 'a rejection reads as not loaded');
+  assert.equal((await load()).region, 'r');
+  assert.equal((await load()).region, 'r');
+  assert.equal(calls, 3);
+});
+
+test('concurrent calls share one load', async () => {
+  let calls = 0;
+  const load = retryUntilLoaded(async () => { calls++; return { region: 'r' }; });
+  await Promise.all([load(), load()]);
+  assert.equal(calls, 1);
+});
