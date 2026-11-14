@@ -39,6 +39,10 @@ manifests.
   leaving the app listening, and a failed live-caption configuration load is retried
   by the next start instead of disabling the screen until a reload. A failed
   `/config.json` fetch is no longer cached for the page lifetime.
+- Mac app: going to sleep ends live interpretation even when its start is still
+  in flight, and the stop is no longer dropped when it outlasts the sleep
+  deadline. The notice after a recording start ended interpretation no longer
+  claims the recording started.
 
 ## [1.0.0] - 2026-11-11
 
