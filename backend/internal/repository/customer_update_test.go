@@ -293,3 +293,16 @@ func TestCustomerUpdateURLPendingKey(t *testing.T) {
 		t.Fatalf("condition = %v", in.ConditionExpression)
 	}
 }
+
+func TestCustomerUpdateGetSourceInputIsConsistent(t *testing.T) {
+	in := getSourceInput("tbl", "u1", "src1")
+	if in.ConsistentRead == nil || !*in.ConsistentRead {
+		t.Fatal("ConsistentRead must be true")
+	}
+	if pk := in.Key["PK"].(*types.AttributeValueMemberS).Value; pk != model.PrefixUser+"u1" {
+		t.Fatalf("PK = %s", pk)
+	}
+	if sk := in.Key["SK"].(*types.AttributeValueMemberS).Value; sk != model.UpdateSourceSK("src1") {
+		t.Fatalf("SK = %s", sk)
+	}
+}
