@@ -86,6 +86,24 @@ export class IdleStop {
   }
 }
 
+/**
+ * Wraps `load` so a value is fetched once and kept, while a failure (`null`
+ * or a rejection, both returned as `null`) is tried again on the next call.
+ * Calls made during one load share it.
+ */
+export function retryUntilLoaded<T>(load: () => Promise<T | null>): () => Promise<T | null> {
+  let current: Promise<T | null> | null = null;
+  return () => {
+    if (current) return current;
+    const attempt: Promise<T | null> = load().catch(() => null).then((value) => {
+      if (value === null && current === attempt) current = null;
+      return value;
+    });
+    current = attempt;
+    return attempt;
+  };
+}
+
 /** `HH:MM:SS` for the session clock. */
 export function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));

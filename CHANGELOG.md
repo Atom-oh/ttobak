@@ -21,6 +21,10 @@ manifests.
 - Customer update drafts on the web: followed-source settings, an account drafts tab
   and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
   until the collector and generator ship (#961).
+- Mac app: an Interpretation screen (`/interpret`) that hears the microphone and
+  system audio and shows live interpretation with no meeting; no audio file,
+  transcript or upload is created. Needs a Mac app build with the
+  `start_listening` command (#949).
 - Speaker colours on the Mac app's interpret screen: each caption line is coloured by who spoke, with a speaker tag where the speaker changes.
 
 ### Changed
@@ -28,6 +32,13 @@ manifests.
 - Validate private asset paths before signing uploads or downloads, and bind meeting audio and attachments to their owner and meeting while preserving authorized sharing.
 - Enable the project REA Claude plugin and permit standard PR merges while denying `--admin` merges; retain the existing review-size and secret-scan hooks.
 - The SA performance report accepts Claude Code 2.1.311 or newer (was 2.1.322); 2.1.311 has the same verified sandbox settings schema.
+
+### Fixed
+
+- Mac interpretation: reloading or leaving the page stops the capture instead of
+  leaving the app listening, and a failed live-caption configuration load is retried
+  by the next start instead of disabling the screen until a reload. A failed
+  `/config.json` fetch is no longer cached for the page lifetime.
 
 ## [1.0.0] - 2026-11-11
 
