@@ -74,6 +74,7 @@ func (r *DynamoDBRepository) QueryNavigationCandidates(ctx context.Context, user
 	input := &dynamodb.QueryInput{
 		TableName: aws.String(r.tableName), Limit: aws.Int32(int32(limit)), ScanIndexForward: aws.Bool(true),
 		KeyConditionExpression: expr.KeyCondition(), ProjectionExpression: expr.Projection(),
+		Select:                   types.SelectSpecificAttributes,
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
 	}
 	if index != "" {

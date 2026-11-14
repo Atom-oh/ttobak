@@ -65,7 +65,9 @@ type fanoutRun struct {
 
 // Run fans out every active subscription once. A failing subscription is
 // logged by feed hash prefix and leaves its FannedAt unchanged; only a failure
-// to list subscriptions fails the run.
+// to list subscriptions fails the run. When ctx is done (the fan-out budget)
+// it stops cleanly between subscriptions: those not reached keep their
+// watermarks for the next tick.
 func (f *CustomerUpdateFanout) Run(ctx context.Context) (FanoutStats, error) {
 	var stats FanoutStats
 	run := &fanoutRun{
@@ -75,11 +77,19 @@ func (f *CustomerUpdateFanout) Run(ctx context.Context) (FanoutStats, error) {
 	}
 	cursor := ""
 	for {
+		if ctx.Err() != nil {
+			log.Printf("customer update fan-out stopped at its budget after subs=%d", stats.Subs)
+			return stats, nil
+		}
 		subs, next, err := f.repo.ListFeedSubs(ctx, cursor, fanoutSubPageSize)
 		if err != nil {
 			return stats, err
 		}
 		for _, sub := range subs {
+			if ctx.Err() != nil {
+				log.Printf("customer update fan-out stopped at its budget after subs=%d", stats.Subs)
+				return stats, nil
+			}
 			stats.Subs++
 			if err := f.fanOneSub(ctx, run, sub, &stats); err != nil {
 				log.Printf("customer update fan-out failed feed=%s: %v", shortHash(sub.FeedHash), err)
