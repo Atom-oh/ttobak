@@ -302,7 +302,7 @@ struct Run<'a> {
 
 impl Run<'_> {
     fn push(&mut self, step: StepView) {
-        let _ = self.app.emit(STEP_EVENT, &step);
+        let _ = self.app.emit_to("main", STEP_EVENT, &step);
         self.steps.push(step);
     }
 }
@@ -345,7 +345,7 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
             return json!({ "steps": run.steps, "needsApproval": [], "warnings": [] });
         }
     };
-    let _ = app.emit(RUNNING_EVENT, json!({}));
+    let _ = app.emit_to("main", RUNNING_EVENT, json!({}));
     let mut cli_code: Option<String> = None;
     if intake::local_adapter(&home).is_some_and(|b| supports_setup(&b)) {
         (cli, cli_code) = run_cli(app, &state, approve, cancel).await;
@@ -385,7 +385,8 @@ async fn run_setup(app: &AppHandle, approve: Vec<String>, accept_private_calenda
     }
     // Release the slot first (as start_job does), then tell intake consumers.
     state.finish_run();
-    let _ = app.emit(
+    let _ = app.emit_to(
+        "main",
         intake::FINISHED_EVENT,
         finished.unwrap_or_else(|| json!({ "action": RunKind::OneClickSetup, "exitCode": null, "result": null, "code": null })),
     );
@@ -415,7 +416,7 @@ async fn run_cli(
     let line_app = app.clone();
     let on_line = move |line: String| {
         let state = line_app.state::<IntakeState>();
-        let _ = line_app.emit(intake::PROGRESS_EVENT, json!({ "line": line }));
+        let _ = line_app.emit_to("main", intake::PROGRESS_EVENT, json!({ "line": line }));
         state.progress.lock().push(line);
     };
     let track = ProcTrack {
@@ -456,7 +457,7 @@ pub async fn setup_start(
         let setup = app.state::<SetupState>();
         *setup.last.lock() = Some(payload.clone());
         setup.running.store(false, Ordering::SeqCst);
-        let _ = app.emit(FINISHED_EVENT, payload);
+        let _ = app.emit_to("main", FINISHED_EVENT, payload);
     });
     Ok(())
 }
