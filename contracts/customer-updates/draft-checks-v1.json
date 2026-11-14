@@ -1,0 +1,1800 @@
+{
+ "version": 1,
+ "note": "Cases for the deterministic draft checks; Python checks.py and Go CheckUpdateDraft must pass every case. A case gives body, or bodyRepeat {text,count} meaning text repeated count times as the body; expect lists codes in fixed order.",
+ "cases": [
+  {
+   "name": "passing_draft",
+   "body": "새로 나온 S3 기능을 정리했습니다. https://aws.amazon.com/blogs/a 에서 확인하실 수 있어요. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_service_names_and_versions",
+   "body": "S3, EC2, Aurora PostgreSQL 16, GPT-6 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_date_and_year",
+   "body": "2026년 11월 20일 웨비나가 있습니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_url_trailing_punctuation",
+   "body": "자료입니다 (https://aws.amazon.com/blogs/a). 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_Node.js",
+   "body": "Node.js 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_S3",
+   "body": "S3 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_v1.2.3",
+   "body": "v1.2.3 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_EC2",
+   "body": "EC2 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_Aurora_PostgreSQL_16.4",
+   "body": "Aurora PostgreSQL 16.4 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_README.md",
+   "body": "README.md 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_name_at_company.com",
+   "body": "name@company.com 이야기입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "empty_ascii_whitespace",
+   "body": "  \n ",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "empty",
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "empty_exact_whitespace_set",
+   "body": " \t\n\u000b\f\r 　",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "empty",
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "not_empty_em_space",
+   "body": " ",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "length_2000_bmp",
+   "bodyRepeat": {
+    "text": "가",
+    "count": 2000
+   },
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "length_2001_bmp",
+   "bodyRepeat": {
+    "text": "가",
+    "count": 2001
+   },
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "too_long",
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "length_2000_astral",
+   "bodyRepeat": {
+    "text": "😀",
+    "count": 2000
+   },
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "length_2001_astral",
+   "bodyRepeat": {
+    "text": "😀",
+    "count": 2001
+   },
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "too_long",
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "link_not_allowed_in_links",
+   "body": "새로 나온 S3 기능을 정리했습니다. https://aws.amazon.com/blogs/a 에서 확인하실 수 있어요. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "link_not_allowed_in_body",
+   "body": "자료는 https://example.com/x 입니다. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "link_body_url_allowed_but_not_in_links",
+   "body": "자료는 https://aws.amazon.com/blogs/b 입니다. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a",
+    "https://aws.amazon.com/blogs/b"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "link_not_https",
+   "body": "자료입니다. http://example.com/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "http://example.com/x"
+   ],
+   "allowedUrls": [
+    "http://example.com/x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "link_exact_comparison",
+   "body": "새로 나온 S3 기능을 정리했습니다. https://aws.amazon.com/blogs/a 에서 확인하실 수 있어요. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a/"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "link_missing",
+   "body": "소식을 정리했습니다. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_missing"
+   ]
+  },
+  {
+   "name": "link_two_urls_in_body",
+   "body": "https://aws.amazon.com/blogs/a 그리고 https://aws.amazon.com/blogs/b 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a",
+    "https://aws.amazon.com/blogs/b"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a",
+    "https://aws.amazon.com/blogs/b"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "candidate_scheme_uppercase",
+   "body": "자료는 HTTPS://evil.com/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_scheme_mixed_case",
+   "body": "자료는 Https://evil.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_scheme_ftp",
+   "body": "자료는 ftp://evil.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_scheme_short_plus",
+   "body": "자료는 ws://evil.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_mailto",
+   "body": "자료는 mailto:a@evil.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_mailto_uppercase",
+   "body": "자료는 MAILTO:a@evil.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_protocol_relative",
+   "body": "자료는 //evil.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_host_path",
+   "body": "자료는 evil.com/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_www",
+   "body": "자료는 www.evil.zzz 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_www_uppercase",
+   "body": "자료는 WWW.Evil.Zzz 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_amazon_com",
+   "body": "자료는 amazon.com 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_aws_path",
+   "body": "자료는 aws.amazon.com/bedrock 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_host_uppercase_tld",
+   "body": "자료는 evil.COM 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_host_sentence_end",
+   "body": "자료는 evil.com. 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_host_after_paren",
+   "body": "자료는 (evil.com) 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_kr_tld",
+   "body": "자료는 evil.kr 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_internal_host",
+   "body": "자료는 w.amazon.com/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed",
+    "link_internal"
+   ]
+  },
+  {
+   "name": "candidate_scheme_uppercase_internal",
+   "body": "자료는 HTTPS://W.Amazon.com/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed",
+    "link_internal"
+   ]
+  },
+  {
+   "name": "candidate_email_is_not_bare_host",
+   "body": "문의는 name@company.com 으로 주세요. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "candidate_non_tld_label_passes",
+   "body": "파일은 report.pdf 와 notes.txt 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "link_internal",
+   "body": "자료입니다. https://w.amazon.com/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://w.amazon.com/x"
+   ],
+   "allowedUrls": [
+    "https://w.amazon.com/x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_internal_subdomain_with_port",
+   "body": "자료입니다. https://team.slack.com:443/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://team.slack.com:443/x"
+   ],
+   "allowedUrls": [
+    "https://team.slack.com:443/x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_internal_uppercase_host",
+   "body": "자료입니다. https://W.Amazon.com/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://W.Amazon.com/x"
+   ],
+   "allowedUrls": [
+    "https://W.Amazon.com/x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_internal_trailing_dot_host",
+   "body": "자료입니다. https://w.amazon.com./x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://w.amazon.com./x"
+   ],
+   "allowedUrls": [
+    "https://w.amazon.com./x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_internal_userinfo_spoof",
+   "body": "자료입니다. https://aws.amazon.com@w.amazon.com/ 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com@w.amazon.com/"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com@w.amazon.com/"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_internal_userinfo_spoof_not_allowed",
+   "body": "자료입니다. https://aws.amazon.com@w.amazon.com/ 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed",
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_internal_in_body_only",
+   "body": "자료입니다. https://w.amazon.com/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed",
+    "link_internal"
+   ]
+  },
+  {
+   "name": "link_host_suffix_not_label",
+   "body": "자료입니다. https://notslack.com/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://notslack.com/x"
+   ],
+   "allowedUrls": [
+    "https://notslack.com/x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "link_ipv6_exact_allowed_passes",
+   "body": "자료입니다. https://[::1]/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://[::1]/x"
+   ],
+   "allowedUrls": [
+    "https://[::1]/x"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "link_ipv6_not_allowed",
+   "body": "자료입니다. https://[::1]/x 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "terminator_lt",
+   "body": "자료 https://aws.amazon.com/blogs/a<끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "terminator_gt",
+   "body": "자료 https://aws.amazon.com/blogs/a>끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "terminator_dquote",
+   "body": "자료 https://aws.amazon.com/blogs/a\"끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "terminator_squote",
+   "body": "자료 https://aws.amazon.com/blogs/a'끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "terminator_nbsp",
+   "body": "자료 https://aws.amazon.com/blogs/a 끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "terminator_ideographic_space",
+   "body": "자료 https://aws.amazon.com/blogs/a　끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "terminator_vtab",
+   "body": "자료 https://aws.amazon.com/blogs/a\u000b끝 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_dot",
+   "body": "자료 https://aws.amazon.com/blogs/a. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_comma",
+   "body": "자료 https://aws.amazon.com/blogs/a, 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_semicolon",
+   "body": "자료 https://aws.amazon.com/blogs/a; 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_colon",
+   "body": "자료 https://aws.amazon.com/blogs/a: 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_bang",
+   "body": "자료 https://aws.amazon.com/blogs/a! 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_question",
+   "body": "자료 https://aws.amazon.com/blogs/a? 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "trailing_paren",
+   "body": "자료 https://aws.amazon.com/blogs/a) 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "blocked_name_case_insensitive",
+   "body": "ACME 관련 소식입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [
+    "acme"
+   ],
+   "stages": [],
+   "expect": [
+    "blocked_name"
+   ]
+  },
+  {
+   "name": "blocked_name_empty_entry_ignored",
+   "body": "새로 나온 S3 기능을 정리했습니다. https://aws.amazon.com/blogs/a 에서 확인하실 수 있어요. 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [
+    ""
+   ],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "blocked_name_non_ascii_case_not_folded",
+   "body": "STRASSE 소식입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [
+    "Straße"
+   ],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "blocked_name_korean",
+   "body": "한빛리테일 소식입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [
+    "한빛리테일"
+   ],
+   "stages": [],
+   "expect": [
+    "blocked_name"
+   ]
+  },
+  {
+   "name": "stage_word",
+   "body": "Technical Validation 단계입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [
+    "Technical Validation"
+   ],
+   "expect": [
+    "stage_word"
+   ]
+  },
+  {
+   "name": "stage_word_case_insensitive",
+   "body": "technical validation 이야기 https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [
+    "Technical Validation"
+   ],
+   "expect": [
+    "stage_word"
+   ]
+  },
+  {
+   "name": "opportunity_word",
+   "body": "이번 oppty 관련 소식입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "opportunity_word"
+   ]
+  },
+  {
+   "name": "opportunity_word_uppercase",
+   "body": "이번 OPPTY 관련 소식입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "opportunity_word"
+   ]
+  },
+  {
+   "name": "opportunity_word_korean",
+   "body": "기회 단계 공유드립니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "opportunity_word"
+   ]
+  },
+  {
+   "name": "figure_currency_comma",
+   "body": "예상 비용은 $12,000 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_korean_unit",
+   "body": "월 1,200만원 수준입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_percent",
+   "body": "35% 증가했습니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_dollar",
+   "body": "$5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_won_sign",
+   "body": "₩5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_euro",
+   "body": "€5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_yen",
+   "body": "¥5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_pound",
+   "body": "£5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_unit_won",
+   "body": "5원 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_unit_dollar_word",
+   "body": "5달러 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_unit_usd",
+   "body": "5USD 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_unit_krw",
+   "body": "5KRW 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_unit_percent",
+   "body": "5% 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_unit_lowercase_usd",
+   "body": "5 usd 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_korean_number_unit_man",
+   "body": "5만 규모입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_korean_number_unit_eok",
+   "body": "5억 규모입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_korean_number_unit_cheon",
+   "body": "5천 규모입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_korean_number_unit_jo",
+   "body": "5조 규모입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_one_space",
+   "body": "$ 5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_digit_space_unit",
+   "body": "5 USD 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "figure"
+   ]
+  },
+  {
+   "name": "figure_sign_two_spaces_passes",
+   "body": "$  5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "figure_digit_two_spaces_unit_passes",
+   "body": "5  USD 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "figure_unit_before_digit_usd_passes",
+   "body": "USD 1200 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "figure_unit_before_digit_krw_passes",
+   "body": "KRW 5000 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "figure_fullwidth_digits_pass",
+   "body": "１２만원 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "slack_control_here",
+   "body": "<!here> 안내드립니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "slack_control"
+   ]
+  },
+  {
+   "name": "slack_control_subteam",
+   "body": "<!subteam^S123> 안내드립니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "slack_control"
+   ]
+  },
+  {
+   "name": "slack_control_mention",
+   "body": "<@U123> 안내드립니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "slack_control"
+   ]
+  },
+  {
+   "name": "no_meeting_offer",
+   "body": "새 기능을 정리했습니다. https://aws.amazon.com/blogs/a",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "codes_in_fixed_order",
+   "body": "<!here> acme oppty $5 https://w.amazon.com/x Technical Validation",
+   "links": [],
+   "allowedUrls": [],
+   "blockList": [
+    "Acme"
+   ],
+   "stages": [
+    "Technical Validation"
+   ],
+   "expect": [
+    "link_not_allowed",
+    "link_internal",
+    "link_missing",
+    "blocked_name",
+    "stage_word",
+    "opportunity_word",
+    "figure",
+    "slack_control",
+    "no_meeting_offer"
+   ]
+  },
+  {
+   "name": "candidate_unlisted_tld_with_path",
+   "body": "자료는 evil.ru/aws 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_bare_sh_tld",
+   "body": "자료는 evil.sh 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_ipv4_with_path",
+   "body": "자료는 1.2.3.4/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_ipv4_without_path",
+   "body": "자료는 1.2.3.4 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_ipv4_sentence_end",
+   "body": "자료는 1.2.3.4. 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_do_tld_with_path",
+   "body": "자료는 bit.do/abc 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_top_tld_with_path",
+   "body": "자료는 evil.top/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_protocol_relative_unlisted_tld",
+   "body": "자료는 //evil.ru/x 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "candidate_asp_net_accepted_false_positive",
+   "body": "자료는 ASP.NET 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": [
+    "link_not_allowed"
+   ]
+  },
+  {
+   "name": "passing_text_16.4",
+   "body": "자료는 16.4 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_v1.2.3_not_ipv4",
+   "body": "자료는 v1.2.3 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_longer_version_1.2.3.4.5",
+   "body": "자료는 1.2.3.4.5 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  },
+  {
+   "name": "passing_text_numeric_label_before_slash",
+   "body": "자료는 v1.2/v1.3 입니다. https://aws.amazon.com/blogs/a 편하실 때 20분 미팅으로 이야기 나눠볼까요?",
+   "links": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "allowedUrls": [
+    "https://aws.amazon.com/blogs/a"
+   ],
+   "blockList": [],
+   "stages": [],
+   "expect": []
+  }
+ ],
+ "escapeCases": [
+  {
+   "in": "a & b",
+   "out": "a &amp; b"
+  },
+  {
+   "in": "<!here> <b>",
+   "out": "&lt;!here&gt; &lt;b&gt;"
+  },
+  {
+   "in": "&amp; &lt;",
+   "out": "&amp;amp; &amp;lt;"
+  },
+  {
+   "in": "안녕하세요",
+   "out": "안녕하세요"
+  },
+  {
+   "in": "",
+   "out": ""
+  }
+ ]
+}
