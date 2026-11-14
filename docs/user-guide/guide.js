@@ -218,7 +218,10 @@
     active = null;
     return true;
   };
-  const targetOf = hash => hash.length > 1 ? document.getElementById(decodeURIComponent(hash.slice(1))) : null;
+  const targetOf = hash => {
+    if (hash.length < 2) return null;
+    try { return document.getElementById(decodeURIComponent(hash.slice(1))); } catch { return null; }
+  };
   // Switch before the browser follows the link, so a hidden target becomes visible first.
   document.addEventListener('click', event => {
     const anchor = event.target.closest('a[href^="#"]');
@@ -226,7 +229,8 @@
   }, true);
   window.addEventListener('hashchange', () => {
     const target = targetOf(window.location.hash);
-    if (setPart(partOf(target))) target.scrollIntoView();
+    // An empty fragment (back to the page start) returns to the web part.
+    if (setPart(target ? partOf(target) : 'web')) (target || document.getElementById('top')).scrollIntoView();
     updatePosition();
   });
   setPart(partOf(targetOf(window.location.hash)) || 'web');
