@@ -248,10 +248,28 @@ func (r *draftListRepo) PutSourceIfAbsent(context.Context, string, *model.Update
 func (r *draftListRepo) ListSources(context.Context, string, int) ([]model.UpdateSource, error) {
 	return nil, nil
 }
+func (r *draftListRepo) GetSource(context.Context, string, string) (*model.UpdateSource, error) {
+	return nil, nil
+}
 func (r *draftListRepo) UpdateSource(context.Context, string, string, *string, *string) error {
 	return nil
 }
 func (r *draftListRepo) DeleteSource(context.Context, string, string) error { return nil }
+func (r *draftListRepo) PutSourceWithFeedSub(context.Context, string, *model.UpdateSource, *model.UpdateFeedSub) error {
+	return nil
+}
+func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub, *string) error {
+	return nil
+}
+func (r *draftListRepo) DeleteSourceWithFeedSub(context.Context, string, string, string) error {
+	return nil
+}
+func (r *draftListRepo) HealSourceFeedSub(context.Context, string, string, *model.UpdateFeedSub) error {
+	return nil
+}
+func (r *draftListRepo) GetFeedState(context.Context, string) (*model.UpdateFeedState, error) {
+	return nil, nil
+}
 func (r *draftListRepo) PutItemsIfAbsent(context.Context, string, string, []model.UpdateItem) (int, error) {
 	return 0, nil
 }

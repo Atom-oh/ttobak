@@ -185,6 +185,31 @@ func (r *CustomerUpdateRepository) ListSources(ctx context.Context, userID strin
 	}
 }
 
+// getSourceInput builds the strongly consistent keyed read of one source.
+func getSourceInput(tableName, userID, sourceID string) *dynamodb.GetItemInput {
+	return &dynamodb.GetItemInput{
+		TableName: aws.String(tableName), Key: updateUserKey(userID, model.UpdateSourceSK(sourceID)),
+		ConsistentRead: aws.Bool(true),
+	}
+}
+
+// GetSource returns one source by key with a strongly consistent read, or nil
+// when absent.
+func (r *CustomerUpdateRepository) GetSource(ctx context.Context, userID, sourceID string) (*model.UpdateSource, error) {
+	res, err := r.client.GetItem(ctx, getSourceInput(r.tableName, userID, sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get update source: %w", err)
+	}
+	if len(res.Item) == 0 {
+		return nil, nil
+	}
+	var row updateSourceRow
+	if err := attributevalue.UnmarshalMap(res.Item, &row); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal update source: %w", err)
+	}
+	return &row.UpdateSource, nil
+}
+
 // UpdateSource sets the non-nil label and status; the source must exist.
 func (r *CustomerUpdateRepository) UpdateSource(ctx context.Context, userID, sourceID string, label *string, status *string) error {
 	var update expression.UpdateBuilder

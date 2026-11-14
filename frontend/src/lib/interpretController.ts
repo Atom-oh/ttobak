@@ -68,6 +68,11 @@ export interface InterpretDeps<Config, Entry, Input> {
   createStt(config: Config, options: InterpretSttOptions, handlers: InterpretSttHandlers<Entry>): InterpretStt;
   /** Capture events; returns the unsubscribe function. */
   subscribe(handlers: { onChunk(chunk: Uint8Array): void; onStopped(reason: 'system-sleep' | 'recording'): void }): () => void;
+  /**
+   * Calls `handler` when the page is going away (a reload or a navigation
+   * that unloads it); returns the unsubscribe function.
+   */
+  onPageHide?(handler: () => void): () => void;
   isCommandNotFound(err: unknown): boolean;
   versionSkewMessage: string;
   timers?: IdleStopTimers;
@@ -97,6 +102,7 @@ export class InterpretController<Config, Entry extends InterpretEntry, Input> {
   private reconnectTimer: unknown = null;
   private graceTimer: unknown = null;
   private unsubscribe: (() => void) | null = null;
+  private unwatchPage: (() => void) | null = null;
   private disposed = false;
   private readonly timers: IdleStopTimers;
   private readonly options: InterpretSttOptions;
@@ -111,11 +117,15 @@ export class InterpretController<Config, Entry extends InterpretEntry, Input> {
   }
 
   /**
-   * Stop a capture left running for a page that no longer exists (a reload).
+   * Stop a capture left running for a page that no longer exists (a reload
+   * whose page-hide stop did not reach the Mac app).
    * A later `start` waits for this, so it cannot end the new capture. An old
    * app without the command rejects; that is not an error.
    */
   init(): Promise<void> {
+    // A page that goes away without unmounting the screen would leave the
+    // Mac app capturing with nothing listening; stop it while the page can.
+    this.unwatchPage ??= this.deps.onPageHide?.(() => void this.stop()) ?? null;
     this.ready = this.deps.stopCapture().then(() => undefined, () => undefined);
     return this.ready;
   }
@@ -205,6 +215,8 @@ export class InterpretController<Config, Entry extends InterpretEntry, Input> {
   /** The screen is going away: stop everything and report nothing further. */
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.unwatchPage?.();
+    this.unwatchPage = null;
     this.run += 1;
     await this.captureStart?.catch(() => undefined);
     await this.end({}, true);
