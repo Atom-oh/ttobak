@@ -134,17 +134,21 @@ eliminate customer billing context leaving the account.
 
 After a successful publish the worker also writes
 `accounts/{accountId}/derived/services-in-use.json` (`version`, `source`,
-`versionId`, `generatedAt`, `services`). It holds the service names from the latest
-publish that had usable service rows: last-publish-wins across COT and CUR runs, so
-`source` is the real source of those rows and may flip. It is never deleted, and a
+`versionId`, `generatedAt`, `services`). Only a COT publish writes it (`source` is
+`cot`): the CUR datasets carry no services dataset, so an account with CUR uploads
+only has no object. It holds the service names from the latest COT publish that had
+usable service rows. The write follows the publish transaction without a version
+condition, so when two jobs for one account overlap an older job's object can
+replace a newer one until the next publish; `versionId` names the publish it came
+from. It is never deleted, and a
 publish without usable `services` rows (or with a `services.json` over 8 MiB)
 leaves the previous object untouched. "In use" means a positive total of `m6`
 (the last month's spend) summed across entities. `services` has at most 30 names
 ordered by descending total, so relative rank is revealed and accepted; no amount,
 usage figure or rank field is stored. A failed write is logged (account id and
 exception class only) and never fails the publish. The customer-updates worker is
-its single extra reader (`s3:GetObject` on that one key pattern, ADR-030); it reads no other billing object and never calls the BFF.
-`generatedAt` is the freshness signal: the reader treats a missing object, an
+its single intended extra reader (`s3:GetObject` on that one key pattern, ADR-030); it reads no other billing object and never calls the BFF.
+`generatedAt` is the freshness signal: that reader treats a missing object, an
 object older than 45 days, or an unparseable `generatedAt` as "no service signal".
 
 ### Alternatives and consequences
