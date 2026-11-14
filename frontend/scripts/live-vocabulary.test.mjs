@@ -47,6 +47,7 @@ function session(sends, vocabularies = { 'ko-KR': 'v-ko', 'en-US': 'v-en' }) {
   const { TranscribeStreamingSession } = loadModule('transcribeStreamingClient', {
     '@/lib/auth': { getIdToken: () => 'token', refreshSession: async () => 'token' },
     '@/lib/liveVocabulary': live,
+    '@/lib/interpretSpeakers': loadModule('interpretSpeakers'),
     '@aws-sdk/client-transcribe-streaming': {
       StartStreamTranscriptionCommand: class { constructor(input) { this.input = input; } },
       TranscribeStreamingClient: class { async send(c) { f.inputs.push(c.input); return sends[f.inputs.length - 1](); } },
