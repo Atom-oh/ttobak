@@ -91,6 +91,11 @@ def _candidate_end(body, start):
 
 def extract_urls(body):
     """Link candidates in body, left to right: scheme URLs, mailto:, and bare hosts."""
+    return [body[s:e] for s, e in candidate_spans(body)]
+
+
+def candidate_spans(body):
+    """(start, end) code-point spans of the link candidates in body, left to right."""
     out = []
     n = len(body)
     i = 0
@@ -105,7 +110,7 @@ def extract_urls(body):
                 ascii_lower(body[i:j]) == "mailto" and body.startswith(":", j)
             ):
                 e = _candidate_end(body, i)
-                out.append(body[i:e].rstrip(URL_TRAIL_CHARS))  # trailing .,;:!?) is stripped
+                out.append((i, i + len(body[i:e].rstrip(URL_TRAIL_CHARS))))  # trailing .,;:!?) is stripped
                 i = e
                 continue
         # (c) bare host: a maximal run of ASCII letters, digits, "-" and "." (start-of-run implies no such char before).
@@ -115,7 +120,8 @@ def extract_urls(body):
                 r += 1
             prev = body[i - 1] if i > 0 else ""
             # Not after "@", and not after "/" unless that "/" is the second of "//".
-            blocked = prev == "@" or (prev == "/" and not (i >= 2 and body[i - 2] == "/"))
+            after_double_slash = prev == "/" and i >= 2 and body[i - 2] == "/"
+            blocked = prev == "@" or (prev == "/" and not after_double_slash)
             if not blocked:
                 if body.startswith("/", r):
                     # An optional /path extends the candidate to the terminator; the host part is the run.
@@ -127,10 +133,15 @@ def extract_urls(body):
                 else:
                     host_run = body[i:r].rstrip(".")  # trailing dots (sentence end) are not part of the host
                     cand = host_run
-                    # Without a path: a listed TLD, "www.", or a whole run that is a dotted-quad IPv4.
-                    is_link = _is_bare_host(host_run) or _is_ipv4(host_run)
+                    # Without a path: a listed TLD, "www.", a whole run that is a dotted-quad IPv4, or any
+                    # dotted host right after "//".
+                    is_link = (
+                        _is_bare_host(host_run)
+                        or _is_ipv4(host_run)
+                        or (after_double_slash and _is_dotted_host(host_run))
+                    )
                 if is_link:
-                    out.append(cand)
+                    out.append((i, i + len(cand)))
             i = r
             continue
         i += 1
@@ -185,11 +196,20 @@ def is_internal_host(host):
     return any(host == s or host.endswith("." + s) for s in INTERNAL_SUFFIXES)
 
 
-def has_figure(body):
+def has_figure(body, spans=None):
     # Figure: a currency sign, one optional space, then an ASCII digit; or an ASCII digit, one optional space,
     # then a figure unit or Korean number unit (ASCII-case-insensitive). Unit before digit and fullwidth digits pass.
+    # Link candidate spans are replaced by spaces first, so "%C3" or "100%25" inside a URL is not a figure.
+    spans = candidate_spans(body) if spans is None else spans
     text = ascii_lower(body)
     units = tuple(ascii_lower(u) for u in FIGURE_UNITS) + KOREAN_NUMBER_UNITS
+    # A span whose last char is an ASCII digit, then one optional WHITESPACE char, then a unit, is a figure.
+    for s, e in spans:
+        j = e + 1 if e < len(text) and text[e] in WHITESPACE else e
+        if e > s and text[e - 1] in DIGITS and any(text.startswith(u, j) for u in units):
+            return True
+    for s, e in spans:
+        text = text[:s] + " " * (e - s) + text[e:]
     n = len(text)
     for i, ch in enumerate(text):
         if ch in CURRENCY_SIGNS:
@@ -224,7 +244,8 @@ def check_draft(body, links, allowed_urls, block_list, stages):
         if not url.startswith("https://") or url not in allowed_urls:
             found.add("link_not_allowed")
     # A body candidate must be exactly an https:// URL that is in allowed_urls AND in links; anything else fails.
-    candidates = extract_urls(body)
+    spans = candidate_spans(body)
+    candidates = [body[s:e] for s, e in spans]
     for url in candidates:
         if not url.startswith("https://") or url not in allowed_urls or url not in links:
             found.add("link_not_allowed")
@@ -238,7 +259,7 @@ def check_draft(body, links, allowed_urls, block_list, stages):
         found.add("stage_word")
     if _contains_any(body, OPPORTUNITY_WORDS):
         found.add("opportunity_word")
-    if has_figure(body):
+    if has_figure(body, spans):
         found.add("figure")
     # slack_control: "<!" (here/channel/everyone/subteam) or "<@" mention.
     if "<!" in body or "<@" in body:

@@ -85,7 +85,7 @@ def _code_failures(draft, account, allowed):
     stages = [o.stage for o in account.opportunities if o.stage]
     codes = set(checks.check_draft(draft.body, list(draft.links), allowed_urls=allowed,
                                    block_list=list(account.block_list), stages=stages))
-    if not draft.why or len(draft.why) > writer.MAX_WHY:
+    if not draft.why.strip(checks.WHITESPACE) or len(draft.why) > writer.MAX_WHY:
         codes.add(WHY_INVALID)
     else:
         why_codes = checks.check_draft(draft.why, list(draft.links), allowed_urls=allowed,

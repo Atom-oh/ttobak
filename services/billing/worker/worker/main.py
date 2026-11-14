@@ -18,7 +18,7 @@ Logs carry step names, states, reason kinds, exception class names and counts on
 Exit: 0 job recorded (done, needs_review, skipped, rerun leased elsewhere); 1 job failed; 2 bad job key, config or
 job ids, or the process could not be made non-dumpable (nothing written).
 """
-import datetime, json, os, queue, re, shutil, signal, stat, subprocess, sys, threading, time, uuid
+import datetime, io, json, os, queue, re, shutil, signal, stat, subprocess, sys, threading, time, uuid
 
 APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_ACCOUNT = os.path.join(APP, "run_account.sh")
@@ -386,6 +386,43 @@ def s3_download(client, bucket, key, path):
                 break
             f.write(buf)
     return True
+
+
+SERVICE_NAME_MAX = 120
+SERVICES_IN_USE_LIMIT = 30
+SERVICES_MAX_BYTES = 8 << 20
+
+
+class ServicesTooLarge(Exception):
+    pass
+
+
+def read_bounded_json(f, limit):
+    data = f.read(limit + 1)
+    if len(data) > limit:
+        raise ServicesTooLarge()
+    return json.loads(data.decode("utf-8"))
+
+
+def services_in_use(services_rows, limit=SERVICES_IN_USE_LIMIT):
+    """Service names only, by descending total m6 across entities (ties by name). m6 is the dataset's last-month
+    spend, so "in use" means a positive total; no amount is returned. Pure: no I/O. Rows without a string
+    service, with a non-numeric or non-finite m6, or that are not dicts are skipped. Names are stripped (duplicates
+    after stripping are summed); empty and over-long names and services whose total is not positive are dropped. No
+    amount leaves this function."""
+    totals = {}
+    for r in services_rows if isinstance(services_rows, list) else []:
+        if not isinstance(r, dict) or not isinstance(r.get("service"), str):
+            continue
+        m6 = r.get("m6")
+        if isinstance(m6, bool) or not isinstance(m6, (int, float)) or m6 != m6 or m6 in (float("inf"), float("-inf")):
+            continue
+        name = r["service"].strip()
+        if not name or len(name) > SERVICE_NAME_MAX:
+            continue
+        totals[name] = totals.get(name, 0) + m6
+    ranked = sorted(((t, n) for n, t in totals.items() if t > 0), key=lambda p: (-p[0], p[1]))
+    return [n for _, n in ranked[:max(0, limit)]]
 
 
 def s3_upload_file(client, bucket, key, f, ctype):
@@ -996,6 +1033,30 @@ class Job:
             raise
         self.steps["publish"] = "done"
         log("step", step="publish", state="done")
+        self.publish_services_in_use(s3)
+
+    def publish_services_in_use(self, s3):
+        """Best effort, after the version is published: accounts/{acct}/derived/services-in-use.json holds service names
+        only (ADR-012) for the customer-updates worker. Only a COT publish writes it: the CUR datasets have no
+        services dataset. Written only when the services dataset exists and yields names; otherwise the previous object
+        stays untouched (it is never deleted). A failure is logged with the account id and exception class and never
+        fails the publish."""
+        if self.src != "cot":
+            return
+        try:
+            rows = []
+            each_regular(self.wd, ("out",), re.compile(r"services\.json"), names=["services.json"],
+                         fn=lambda n, f: rows.append(read_bounded_json(f, SERVICES_MAX_BYTES)))
+            names = services_in_use(rows[0] if rows else None)
+            if not names:
+                return
+            at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            body = json.dumps({"version": 1, "source": self.src, "versionId": self.version_id, "generatedAt": at,
+                               "services": names}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            s3_upload_file(s3, self.bucket, self.s3_key("derived/services-in-use.json"), io.BytesIO(body),
+                           "application/json")
+        except Exception as e:
+            log("derived_failed", accountId=self.acct, cls=type(e).__name__)
 
     # ---------- rerun-agents ----------
 
