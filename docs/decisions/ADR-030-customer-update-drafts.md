@@ -62,10 +62,16 @@ linked, not restated:
     held until 00:00 KST next day for a Go `day_budget` or
     `account_day_budget` deferral, a runtime `account_budget` or
     `draft_budget` deferral, all in-scope accounts at their cap, or the
-    research cap reached; held one hour when account reads failed; left new
-    for a runtime `research_budget` deferral; one more attempt for
+    research cap reached; held one hour when any in-scope account's scope or
+    pack read failed (nothing starts, so no account is skipped silently); left
+    new for a runtime `research_budget` deferral; one more attempt for
     `gate_error`, a missing `ITEM` row, lease expiry or a contract rejection
     of the payload. The third attempt skips the item.
+  - A pair with a stored final decision (not needed, drafted or discarded) is
+    never evaluated again: the payload item carries those account ids as
+    `decidedAccounts`, the runtime skips them without spending budget, and an
+    item whose every pair is decided is marked decided at start. A deferred
+    pair does not count.
   - Decisions and drafts are sealed with the record key (purposes
     `ttobak-customer-update-decision` and `ttobak-customer-update-draft`).
 - **Runtime role.** The runtime reads and writes only `CURUN#` and `CUURL#`
@@ -118,8 +124,12 @@ linked, not restated:
   always exhausts its budget never reaches the tail.
 - A contract rejection adds an attempt to every item of the batch, including
   items that were not the cause.
-- A runtime that keeps answering `research_budget` is bounded only by the
-  3-day first-seen rule.
+- A `research_budget` deferral adds no attempt; each retry researches other
+  pairs (decided ones are skipped), and the day research cap and the 3-day
+  first-seen rule bound it.
+- An account whose scope or pack read keeps failing holds that user's items
+  hour by hour until it is fixed or the items pass the 3-day rule
+  (`buildFailedHeld`).
 - `researched` is counted on the KST day of finalize, not of the run start.
 - A user with 2,000 or more item rows never completes a scan cycle in one
   call, so the pending mark stays (one bounded query each time served).

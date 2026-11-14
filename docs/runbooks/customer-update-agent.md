@@ -119,8 +119,12 @@ outcome drafted or discarded; CDK sets 30; owner-tunable; 0 starts no runs).
 - Held until 00:00 KST, attempts unchanged: a Go `day_budget` or
   `account_day_budget` deferral, a runtime `account_budget` or `draft_budget`
   deferral, all in-scope accounts capped, or the research cap reached.
-- Held one hour, attempts unchanged: every account read failed.
-- Left new, attempts unchanged: a runtime `research_budget` deferral.
+- Held one hour, attempts unchanged: any in-scope account's scope or pack
+  read failed (`buildFailedHeld`); nothing starts for that user this tick. A
+  count that repeats every hour points to one broken account.
+- Left new, attempts unchanged: a runtime `research_budget` deferral. The
+  next run sends the item with `decidedAccounts`, so pairs already decided
+  are not researched again.
 - One more attempt: `gate_error`, a missing `ITEM` row, lease expiry, or a
   contract rejection of the payload (HTTP 400/413). The third attempt skips
   the item.

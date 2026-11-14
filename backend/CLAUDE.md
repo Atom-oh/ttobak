@@ -77,6 +77,8 @@ permissions must be inspected before alleging an authorization bypass.
   existing authorized services. Go re-validates every runtime row with the
   shared draft checks; run ids are single-use, invokes never retried, and only
   a definite failure (runtime answer or AWS API error) deletes the lease.
+  Stored final decisions go out as `decidedAccounts` and are never re-run; a
+  failed account pack holds the batch one hour instead of starting.
   Finalize-time draft deferrals, all-capped accounts and the research day cap
   hold items until the next KST day with attempts unchanged (20 drafts at
   start only skips the tick); `research_budget` leaves them new; gate errors,
