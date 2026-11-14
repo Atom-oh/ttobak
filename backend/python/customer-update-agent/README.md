@@ -32,6 +32,9 @@ the owner steps are in the [runbook](../../../docs/runbooks/customer-update-agen
 - A gate failure (candidate scoring or a pair decision) writes the item
   `deferred`/`gate_error`, retryable in a later run; a pair whose decision
   failed has no DEC row.
+- An item's `decidedAccounts` (pairs with a final stored decision) are not
+  scored, decided or researched and get no DEC row; an item with every account
+  listed is written `decided` without being read.
 - Bounds: `llm.MAX_TOKENS` per role; the orchestrator agent stops after 200
   tool calls or a third of `RUN_DEADLINE_SECONDS`, the researcher after 12 tool
   calls per pair (`llm.build_stoppable_agent` cancels the Strands loop); past the

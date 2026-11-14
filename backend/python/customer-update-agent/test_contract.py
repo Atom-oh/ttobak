@@ -111,6 +111,19 @@ class ParseRunTest(unittest.TestCase):
         p["accounts"].append(copy.deepcopy(p["accounts"][0]))
         self.assertEqual(self.code_of(p), "duplicate")
 
+    def test_decided_accounts(self):
+        p = example()
+        p["accounts"].append(dict(copy.deepcopy(p["accounts"][0]), accountId="acct-2"))
+        p["items"][0]["decidedAccounts"] = ["acct-2"]
+        self.assertEqual(parse_run(p).items[0].decided_accounts, frozenset({"acct-2"}))
+        del p["items"][0]["decidedAccounts"]
+        self.assertEqual(parse_run(p).items[0].decided_accounts, frozenset())
+        for bad, code in (("acct-2", "shape"), ([5], "shape"), (None, "shape"),
+                          (["acct-9"], "decided_accounts"),
+                          (["acct-2", "acct-2"], "duplicate")):
+            p["items"][0]["decidedAccounts"] = bad
+            self.assertEqual(self.code_of(p), code, bad)
+
     def test_drafts_remaining(self):
         for bad in (-1, 1.5, "3", True, None):
             p = example()

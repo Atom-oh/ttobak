@@ -1,7 +1,7 @@
 """Parser for the run-v1 payload (contracts/customer-updates/run-v1.json)."""
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 MAX_URL_CHARS = 2048
@@ -33,6 +33,8 @@ class ContractError(Exception):
 class Item:
     url_hash: str
     url: str
+    # Accounts whose pair with this item already has a final decision.
+    decided_accounts: frozenset = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,14 @@ def _parse_item(raw):
         raise ContractError("item_hash")
     if not _valid_url(url):
         raise ContractError("item_url")
-    return Item(h, url)
+    # Optional; each id must name a payload account (checked in parse_run), so
+    # unique ids also cap the list at the number of accounts.
+    decided = raw.get("decidedAccounts", [])
+    if not isinstance(decided, list) or not all(isinstance(a, str) for a in decided):
+        raise ContractError("shape")
+    if len(set(decided)) != len(decided):
+        raise ContractError("duplicate")
+    return Item(h, url, frozenset(decided))
 
 
 def _valid_url(url):
@@ -189,4 +198,7 @@ def parse_run(payload):
         raise ContractError("duplicate")
     if len({a.account_id for a in accounts}) != len(accounts):
         raise ContractError("duplicate")
+    known = {a.account_id for a in accounts}
+    if any(not i.decided_accounts <= known for i in items):
+        raise ContractError("decided_accounts")
     return RunInput(run_id, items, accounts, _parse_budgets(payload.get("budgets")))

@@ -212,6 +212,31 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(rows(table, "ITEM#")["ITEM#" + A]["state"], "decided")
         self.assertEqual(rows(table, "DEC#"), {})
 
+    def test_decided_accounts_are_not_gated_and_free_the_budget(self):
+        cand = {(A[:6], "acc1"): 0.9, (A[:6], "acc2"): 0.8}
+        need = {(A[:6], "고객acc1"): 0.95, (A[:6], "고객acc2"): 0.9}
+        deps, table, _, writer_model = make_deps(cand, need)
+        ri = run_input([A], [account("acc1"), account("acc2")], pairs=1)
+        ri = RunInput(ri.run_id, (Item(A, url_for(A), frozenset({"acc1"})),), ri.accounts,
+                      ri.budgets)
+        stats = orchestrator.run(ri, deps)
+        self.assertEqual(deps.gate.calls[0], ["acc2"])  # candidate scoring skips acc1
+        decs = rows(table, "DEC#")
+        self.assertEqual(set(decs), {f"DEC#{A}#acc2"})
+        self.assertEqual(decs[f"DEC#{A}#acc2"]["outcome"], "drafted")
+        self.assertEqual((stats["gated"], stats["researched"], writer_model.calls), (1, 1, 1))
+        self.assertEqual(rows(table, "ITEM#")["ITEM#" + A]["state"], "decided")
+
+    def test_fully_decided_item_is_decided_without_reads_or_gate(self):
+        deps, table, _, _ = make_deps({(A[:6], "acc1"): 0.9}, {(A[:6], "고객acc1"): 0.9})
+        ri = run_input([A], [account("acc1")])
+        ri = RunInput(ri.run_id, (Item(A, url_for(A), frozenset({"acc1"})),), ri.accounts,
+                      ri.budgets)
+        orchestrator.run(ri, deps)
+        self.assertEqual((deps.cache.gets, deps.gate.calls, rows(table, "DEC#")), ([], [], {}))
+        item = rows(table, "ITEM#")["ITEM#" + A]
+        self.assertEqual((item["state"], item["reason"]), ("decided", ""))
+
     def test_failed_item_is_skipped_failed(self):
         deps, table, _, _ = make_deps({}, {}, statuses={A: "failed"})
         orchestrator.run(run_input([A], [account("acc1")]), deps)
