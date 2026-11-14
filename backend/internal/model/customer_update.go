@@ -24,6 +24,10 @@ const (
 	PrefixUpdateOpt      = "CUOPT#"
 	PrefixUpdateURL      = "CUURL#"
 	PKUpdatePending      = "CUPENDING"
+	// SKUpdatePendingCursor is the run phases' rotation cursor row in the
+	// pending partition (attribute lastUserId). "#" sorts before any user id
+	// and is never a pending mark.
+	SKUpdatePendingCursor = "#CURSOR"
 
 	// SKUpdateURLMeta: the shared URL cache row is PK = CUURL#{urlHash}, SK = META,
 	// shared across users (a Python runtime will read and write the same key).
@@ -120,6 +124,9 @@ type UpdateItem struct {
 	State       string    `json:"state" dynamodbav:"state"`
 	Attempts    int       `json:"attempts" dynamodbav:"attempts"`
 	ExpiresAt   int64     `json:"expiresAt" dynamodbav:"pendingShareExpiresAt"`
+	// HeldUntil keeps a new item out of runs until this time (a draft was
+	// deferred by a day budget); zero means not held. Leaving state new clears it.
+	HeldUntil time.Time `json:"heldUntil,omitzero" dynamodbav:"heldUntil,omitempty"`
 }
 
 // UpdateURL is the shared fetched-content cache row for a normalized URL.
@@ -137,17 +144,35 @@ type UpdateURL struct {
 }
 
 // UpdateDecision records the relevance decision for one (URL, account).
+// Reason and GateInput are stored sealed, never as plaintext attributes;
+// GateInput is kept only for a needed choice.
 type UpdateDecision struct {
-	URLHash   string    `json:"urlHash" dynamodbav:"urlHash"`
-	AccountID string    `json:"accountId" dynamodbav:"accountId"`
-	Choice    string    `json:"choice" dynamodbav:"choice"`
-	Score     float64   `json:"score" dynamodbav:"score"`
-	Reason    string    `json:"reason" dynamodbav:"reason"`
-	Backend   string    `json:"backend" dynamodbav:"backend"`
-	RunID     string    `json:"runId" dynamodbav:"runId"`
-	Outcome   string    `json:"outcome" dynamodbav:"outcome"`
-	DecidedAt time.Time `json:"decidedAt" dynamodbav:"decidedAt"`
-	ExpiresAt int64     `json:"expiresAt" dynamodbav:"pendingShareExpiresAt"`
+	URLHash       string           `json:"urlHash" dynamodbav:"urlHash"`
+	AccountID     string           `json:"accountId" dynamodbav:"accountId"`
+	Choice        string           `json:"choice" dynamodbav:"choice"`
+	Score         float64          `json:"score" dynamodbav:"score"`
+	Reason        string           `json:"reason" dynamodbav:"-"`
+	GateInput     *UpdateGateInput `json:"gateInput,omitempty" dynamodbav:"-"`
+	Backend       string           `json:"backend" dynamodbav:"backend"`
+	RunID         string           `json:"runId" dynamodbav:"runId"`
+	Outcome       string           `json:"outcome" dynamodbav:"outcome"`
+	DiscardReason string           `json:"discardReason" dynamodbav:"discardReason"`
+	DecidedAt     time.Time        `json:"decidedAt" dynamodbav:"decidedAt"`
+	ExpiresAt     int64            `json:"expiresAt" dynamodbav:"pendingShareExpiresAt"`
+}
+
+// UpdateGateOption is one option the relevance gate scored.
+type UpdateGateOption struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// UpdateGateInput is the question, options and context the gate scored for a
+// needed decision, as the agent runtime writes it (gate.py decide_pair).
+type UpdateGateInput struct {
+	Question string             `json:"question"`
+	Options  []UpdateGateOption `json:"options"`
+	Context  string             `json:"context"`
 }
 
 // UpdateDraftOppty is an opportunity reference attached to a draft.
@@ -228,6 +253,10 @@ var updateDroppedQueryKeys = map[string]bool{
 	"sc_country": true, "sc_geo": true, "sc_outcome": true,
 	"trk": true, "trkcampaign": true, "ref_": true, "si": true,
 }
+
+// IsUpdateInternalHost reports whether host (already lowercased, no port) equals
+// an internal suffix or ends with "." plus one.
+func IsUpdateInternalHost(host string) bool { return isUpdateInternalHost(host) }
 
 func isUpdateInternalHost(host string) bool {
 	for _, s := range updateInternalHostSuffixes {
@@ -421,4 +450,7 @@ type PatchUpdateDraftRequest struct {
 type UpdateDraftsPage struct {
 	Drafts     []UpdateDraft `json:"drafts"`
 	NextCursor string        `json:"nextCursor"`
+	// Truncated reports that the all-accounts scan stopped at
+	// MaxUpdateDraftsScan rows with more rows remaining.
+	Truncated bool `json:"truncated,omitempty"`
 }

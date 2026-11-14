@@ -6,6 +6,7 @@ import types
 import unittest
 from unittest import mock
 
+import checks
 import llm
 import pipeline
 import researcher
@@ -323,6 +324,11 @@ class DraftPairTest(unittest.TestCase):
             result, _, _ = self.run_pair(write=FakeModel(dict(GOOD, why=why)))
             self.assertEqual(result.outcome, "discarded")
             self.assertIn("why_invalid", result.discard_reason)
+
+    def test_why_only_whitespace_set_is_invalid(self):
+        draft = writer.Draft(why=checks.WHITESPACE, body=GOOD_BODY, links=(ARTICLE,))
+        codes = pipeline._code_failures(draft, account(), [ARTICLE])
+        self.assertIn("why_invalid", codes)
 
     def test_writer_errors_twice(self):
         result, _, d = self.run_pair(write=FakeModel(llm.ModelOutputError("invalid_json")))

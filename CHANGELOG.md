@@ -35,6 +35,7 @@ manifests.
   deliver new links from followed RSS, site and YouTube sources into each
   subscriber's inbox (#970).
 - Customer update agent runtime: an AgentCore container that reads followed links, decides per customer whether an update is worth a draft, and writes sealed run results; not invoked by anything yet (#972, #973, #974, #975).
+- Billing ingest writes a per-account `services_in_use` object (service names only, no amounts) and the backend gains Go draft checks that match the agent's shared contract; nothing reads either yet (#976).
 
 ### Changed
 
