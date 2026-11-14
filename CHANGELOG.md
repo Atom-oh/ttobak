@@ -33,6 +33,7 @@ manifests.
 - Customer update collection: an hourly feed collector and a 10-minute fan-out worker
   deliver new links from followed RSS, site and YouTube sources into each
   subscriber's inbox (#970).
+- Customer update agent runtime: an AgentCore container that reads followed links, decides per customer whether an update is worth a draft, and writes sealed run results; not invoked by anything yet (#PR).
 
 ### Changed
 

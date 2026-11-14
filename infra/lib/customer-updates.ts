@@ -6,10 +6,29 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { extractionModelResources, NEWS_MODEL_ID } from './model-config';
+
+/** Inputs for the customer-update agent runtime execution role. */
+export interface CustomerUpdateAgentRuntimeProps {
+  /** Web search gateway ARN (us-east-1). */
+  webSearchGatewayArn: string;
+  /** ARN of the key that seals CURUN# result rows. */
+  recordKeyArn: string;
+}
 
 interface CustomerUpdatesProps {
   table: dynamodb.ITable;
+  /** Creates the agent runtime execution role when set. */
+  agentRuntime?: CustomerUpdateAgentRuntimeProps;
 }
+
+export const CUSTOMER_UPDATE_AGENT_ROLE_NAME = 'ttobak-agentcore-customer-update-role';
+/** ECR repository created by hand for the agent image (see the runbook). */
+export const CUSTOMER_UPDATE_AGENT_REPOSITORY = 'ttobak-customer-update-agent';
+/** The agent's writer/researcher model; luna is NEWS_MODEL_ID. */
+const CUSTOMER_UPDATE_WRITER_MODEL_ID = 'global.anthropic.claude-sonnet-5-5';
+/** Must equal store.SEAL_PURPOSE in backend/python/customer-update-agent. */
+const SEAL_PURPOSE = 'ttobak-customer-update-run';
 
 const leadingKeys = (keys: string[]) => ({
   'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': keys },
@@ -20,11 +39,14 @@ const leadingKeys = (keys: string[]) => ({
  * Customer update collection (ADR-004). The hourly collector fetches followed
  * feeds into shared CUFEED# rows and never touches USER# rows. The 10-minute
  * worker fans new entries out to subscribers. Neither role has KMS, S3,
- * Bedrock or secret access, and neither function has a URL.
+ * Bedrock or secret access, and neither function has a URL. With
+ * `agentRuntime`, it also creates the agent runtime execution role; the
+ * runtime itself and its ECR repository are created by hand.
  */
 export class CustomerUpdates extends Construct {
   readonly collector: lambda.Function;
   readonly worker: lambda.Function;
+  readonly agentRuntimeRole?: iam.Role;
 
   constructor(scope: Construct, id: string, props: CustomerUpdatesProps) {
     super(scope, id);
@@ -110,5 +132,67 @@ export class CustomerUpdates extends Construct {
         retryAttempts: 0, maxEventAge: cdk.Duration.minutes(10),
       })],
     });
+
+    if (props.agentRuntime) {
+      this.agentRuntimeRole = this.makeAgentRuntimeRole(props.table, props.agentRuntime);
+    }
+  }
+
+  /**
+   * Execution role for the hand-created AgentCore runtime (ADR-011). It reads
+   * and writes only CURUN#/CUURL# rows, seals results with GenerateDataKey
+   * (never Decrypt), and calls only luna, Sonnet 5.5 and the web search gateway.
+   */
+  private makeAgentRuntimeRole(table: dynamodb.ITable, runtime: CustomerUpdateAgentRuntimeProps): iam.Role {
+    const { partition, region, account } = cdk.Stack.of(this);
+    const role = new iam.Role(this, 'AgentRuntimeRole', {
+      roleName: CUSTOMER_UPDATE_AGENT_ROLE_NAME,
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': account },
+          ArnLike: { 'aws:SourceArn': `arn:${partition}:bedrock-agentcore:${region}:${account}:runtime/*` },
+        },
+      }),
+      description: 'Execution role of the TTOBAK customer update AgentCore runtime',
+    });
+    const add = (statement: iam.PolicyStatementProps) => role.addToPolicy(new iam.PolicyStatement(statement));
+
+    add({
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+      resources: [table.tableArn],
+      conditions: leadingKeys(['CURUN#*', 'CUURL#*']),
+    });
+    add({
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: [
+        ...extractionModelResources(partition, account, region, NEWS_MODEL_ID),
+        ...extractionModelResources(partition, account, region, CUSTOMER_UPDATE_WRITER_MODEL_ID),
+      ],
+    });
+    add({ actions: ['bedrock-agentcore:InvokeGateway'], resources: [runtime.webSearchGatewayArn] });
+    add({
+      actions: ['kms:GenerateDataKey'],
+      resources: [runtime.recordKeyArn],
+      conditions: { StringEquals: { 'kms:EncryptionContext:purpose': SEAL_PURPOSE } },
+    });
+
+    // Image pull and runtime logs, the AgentCore runtime execution role pattern.
+    add({
+      actions: ['ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer'],
+      resources: [`arn:${partition}:ecr:${region}:${account}:repository/${CUSTOMER_UPDATE_AGENT_REPOSITORY}`],
+    });
+    add({
+      actions: ['ecr:GetAuthorizationToken'], resources: ['*'],
+      conditions: { StringEquals: { 'aws:RequestedRegion': region } },
+    });
+    const runtimeLogs = `arn:${partition}:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/*`;
+    add({ actions: ['logs:CreateLogGroup', 'logs:DescribeLogStreams'], resources: [runtimeLogs] });
+    add({ actions: ['logs:CreateLogStream', 'logs:PutLogEvents'], resources: [`${runtimeLogs}:log-stream:*`] });
+    add({ actions: ['logs:DescribeLogGroups'], resources: [`arn:${partition}:logs:${region}:${account}:log-group:*`] });
+    add({
+      actions: ['cloudwatch:PutMetricData'], resources: ['*'],
+      conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
+    });
+    return role;
   }
 }

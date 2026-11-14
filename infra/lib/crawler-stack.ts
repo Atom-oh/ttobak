@@ -25,6 +25,12 @@ export interface CrawlerStackProps extends cdk.StackProps {
   dataSourceId?: string;
   webSearchGatewayUrl: string;
   webSearchGatewayArn: string;
+  /**
+   * Key ID (AiStack's record key) that seals customer-update run results.
+   * Set to create the customer-update agent runtime execution role. An ID, not
+   * an ARN: it reuses AiStack's existing key-ID export, so no new export.
+   */
+  customerUpdateRecordKeyId?: string;
 }
 
 export class CrawlerStack extends cdk.Stack {
@@ -181,8 +187,15 @@ export class CrawlerStack extends cdk.Stack {
       legacyWrites: legacyWrites.valueAsString,
     });
 
-    // Customer update collection: hourly feed collector and 10-minute fan-out worker.
-    new CustomerUpdates(this, 'CustomerUpdates', { table: props.table });
+    // Customer update collection: hourly feed collector and 10-minute fan-out
+    // worker, plus the agent runtime execution role when the record key is set.
+    new CustomerUpdates(this, 'CustomerUpdates', {
+      table: props.table,
+      agentRuntime: props.customerUpdateRecordKeyId ? {
+        webSearchGatewayArn: props.webSearchGatewayArn,
+        recordKeyArn: `arn:${this.partition}:kms:${this.region}:${this.account}:key/${props.customerUpdateRecordKeyId}`,
+      } : undefined,
+    });
 
     // Manual "collect now" for one account-owned source (ADR-004). The event
     // carries only IDs. The versioned starter claims the API-claimed request

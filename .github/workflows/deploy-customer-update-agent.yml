@@ -1,0 +1,128 @@
+name: Deploy Customer Update Agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/python/customer-update-agent/**'
+      - 'backend/python/crawler/article_fetcher.py'
+      - 'backend/python/crawler/news_pipeline.py'
+      - '.github/workflows/deploy-customer-update-agent.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-customer-update-agent
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  CUSTOMER_UPDATE_ECR_REPO: ${{ vars.CUSTOMER_UPDATE_ECR_REPO }}
+  CUSTOMER_UPDATE_RUNTIME_ID: ${{ vars.CUSTOMER_UPDATE_RUNTIME_ID }}
+  # Optional override (see docs/runbooks/customer-update-agent.md); empty keeps luna.
+  CUSTOMER_UPDATE_ORCHESTRATOR_MODEL_ID: ${{ vars.CUSTOMER_UPDATE_ORCHESTRATOR_MODEL_ID }}
+  WEB_SEARCH_GATEWAY_URL: ${{ vars.WEB_SEARCH_GATEWAY_URL }}
+  # Fixed: the Web Search Gateway only deploys to us-east-1 (same as the research agent).
+  WEB_SEARCH_GATEWAY_REGION: us-east-1
+  TABLE_NAME: ttobak-main
+
+jobs:
+  build-and-deploy:
+    runs-on: ttobak-arm
+    steps:
+      # Before any AWS call: until the owner finishes setup (runbook), a run is a
+      # green no-op: every later step is skipped, nothing is built, pushed or
+      # deployed. A wrong repository name fails, because the role pins it.
+      - name: Check repository variables
+        id: setup
+        run: |
+          if [ -n "${CUSTOMER_UPDATE_ECR_REPO}" ] && [ "${CUSTOMER_UPDATE_ECR_REPO}" != "ttobak-customer-update-agent" ]; then
+            echo "::error::CUSTOMER_UPDATE_ECR_REPO must be ttobak-customer-update-agent (the execution role pulls only that repository)."
+            exit 1
+          fi
+          missing=""
+          for name in AWS_REGION AWS_ACCOUNT_ID CUSTOMER_UPDATE_ECR_REPO CUSTOMER_UPDATE_RUNTIME_ID WEB_SEARCH_GATEWAY_URL; do
+            if [ -z "${!name}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::notice::Customer update agent setup is incomplete (unset:${missing}). Skipping build and deploy; see docs/runbooks/customer-update-agent.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.setup.outputs.ready == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.setup.outputs.ready == 'true'
+        with:
+          python-version: '3.13'
+
+      - name: Run unit tests
+        if: steps.setup.outputs.ready == 'true'
+        working-directory: backend/python/customer-update-agent
+        run: |
+          python3 -m pip install 'boto3<2' cryptography fastapi httpx
+          python3 -m unittest discover -p 'test_*.py' -v
+
+      - name: Install AWS CLI
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve record encryption key
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          KMS_KEY_ID=$(aws cloudformation describe-stacks --stack-name TtobakAiStack --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='KmsKeyId'].OutputValue" --output text)
+          if [ -z "${KMS_KEY_ID}" ] || [ "${KMS_KEY_ID}" = "None" ]; then
+            echo "::error::TtobakAiStack output KmsKeyId not found."
+            exit 1
+          fi
+          echo "KMS_KEY_ID=${KMS_KEY_ID}" >> "$GITHUB_ENV"
+
+      - name: Login to ECR
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+      - name: Build and push container
+        if: steps.setup.outputs.ready == 'true'
+        # Build context is backend/python: the image also carries crawler/article_fetcher.py.
+        working-directory: backend/python
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.CUSTOMER_UPDATE_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f customer-update-agent/Dockerfile -t "${ECR_URI}:latest" -t "${ECR_URI}:${IMAGE_TAG::8}" .
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${IMAGE_TAG::8}"
+
+      - name: Update AgentCore Runtime
+        if: steps.setup.outputs.ready == 'true'
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.CUSTOMER_UPDATE_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          ARTIFACT=$(jq -n --arg uri "${ECR_URI}:${IMAGE_TAG::8}" '{containerConfiguration:{containerUri:$uri}}')
+          ENV_VARS=$(jq -n \
+            --arg table "${TABLE_NAME}" --arg key "${KMS_KEY_ID}" \
+            --arg url "${WEB_SEARCH_GATEWAY_URL}" --arg region "${WEB_SEARCH_GATEWAY_REGION}" \
+            --arg orchestrator "${CUSTOMER_UPDATE_ORCHESTRATOR_MODEL_ID}" \
+            '{TABLE_NAME:$table, KMS_KEY_ID:$key, WEB_SEARCH_GATEWAY_URL:$url, WEB_SEARCH_GATEWAY_REGION:$region}
+             + (if $orchestrator == "" then {} else {ORCHESTRATOR_MODEL_ID:$orchestrator} end)')
+          aws bedrock-agentcore-control update-agent-runtime \
+            --agent-runtime-id "${CUSTOMER_UPDATE_RUNTIME_ID}" \
+            --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-customer-update-role" \
+            --network-configuration '{"networkMode":"PUBLIC"}' \
+            --agent-runtime-artifact "${ARTIFACT}" \
+            --environment-variables "${ENV_VARS}"
