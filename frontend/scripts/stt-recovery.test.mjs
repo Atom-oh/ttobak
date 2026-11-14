@@ -307,6 +307,7 @@ function streamingFixture({ send, refreshSession = async () => 'token', getIdTok
     },
     '@aws-sdk/credential-providers': { fromCognitoIdentityPool: () => ({}) },
     '@/lib/liveVocabulary': liveVocabularyModule,
+    '@/lib/interpretSpeakers': loadModule('interpretSpeakers', {}),
   }, {
     AudioContext: class {
       state = 'running';

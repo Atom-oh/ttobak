@@ -12,6 +12,12 @@
   the candidates `ko-KR` and `en-US`; streaming prefers `ko-KR`. The Mac caption
   overlay may add one extra live language (ADR-018). The streaming client still
   supports a single fixed language as an explicit opt-out.
+- The Mac interpret screen asks Transcribe Streaming for speaker labels
+  (`ShowSpeakerLabel`) and colours each caption line by the speaker who said
+  most of its words; the request was accepted for `ko-KR`, `en-US`, `zh-CN`,
+  `ja-JP` and two-language identification in `ap-northeast-2` (checked
+  2026-11-14). Labels are kept in memory with the captions. Recording
+  captions and the floating caption windows do not request or show them.
 - A batch Transcribe job attaches its vocabulary through the Korean entry of
   the language settings (ADR-008). The legacy Nova Sonic method is a Transcribe
   job with the same language options and no vocabulary; its name does not mean
@@ -83,6 +89,11 @@
 - Candidate restriction does not guarantee technical-term accuracy or support
   unexpected languages. Initial detection can delay captions.
 - Web Speech and Whisper do not switch languages automatically.
+- Live speaker labels are acoustic guesses on one mixed channel (microphone
+  plus system audio): only final results carry them, some finals carry none
+  (seen with two-language identification), similar voices can merge, and the
+  numbering restarts when the caption stream reconnects, so a colour can move
+  to another person mid-session.
 - The translation limiter fails open on counter errors.
 - Real per-meeting request rates, the interpreter's latency distribution and
   the validation rejection rate have not been measured in production; the
