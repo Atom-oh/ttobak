@@ -194,8 +194,10 @@ func (r *CustomerUpdateRuns) logItemErr(userID string, err error, stats *RunStat
 // wins: an item with a pair deferred by a day budget (Go's, or the runtime's
 // account_budget/draft_budget) is held until the next KST day; one with a pair
 // deferred for research_budget stays new; both keep attempts unchanged. Else
-// a decided or skipped row sets the state, and a deferred row (gate_error,
-// budget) or no row adds one attempt.
+// a decided row sets decided unless the lease says an account was left out
+// (uncovered capped: held until the next KST day; trimmed: stays new), a
+// skipped row sets skipped, and a deferred row (gate_error, budget) or no row
+// adds one attempt.
 func (r *CustomerUpdateRuns) applyItemRows(ctx context.Context, f *finalizeRun, rows []model.RunItemRow, stats *RunStats) {
 	byHash := map[string]model.RunItemRow{}
 	for _, row := range rows {
@@ -218,10 +220,16 @@ func (r *CustomerUpdateRuns) applyItemRows(ctx context.Context, f *finalizeRun, 
 		if f.keepNew[h] {
 			continue
 		}
-		switch byHash[h].State {
-		case "decided":
+		switch state := byHash[h].State; {
+		case state == "decided" && f.run.Uncovered == model.UpdateRunUncoveredCapped:
+			// A capped account left out still has to see the item tomorrow.
+			r.logItemErr(f.userID, r.holdItem(ctx, f.userID, h, f.now), stats)
+			stats.Held++
+		case state == "decided" && f.run.Uncovered == model.UpdateRunUncoveredTrimmed:
+			// Stays new: the next payload leaves out decided accounts.
+		case state == "decided":
 			r.logItemErr(f.userID, r.setItem(ctx, f.userID, h, model.UpdateItemDecided, 0), stats)
-		case "skipped":
+		case state == "skipped":
 			r.logItemErr(f.userID, r.setItem(ctx, f.userID, h, model.UpdateItemSkipped, 0), stats)
 		default: // deferred, or no row
 			r.bumpItem(ctx, f.userID, it, stats)
@@ -296,21 +304,36 @@ func (r *CustomerUpdateRuns) acceptDecision(ctx context.Context, f *finalizeRun,
 		}
 		return err
 	}
-	if stored == nil || stored.Choice != model.UpdateChoiceNeeded || !wantsDraft {
+	if stored == nil {
 		return nil
 	}
-	switch {
-	case stored.RunID == f.run.RunID:
+	if stored.RunID != f.run.RunID && !finalDecision(stored.Choice, stored.Outcome) && finalDecision(d.Choice, d.Outcome) {
+		// An earlier run left the pair open (deferred); this run's final
+		// answer replaces it, unless another finalize got there first.
+		switch err := r.deps.Repo.ReplaceOpenDecision(ctx, f.userID, d); {
+		case err == nil:
+			f.drafting[pair] = wantsDraft
+		case errors.Is(err, repository.ErrConditionFailed), errors.Is(err, repository.ErrInvalidUpdateRun):
+			stats.Ignored++
+		default:
+			return err
+		}
+		return nil
+	}
+	if stored.RunID == f.run.RunID && stored.Choice == model.UpdateChoiceNeeded && wantsDraft {
 		// A repeated finalize of this run; the stored choice decides.
 		switch stored.Outcome {
 		case "", model.UpdateOutcomeDrafted, model.UpdateOutcomeDeferred:
 			f.drafting[pair] = true
 		}
-	case stored.Outcome == model.UpdateOutcomeDeferred:
-		// An earlier run's draft was held by a day budget.
-		f.drafting[pair] = true
 	}
 	return nil
+}
+
+// finalDecision reports whether a stored decision is final (counted by
+// ListDecidedAccounts): not_needed, or an outcome of drafted or discarded.
+func finalDecision(choice, outcome string) bool {
+	return choice == model.UpdateChoiceNotNeeded || outcome == model.UpdateOutcomeDrafted || outcome == model.UpdateOutcomeDiscarded
 }
 
 func (r *CustomerUpdateRuns) setOutcome(ctx context.Context, f *finalizeRun, pair runPair, outcome, reason string) error {

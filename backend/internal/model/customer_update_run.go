@@ -40,7 +40,17 @@ type UpdateRun struct {
 	LeaseUntil time.Time `json:"leaseUntil" dynamodbav:"leaseUntil"`
 	ItemHashes []string  `json:"itemHashes" dynamodbav:"itemHashes"`
 	AccountIDs []string  `json:"accountIds" dynamodbav:"accountIds"`
+	// Uncovered says why an in-scope account with an undecided pair for a
+	// leased item was left out of the payload: "" (none, or an older lease
+	// without the attribute), capped (its day cap) or trimmed (payload size,
+	// also when both happened).
+	Uncovered string `json:"uncovered,omitempty" dynamodbav:"uncovered,omitempty"`
 }
+
+const (
+	UpdateRunUncoveredCapped  = "capped"
+	UpdateRunUncoveredTrimmed = "trimmed"
+)
 
 // UpdateDay counts the drafts accepted for a user on one KST day, and the
 // (item, account) pairs researched that day (accepted DEC rows whose outcome

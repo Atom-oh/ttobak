@@ -79,33 +79,69 @@ func runtimeValidURL(u string) bool {
 	return err == nil && parsed.Hostname() != ""
 }
 
-// withDecided sets p.Items from items: each item's decidedAccounts are its
-// decided accounts among p.Accounts, and an item whose every payload account
-// is decided is left out and returned in done.
-func withDecided(p runPayload, items []runPayloadItem, decided map[string]map[string]bool) (runPayload, []string) {
-	p.Items = make([]runPayloadItem, 0, len(items))
-	var done []string
+// decidedPairs holds, per item hash, the accounts whose pair already has a
+// final stored decision.
+type decidedPairs map[string]map[string]bool
+
+// hasOpen reports whether some account in ids has an undecided pair with
+// some item in items.
+func (d decidedPairs) hasOpen(items []runPayloadItem, ids []string) bool {
+	for _, it := range items {
+		for _, id := range ids {
+			if !d[it.URLHash][id] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pruneDecided leaves out, until nothing changes, items whose every account
+// is decided and accounts decided for every remaining item (they have nothing
+// to do, and leaving them out makes room for the others). It returns the
+// pruned payload, with each item's decidedAccounts among the kept accounts.
+func pruneDecided(p runPayload, items []runPayloadItem, decided decidedPairs) runPayload {
+	accounts := p.Accounts
+	for {
+		keptItems := make([]runPayloadItem, 0, len(items))
+		for _, it := range items {
+			for _, a := range accounts {
+				if !decided[it.URLHash][a.AccountID] {
+					keptItems = append(keptItems, it)
+					break
+				}
+			}
+		}
+		keptAccounts := make([]AccountPack, 0, len(accounts))
+		for _, a := range accounts {
+			if decided.hasOpen(keptItems, []string{a.AccountID}) {
+				keptAccounts = append(keptAccounts, a)
+			}
+		}
+		if len(keptItems) == len(items) && len(keptAccounts) == len(accounts) {
+			break
+		}
+		items, accounts = keptItems, keptAccounts
+	}
+	p.Accounts, p.Items = accounts, make([]runPayloadItem, 0, len(items))
 	for _, it := range items {
 		it.DecidedAccounts = []string{}
-		for _, a := range p.Accounts {
+		for _, a := range accounts {
 			if decided[it.URLHash][a.AccountID] {
 				it.DecidedAccounts = append(it.DecidedAccounts, a.AccountID)
 			}
 		}
-		if len(it.DecidedAccounts) == len(p.Accounts) {
-			done = append(done, it.URLHash)
-			continue
-		}
 		p.Items = append(p.Items, it)
 	}
-	return p, done
+	return p
 }
 
 // fitRunPayload keeps the packs (in order, at most 40) that are each at most
-// 8,000 bytes and drops accounts from the tail until the payload fits
-// maxBytes, applying withDecided to the accounts kept. With no item left it
-// returns a nil body, the payload and the fully decided items.
-func fitRunPayload(p runPayload, items []runPayloadItem, decided map[string]map[string]bool, maxBytes int) ([]byte, runPayload, []string, error) {
+// 8,000 bytes, prunes decided items and accounts (pruneDecided), and drops
+// accounts from the tail until the payload fits maxBytes, pruning again after
+// each drop. It returns the body (nil with no item left), the payload, the
+// items left out as fully decided, and the account ids dropped for size.
+func fitRunPayload(p runPayload, items []runPayloadItem, decided decidedPairs, maxBytes int) ([]byte, runPayload, []runPayloadItem, []string, error) {
 	kept := make([]AccountPack, 0, len(p.Accounts))
 	for _, a := range p.Accounts {
 		if len(kept) == model.MaxUpdateRunAccounts {
@@ -116,28 +152,47 @@ func fitRunPayload(p runPayload, items []runPayloadItem, decided map[string]map[
 		}
 	}
 	p.Accounts = kept
-	for len(p.Accounts) > 0 {
-		q, done := withDecided(p, items, decided)
+	if len(kept) == 0 {
+		return nil, p, nil, nil, errRunNoAccountsFit
+	}
+	var trimmed []string
+	for {
+		q := pruneDecided(p, items, decided)
+		inQ := map[string]bool{}
+		for _, it := range q.Items {
+			inQ[it.URLHash] = true
+		}
+		done := []runPayloadItem{}
+		for _, it := range items {
+			if !inQ[it.URLHash] {
+				done = append(done, it)
+			}
+		}
 		if len(q.Items) == 0 {
-			return nil, q, done, nil
+			return nil, q, done, trimmed, nil
 		}
 		b, err := marshalRunPayload(q)
 		if err != nil {
-			return nil, q, done, err
+			return nil, q, done, trimmed, err
 		}
 		if len(b) <= maxBytes {
-			return b, q, done, nil
+			return b, q, done, trimmed, nil
 		}
-		p.Accounts = p.Accounts[:len(p.Accounts)-1]
+		if len(q.Accounts) == 1 {
+			return nil, q, done, trimmed, errRunNoAccountsFit
+		}
+		trimmed = append(trimmed, q.Accounts[len(q.Accounts)-1].AccountID)
+		p.Accounts = q.Accounts[:len(q.Accounts)-1]
 	}
-	return nil, p, nil, errRunNoAccountsFit
 }
 
 // definiteRefusal reports whether an invoke failure is a definite answer, so
 // no run is running: a runtime answer that is not an acceptance, or an AWS
-// API error response (access, validation, not found, throttling, any status).
-// Ambiguous are failures without a service response (timeouts, context
-// errors, transport errors), an unreadable or invalid answer
+// API client-fault response (access, validation, not found, throttling).
+// Ambiguous are server faults (fault Server or HTTP 5xx: the service may
+// have failed after the runtime claimed the run id), failures without a
+// service response (timeouts, context errors, transport errors), an
+// unreadable or invalid answer
 // (ErrRunOutcomeUnknown) and RUN_EXISTS (the runId was claimed, so a run with
 // it may be running).
 func definiteRefusal(err error) (refused, contract bool) {
@@ -148,6 +203,10 @@ func definiteRefusal(err error) (refused, contract bool) {
 	case errors.As(err, &na):
 		return na.Code != "RUN_EXISTS", na.Contract && na.Code != "RUN_EXISTS"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled), errors.Is(err, ErrRunOutcomeUnknown):
+		return false, false
+	case errors.As(err, &resp) && resp.HTTPStatusCode() >= 500,
+		errors.As(err, &api) && api.ErrorFault() == smithy.FaultServer:
+		// A server fault may come after the runtime claimed the run id.
 		return false, false
 	case errors.As(err, &api), errors.As(err, &resp):
 		return true, false
@@ -216,7 +275,7 @@ func (r *CustomerUpdateRuns) start(ctx context.Context, mark model.UpdatePending
 	if len(packs) == 0 {
 		return "", r.noPacks(ctx, userID, valid, build, now, stats)
 	}
-	decided := map[string]map[string]bool{}
+	decided := decidedPairs{}
 	toSend := make([]runPayloadItem, 0, len(valid))
 	for _, it := range valid {
 		ids, err := repo.ListDecidedAccounts(ctx, userID, it.URLHash)
@@ -240,13 +299,25 @@ func (r *CustomerUpdateRuns) start(ctx context.Context, mark model.UpdatePending
 			MaxDrafts:        min(maxRunDraftsBudget, maxDayDrafts-day.Total),
 		},
 	}
-	body, p, done, err := fitRunPayload(p, toSend, decided, r.maxPayloadBytes)
+	body, p, done, trimmed, err := fitRunPayload(p, toSend, decided, r.maxPayloadBytes)
 	if err != nil {
 		return runID, err
 	}
-	// Every kept pair of these items was decided in an earlier run.
-	for _, h := range done {
-		if err := r.setItem(ctx, userID, h, model.UpdateItemDecided, 0); err != nil {
+	// Every sent pair of these items was decided in an earlier run. One with
+	// an undecided pair for an account left out waits for it: until the next
+	// KST day for a capped account, else (trimmed) it stays new.
+	for _, it := range done {
+		one := []runPayloadItem{it}
+		var err error
+		switch {
+		case decided.hasOpen(one, build.CappedAccounts):
+			err = r.holdItem(ctx, userID, it.URLHash, now)
+			stats.Held++
+		case decided.hasOpen(one, trimmed):
+		default:
+			err = r.setItem(ctx, userID, it.URLHash, model.UpdateItemDecided, 0)
+		}
+		if err != nil {
 			return "", err
 		}
 	}
@@ -254,6 +325,12 @@ func (r *CustomerUpdateRuns) start(ctx context.Context, mark model.UpdatePending
 		return "", nil
 	}
 	lease := &model.UpdateRun{RunID: runID, StartedAt: now, LeaseUntil: now.Add(runLeaseDuration)}
+	switch {
+	case decided.hasOpen(p.Items, trimmed):
+		lease.Uncovered = model.UpdateRunUncoveredTrimmed
+	case decided.hasOpen(p.Items, build.CappedAccounts):
+		lease.Uncovered = model.UpdateRunUncoveredCapped
+	}
 	inRun := map[string]bool{}
 	for _, it := range p.Items {
 		lease.ItemHashes = append(lease.ItemHashes, it.URLHash)

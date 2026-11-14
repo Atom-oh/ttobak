@@ -576,6 +576,11 @@ func validateRun(userID string, run *model.UpdateRun) error {
 			return invalidRun("accountId")
 		}
 	}
+	switch run.Uncovered {
+	case "", model.UpdateRunUncoveredCapped, model.UpdateRunUncoveredTrimmed:
+	default:
+		return invalidRun("uncovered")
+	}
 	return nil
 }
 
@@ -1225,6 +1230,57 @@ func validOutcome(o string) bool {
 // decisionPutInput builds the sealed create-if-absent-or-expired write. The
 // caller's decision is not mutated.
 func decisionPutInput(ctx context.Context, s sealing.Sealer, tableName, userID string, d *model.UpdateDecision, now time.Time) (*dynamodb.PutItemInput, error) {
+	av, err := decisionItem(ctx, s, userID, d, now)
+	if err != nil {
+		return nil, err
+	}
+	in, err := putIfAbsentOrExpired(tableName, av, now)
+	if err != nil {
+		return nil, fmt.Errorf("build create-decision condition: %w", err)
+	}
+	return in, nil
+}
+
+// decisionReplaceOpenInput builds the same sealed row as decisionPutInput,
+// written only over a live open decision: needed with an outcome other than
+// drafted or discarded (deferred, or none).
+func decisionReplaceOpenInput(ctx context.Context, s sealing.Sealer, tableName, userID string, d *model.UpdateDecision, now time.Time) (*dynamodb.PutItemInput, error) {
+	av, err := decisionItem(ctx, s, userID, d, now)
+	if err != nil {
+		return nil, err
+	}
+	cond, err := expression.NewBuilder().WithCondition(expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name(customerUpdateTTLAttribute).GreaterThan(expression.Value(now.Unix()))).
+		And(expression.Name("choice").Equal(expression.Value(model.UpdateChoiceNeeded))).
+		And(expression.Not(expression.Name("outcome").In(expression.Value(model.UpdateOutcomeDrafted), expression.Value(model.UpdateOutcomeDiscarded))))).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build replace-decision condition: %w", err)
+	}
+	return &dynamodb.PutItemInput{
+		TableName: aws.String(tableName), Item: av, ConditionExpression: cond.Condition(),
+		ExpressionAttributeNames: cond.Names(), ExpressionAttributeValues: cond.Values(),
+	}, nil
+}
+
+// ReplaceOpenDecision overwrites a live open (needed, not drafted or
+// discarded) decision with d, sealed as a fresh row; any other stored state
+// returns ErrConditionFailed.
+func (r *CustomerUpdateRepository) ReplaceOpenDecision(ctx context.Context, userID string, d *model.UpdateDecision) error {
+	in, err := decisionReplaceOpenInput(ctx, r.sealer, r.tableName, userID, d, r.clock())
+	if err != nil {
+		return err
+	}
+	if _, err := r.client.PutItem(ctx, in); err != nil {
+		if isConditionFailed(err) {
+			return fmt.Errorf("%w: update decision is not open", ErrConditionFailed)
+		}
+		return fmt.Errorf("failed to replace update decision: %w", err)
+	}
+	return nil
+}
+
+// decisionItem validates and seals one decision row.
+func decisionItem(ctx context.Context, s sealing.Sealer, userID string, d *model.UpdateDecision, now time.Time) (map[string]types.AttributeValue, error) {
 	if userID == "" || d == nil {
 		return nil, invalidRun("decision")
 	}
@@ -1264,11 +1320,7 @@ func decisionPutInput(ctx context.Context, s sealing.Sealer, tableName, userID s
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal update decision: %w", err)
 	}
-	in, err := putIfAbsentOrExpired(tableName, av, now)
-	if err != nil {
-		return nil, fmt.Errorf("build create-decision condition: %w", err)
-	}
-	return in, nil
+	return av, nil
 }
 
 // PutDecisionIfAbsent creates a decision; a live decision for the same (URL,
