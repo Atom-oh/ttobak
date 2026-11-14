@@ -913,7 +913,10 @@ no VPC, function URL or other public resource (ADR-004):
   minutes) runs from rule `ttobak-customer-update-collect`, `rate(1 hour)`, no
   retries. Its own role has `Query` on leading key `CUFEEDS` and
   `GetItem`/`PutItem`/`UpdateItem`/`Query` on `CUFEED#*`, no `USER#` key, no
-  index and no Scan, plus its own log group.
+  index and no Scan, plus its own log group. It reads feed state with a strongly
+  consistent `GetItem` and sets a `writingAt` write-intent marker on the state
+  row before writing entries, which the next run uses to publish an
+  unacknowledged run; DynamoDB errors do not count as feed failures (ADR-004).
 - `ttobak-customer-updates` (`provided.al2023` ARM64, asset
   `backend/cmd/customer-updates` built as `bootstrap`, 512 MB, 5 minutes,
   reserved concurrency 1) runs from rule `ttobak-customer-update-tick`,

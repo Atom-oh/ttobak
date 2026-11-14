@@ -523,14 +523,31 @@ writer for the same rows.
   `site` wins. Feeds run in a shuffled order each run, and no new feed starts
   with less than 270 s remaining (one feed can take about 250 s). Feed and page
   URLs over 2,048 characters are dropped.
-- **Entries and baseline.** Every run keeps only entries published in the last
-  3 days, the newest 50, and drops undated entries. A `site` source with no feed
+- **Entries and baseline.** Every run keeps only entries published from 3 days
+  ago to one day ahead, the newest 50, and drops undated entries. A `site` source with no feed
   stores the whole page as its link baseline on its first run and delivers
   nothing; later runs deliver at most 30 new links and record only delivered
   links (plus the previous baseline) as known, so the rest arrive on later runs.
-  Other kinds never use the site path.
+  The baseline holds a 16-hex SHA-256 prefix per link (at most 2,000), never
+  URLs; older URL-valued baselines are normalized on read. Other kinds never use
+  the site path. The state is read with a strongly consistent `GetItem`, so a
+  just-committed baseline is never missed and new links are not marked known
+  undelivered.
+- **Write intent.** Entries are written with put-if-absent, then the state's
+  `updatedAt` is published. Before the first entry put of a run that has entries
+  to write, the collector sets `writingAt` (the run's `seenAt` time) with an
+  attribute-level update; the run's final state update, on success or failure,
+  removes it. If a run leaves `writingAt` set and `updatedAt` missing or older,
+  the next run publishes `updatedAt` as the later of the stored `writingAt` and
+  its own time when it wrote entries, even when every put was a duplicate, and
+  removes the marker. Entries from a run whose acknowledgement was lost therefore
+  reach subscribers without waiting for a new entry. The Go model ignores the
+  attribute.
 - **Failures.** A failed run records one code (`fetch`, `content_type`, `too_large`, `parse` or `no_feed`) and
   a failure count on the state row; the source list shows it as a feed error.
+  DynamoDB errors (throttling, transient get/put/update failures) are not feed
+  failures: they are contained to that feed and counted as `failed` in the run
+  stats, but set no error and do not raise the failure count.
   A failure while using a stored `resolvedUrl` also removes it, so the next run
   rediscovers the feed from the subscription URL. After 5 consecutive failures
   the feed is retried at most once a day. A successful run resets the count.
@@ -552,8 +569,10 @@ writer for the same rows.
   the API). A source without one predates the registry: listing sources heals it
   by upserting its registry row with its current status (keeping any `fannedAt`)
   and storing the hash in one transaction that requires the status unchanged;
-  failures are logged and do not fail the list. Status changes and deletes use
-  the stored hash, so a later normalization change cannot orphan a registry row.
+  failures are logged and do not fail the list. Pause, resume and delete resolve
+  the source with a strongly consistent keyed read and write the label, status
+  and registry row in one transaction. They use the stored hash, so a later
+  normalization change cannot orphan a registry row.
   A feed state read failure omits that source's feed error.
 - **Logs.** Only the first 12 characters of the feed hash and counts; never URLs,
   titles or user data.
