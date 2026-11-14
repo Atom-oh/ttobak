@@ -14,6 +14,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async request => {
   appendFileSync(record, JSON.stringify(request.params.arguments) + '\n');
   const alias = String(request.params.arguments.inputs[0]).split('/').pop();
+  if (alias === 'broken') return { isError: true, content: [{ type: 'text', text: 'record unavailable' }] };
+  if (alias === 'crash') process.exit(1);
   if (alias === 'loggedout') return { isError: true, content: [{ type: 'text', text: 'Midway cookie expired, run mwinit' }] };
   const body = alias === 'gone'
     ? { content: { status: 'error', content: null } }

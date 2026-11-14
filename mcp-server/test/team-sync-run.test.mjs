@@ -212,3 +212,32 @@ test('apply with no changes sends nothing', async t => {
   assert.deepEqual(ctx.output(), { ok: true, updated: [], unchanged: 0, conflicts: [], rejected: [] });
   assert.equal(ctx.writes.length, 0);
 });
+
+// A real stdio fake of builder-mcp on PATH, with the real directory connector.
+function realDirectory(t, users) {
+  const ctx = setup(t, { users });
+  const bin = join(ctx.home, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'builder-mcp'), `#!${process.execPath}\nprocess.argv.push(${JSON.stringify(join(ctx.home, 'rec.jsonl'))});\n` +
+    `import(${JSON.stringify(`file://${FAKE_BUILDER}`)});\n`);
+  chmodSync(join(bin, 'builder-mcp'), 0o755);
+  delete ctx.environment.openDirectory;
+  ctx.environment.env = { PATH: bin };
+  return ctx;
+}
+
+test('a non-auth tool error for one alias makes it notFound and the run continues', async t => {
+  const ctx = realDirectory(t, [user('u1', 'alice@amazon.com', 'old'), user('u2', 'broken@amazon.com'), user('u3', 'bob@amazon.com')]);
+  assert.equal(await ctx.run(['run']), 0);
+  const out = ctx.output();
+  assert.deepEqual(out.notFound, ['broken']);
+  assert.deepEqual(out.changes.map(change => change.alias), ['alice', 'bob']);
+});
+
+test('a directory transport failure ends with DIRECTORY_UNAVAILABLE and stores nothing', async t => {
+  const ctx = realDirectory(t, [user('u1', 'alice@amazon.com', 'old'), user('u2', 'crash@amazon.com')]);
+  assert.equal(await ctx.run(['run']), 2);
+  assert.deepEqual(ctx.output(), { ok: false, code: 'DIRECTORY_UNAVAILABLE' });
+  assert.equal(existsSync(ctx.previewPath), false);
+  assert.equal(ctx.writes.length, 0);
+});

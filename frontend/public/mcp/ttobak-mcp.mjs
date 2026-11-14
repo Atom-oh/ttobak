@@ -33143,7 +33143,16 @@ async function openDirectory(environment) {
   );
   return {
     async lookup(alias2) {
-      const result = await session.call(DIRECTORY_TOOL, { inputs: [`${DIRECTORY_URL_PREFIX}${alias2}`] });
+      let result;
+      try {
+        result = await session.call(DIRECTORY_TOOL, { inputs: [`${DIRECTORY_URL_PREFIX}${alias2}`] });
+      } catch (error3) {
+        if (error3 instanceof ToolResultError) return null;
+        if (error3 instanceof IntakeError && error3.code !== "AUTH_EXPIRED_MIDWAY") {
+          throw new IntakeError("DIRECTORY_UNAVAILABLE", `the directory call failed (${error3.code})`);
+        }
+        throw error3;
+      }
       const text5 = (result.content ?? []).map((item2) => item2.type === "text" ? item2.text : "").join("\n");
       return parsePerson(alias2, text5);
     },

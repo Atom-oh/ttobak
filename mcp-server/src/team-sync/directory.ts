@@ -4,7 +4,7 @@
 
 import { IntakeError } from '../intake/errors.js';
 import { parsePathList, resolveCommand } from '../intake/hosts.js';
-import { AUTH_PATTERN, McpSession } from '../intake/mcp-client.js';
+import { AUTH_PATTERN, McpSession, ToolResultError } from '../intake/mcp-client.js';
 import type { IntakeEnvironment } from '../intake/run.js';
 import { TEAM_PATTERN, type DirectoryPerson } from './rule.js';
 
@@ -62,7 +62,17 @@ export async function openDirectory(environment: IntakeEnvironment): Promise<Dir
     { pathDirs, allowedTools: [DIRECTORY_TOOL], callTimeoutMs: CALL_TIMEOUT_MS });
   return {
     async lookup(alias) {
-      const result = await session.call(DIRECTORY_TOOL, { inputs: [`${DIRECTORY_URL_PREFIX}${alias}`] });
+      let result;
+      try {
+        result = await session.call(DIRECTORY_TOOL, { inputs: [`${DIRECTORY_URL_PREFIX}${alias}`] });
+      } catch (error) {
+        // The directory answered this alias with a non-auth error: no proposal for it.
+        if (error instanceof ToolResultError) return null;
+        if (error instanceof IntakeError && error.code !== 'AUTH_EXPIRED_MIDWAY') {
+          throw new IntakeError('DIRECTORY_UNAVAILABLE', `the directory call failed (${error.code})`);
+        }
+        throw error;
+      }
       const text = (result.content ?? []).map(item => item.type === 'text' ? item.text : '').join('\n');
       return parsePerson(alias, text);
     },
