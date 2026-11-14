@@ -56,6 +56,9 @@
     "allow-report-get-state",
     "allow-report-settings-get",
     "allow-report-settings-set",
-    "allow-report-slack-channels-refresh"
+    "allow-report-slack-channels-refresh",
+    "allow-team-sync-run",
+    "allow-team-sync-cancel",
+    "allow-team-sync-get-state"
   ]
 }

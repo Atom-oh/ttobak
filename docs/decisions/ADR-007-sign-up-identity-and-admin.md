@@ -24,7 +24,9 @@
 
 - Every app client may write only `name` and `email`. `custom:*` attributes are
   authorization data shared with cc-on-bedrock: the list is append-only and
-  only admin APIs write them.
+  only admin APIs write them. The service writes `name`, and `custom:department`
+  only through the admin team sync (`POST /api/settings/users/team-sync`); it
+  never writes another `custom:*` attribute.
 - Users may change their own e-mail; Cognito keeps the original until the new
   one is verified.
 

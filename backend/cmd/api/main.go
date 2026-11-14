@@ -585,6 +585,7 @@ func init() {
 			r.Post("/api/settings/users/{userId}/resend-invite", userAdminHandler.ResendInvite)
 			r.Post("/api/settings/users/{userId}/reset-password", userAdminHandler.ResetPassword)
 			r.Put("/api/settings/users/{userId}/name", userAdminHandler.UpdateUserName)
+			r.Post("/api/settings/users/team-sync", userAdminHandler.SyncTeams)
 
 			// Organization skill package (default for every user).
 			r.Post("/api/skill-packages/org/upload", skillPackageHandler.StartOrgUpload)
