@@ -17,6 +17,7 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   if (alias === 'broken') return { isError: true, content: [{ type: 'text', text: 'record unavailable' }] };
   if (alias === 'crash') process.exit(1);
   if (alias === 'loggedout') return { isError: true, content: [{ type: 'text', text: 'Midway cookie expired, run mwinit' }] };
+  if (alias === 'staleauth') return { content: [{ type: 'text', text: JSON.stringify({ content: { status: 'error', content: 'Midway cookie expired, run mwinit' } }) }] };
   const body = alias === 'gone'
     ? { content: { status: 'error', content: null } }
     : { content: { status: 'success', content: { login: alias.toUpperCase(), is_manager: false, manager: { login: 'Fakeboss' },

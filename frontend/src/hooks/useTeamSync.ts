@@ -6,7 +6,7 @@ import {
   teamSyncCancel, teamSyncGetState, teamSyncRun,
 } from '@/lib/tauri';
 import {
-  finishedFailureCode, isApplyResult, isPreviewResult,
+  finishedFailureCode, isApplyResult, isCancelled, isPreviewResult, shouldRefetchAfterFinish,
   type TeamSyncApplyResult, type TeamSyncFinished, type TeamSyncPhase, type TeamSyncPreview,
 } from '@/lib/teamSync';
 
@@ -14,7 +14,7 @@ const MAX_LINES = 200;
 
 /**
  * Admin team sync state (Mac app only). `available` is true when the app has
- * the team_sync commands. `onApplied` runs after a successful apply.
+ * the team_sync commands. `onApplied` runs whenever an apply run finishes, however it ended.
  */
 export function useTeamSync(onApplied?: () => void) {
   const [available, setAvailable] = useState(false);
@@ -23,18 +23,27 @@ export function useTeamSync(onApplied?: () => void) {
   const [result, setResult] = useState<TeamSyncApplyResult | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [progress, setProgress] = useState<string[]>([]);
+  const [applyFailed, setApplyFailed] = useState(false);
   const appliedRef = useRef(onApplied);
   useEffect(() => {
     appliedRef.current = onApplied;
   }, [onApplied]);
 
   const handleFinished = useCallback((finished: TeamSyncFinished) => {
+    if (shouldRefetchAfterFinish(finished.mode)) appliedRef.current?.();
     const failure = finishedFailureCode(finished);
     if (failure) {
+      if (finished.mode === 'preview' && isCancelled(failure)) {
+        setErrorCode(null);
+        setPhase('idle');
+        return;
+      }
       setErrorCode(failure);
+      setApplyFailed(finished.mode === 'apply');
       setPhase('error');
       return;
     }
+    setApplyFailed(false);
     setErrorCode(null);
     if (finished.mode === 'preview' && isPreviewResult(finished.result)) {
       setPreview(finished.result);
@@ -42,7 +51,6 @@ export function useTeamSync(onApplied?: () => void) {
     } else if (finished.mode === 'apply' && isApplyResult(finished.result)) {
       setResult(finished.result);
       setPhase('done');
-      appliedRef.current?.();
     } else {
       setErrorCode('UNKNOWN');
       setPhase('error');
@@ -80,6 +88,7 @@ export function useTeamSync(onApplied?: () => void) {
 
   const start = useCallback(async (mode: 'preview' | 'apply', previewId?: string) => {
     setErrorCode(null);
+    setApplyFailed(false);
     setProgress([]);
     if (mode === 'preview') {
       setPreview(null);
@@ -104,7 +113,8 @@ export function useTeamSync(onApplied?: () => void) {
     setPreview(null);
     setResult(null);
     setErrorCode(null);
+    setApplyFailed(false);
   }, []);
 
-  return { available, phase, preview, result, errorCode, progress, runPreview, runApply, cancel, dismiss };
+  return { available, phase, preview, result, errorCode, applyFailed, progress, runPreview, runApply, cancel, dismiss };
 }

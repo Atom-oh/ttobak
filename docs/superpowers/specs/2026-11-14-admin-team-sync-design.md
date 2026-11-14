@@ -1,6 +1,6 @@
 # Admin team sync: directory manager into `custom:department`
 
-- Status: historical design record; draft for owner approval (2026-11-14).
+- Status: historical design record; approved by the owner 2026-11-14.
 - Follows: [One-click intake setup](2026-11-12-one-click-intake-setup-design.md)
   and [SFDC contact sync](2026-11-11-sfdc-contact-sync-design.md) (local adapter
   run started from the Mac app, bounded batch to an authenticated API).

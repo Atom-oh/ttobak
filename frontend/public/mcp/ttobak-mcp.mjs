@@ -33120,7 +33120,7 @@ function parsePerson(_alias, toolText) {
   const outer = record19(value) ? value.content : void 0;
   if (!record19(outer)) return null;
   if (outer.status !== "success") {
-    if (typeof outer.status === "string" && AUTH_PATTERN.test(outer.status)) {
+    if (AUTH_PATTERN.test(toolText)) {
       throw new IntakeError("AUTH_EXPIRED_MIDWAY", "the directory reported an authentication failure");
     }
     return null;
@@ -33136,11 +33136,19 @@ async function openDirectory(environment) {
   const pathDirs = parsePathList(environment.env.PATH);
   const command = resolveCommand(BUILDER_COMMAND, pathDirs, environment.home);
   if (!command) throw new IntakeError("DIRECTORY_UNAVAILABLE", `${BUILDER_COMMAND} was not found on PATH`);
-  const session = await McpSession.open(
-    { command, args: [], env: {} },
-    BUILDER_COMMAND,
-    { pathDirs, allowedTools: [DIRECTORY_TOOL], callTimeoutMs: CALL_TIMEOUT_MS }
-  );
+  let session;
+  try {
+    session = await McpSession.open(
+      { command, args: [], env: {} },
+      BUILDER_COMMAND,
+      { pathDirs, allowedTools: [DIRECTORY_TOOL], callTimeoutMs: CALL_TIMEOUT_MS }
+    );
+  } catch (error3) {
+    if (error3 instanceof IntakeError && error3.code === "SERVER_START_FAILED") {
+      throw new IntakeError("DIRECTORY_UNAVAILABLE", `${BUILDER_COMMAND} did not start`);
+    }
+    throw error3;
+  }
   return {
     async lookup(alias2) {
       let result;

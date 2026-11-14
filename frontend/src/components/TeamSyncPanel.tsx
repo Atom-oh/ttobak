@@ -2,9 +2,9 @@
 
 import { useTeamSync } from '@/hooks/useTeamSync';
 import {
-  TEAM_SYNC_BUDGET_NOTE, TEAM_SYNC_CANCEL_LABEL, TEAM_SYNC_CLOSE_LABEL, TEAM_SYNC_CONFLICTS_LABEL,
+  TEAM_SYNC_APPLY_PARTIAL_NOTE, TEAM_SYNC_BUDGET_NOTE, TEAM_SYNC_CANCEL_LABEL, TEAM_SYNC_CLOSE_LABEL, TEAM_SYNC_CONFLICTS_LABEL,
   TEAM_SYNC_NOT_FOUND_LABEL, TEAM_SYNC_NO_CHANGES_LABEL, TEAM_SYNC_REJECTED_LABEL, TEAM_SYNC_RUNNING_LABEL,
-  TEAM_SYNC_UPDATED_LABEL, aliasLookup, canApply, teamSyncApplyLabel, teamSyncMessage,
+  TEAM_SYNC_UPDATED_LABEL, aliasLookup, canApply, canCancel, isCancelled, teamSyncApplyLabel, teamSyncMessage,
   teamSyncUnchangedLabel, teamValue, TEAM_SYNC_BUTTON_LABEL,
 } from '@/lib/teamSync';
 
@@ -24,7 +24,7 @@ export function TeamSyncPanel({ onApplied }: { onApplied: () => void }) {
         <button type="button" onClick={sync.runPreview} disabled={busy} className={PRIMARY}>
           {busy ? TEAM_SYNC_RUNNING_LABEL : TEAM_SYNC_BUTTON_LABEL}
         </button>
-        {busy && (
+        {canCancel(sync.phase) && (
           <button type="button" onClick={sync.cancel} className={BUTTON}>{TEAM_SYNC_CANCEL_LABEL}</button>
         )}
       </div>
@@ -35,7 +35,12 @@ export function TeamSyncPanel({ onApplied }: { onApplied: () => void }) {
 
       {sync.phase === 'error' && (
         <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
-          <p className="text-red-600 dark:text-red-400 text-sm">{teamSyncMessage(sync.errorCode)}</p>
+          {!isCancelled(sync.errorCode) && (
+            <p className="text-red-600 dark:text-red-400 text-sm">{teamSyncMessage(sync.errorCode)}</p>
+          )}
+          {sync.applyFailed && (
+            <p className="text-slate-600 dark:text-text-muted text-sm">{TEAM_SYNC_APPLY_PARTIAL_NOTE}</p>
+          )}
         </div>
       )}
 

@@ -14,6 +14,8 @@ export const TEAM_SYNC_CONFLICTS_LABEL = '충돌(그 사이 값이 바뀜)';
 export const TEAM_SYNC_REJECTED_LABEL = '거부됨';
 export const TEAM_SYNC_NO_CHANGES_LABEL = '변경할 항목이 없습니다.';
 
+export const TEAM_SYNC_APPLY_PARTIAL_NOTE = '일부 변경이 이미 적용되었을 수 있습니다. 위 목록을 새로 불러왔습니다.';
+
 export const teamSyncApplyLabel = (n: number): string => `${n}건 변경 적용`;
 export const teamSyncUnchangedLabel = (n: number): string => `변경 없음 ${n}명`;
 
@@ -22,7 +24,7 @@ export const TEAM_SYNC_MESSAGES: Record<string, string> = {
   NOT_ADMIN: '관리자로 로그인한 Mac 앱에서만 실행할 수 있습니다.',
   PREVIEW_EXPIRED: '미리보기가 만료되었습니다. 팀 동기화를 다시 눌러 주세요.',
   ADAPTER_OUTDATED: '로컬 어댑터가 오래되었습니다. 업데이트한 뒤 다시 시도하세요.',
-  DIRECTORY_UNAVAILABLE: 'builder-mcp를 찾을 수 없습니다.',
+  DIRECTORY_UNAVAILABLE: '사내 디렉터리(builder-mcp)에 연결할 수 없습니다. 설치 여부와 회사 네트워크 연결을 확인하세요.',
   RUN_IN_PROGRESS: '이미 실행 중입니다.',
 };
 
@@ -94,6 +96,14 @@ export function finishedFailureCode(finished: TeamSyncFinished): string | null {
   if (!result) return 'UNKNOWN';
   return null;
 }
+
+/** An apply may have written values server-side however the run ended. */
+export const shouldRefetchAfterFinish = (mode: string): boolean => mode === 'apply';
+
+/** Only a preview is safe to cancel; a started apply keeps writing. */
+export const canCancel = (phase: string): boolean => phase === 'previewing';
+
+export const isCancelled = (code: string | null): boolean => code === 'TEAM_SYNC_CANCELLED';
 
 export const teamValue = (value: string | null | undefined): string => (value ? value : TEAM_EMPTY);
 

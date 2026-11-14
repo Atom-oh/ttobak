@@ -288,7 +288,7 @@ func TestTeamSyncHandler_ReturnsResult(t *testing.T) {
 func TestTeamSyncHandler_RejectsOversizedBody(t *testing.T) {
 	h := newTestUserAdminHandler(nil, "")
 	pad := strings.Repeat("a", 64<<10+1)
-	w := postTeamSync(h, `{"items":[],"pad":"`+pad+`"}`)
+	w := postTeamSync(h, `{"items":[{"userId":"`+pad+`","team":"t"}]}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}

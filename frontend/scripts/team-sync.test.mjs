@@ -41,3 +41,14 @@ test('each known code maps to its message constant', () => {
   assert.equal(sync.TEAM_EMPTY, '—');
   assert.ok(sync.teamSyncApplyLabel(3).includes('3'));
 });
+
+test('apply runs refetch the list and only previews are cancellable', () => {
+  assert.equal(sync.shouldRefetchAfterFinish('apply'), true);
+  assert.equal(sync.shouldRefetchAfterFinish('preview'), false);
+  assert.equal(sync.canCancel('previewing'), true);
+  for (const phase of ['idle', 'preview', 'applying', 'done', 'error']) assert.equal(sync.canCancel(phase), false);
+  assert.equal(sync.isCancelled('TEAM_SYNC_CANCELLED'), true);
+  assert.equal(sync.isCancelled('UNKNOWN'), false);
+  assert.equal(sync.isCancelled(null), false);
+  assert.ok(sync.TEAM_SYNC_APPLY_PARTIAL_NOTE.length > 0);
+});

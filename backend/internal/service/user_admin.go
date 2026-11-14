@@ -584,7 +584,7 @@ func (s *UserAdminService) SyncTeams(ctx context.Context, actorUserID string, it
 			if errors.As(err, &notFound) {
 				reject(it.UserID, "NOT_FOUND")
 			} else {
-				log.Printf("SyncTeams: lookup failed for %s: %v", it.UserID, err)
+				log.Printf("SyncTeams: lookup failed for %q: %v", it.UserID, err)
 				reject(it.UserID, "COGNITO_ERROR")
 			}
 			continue
@@ -626,7 +626,7 @@ func (s *UserAdminService) SyncTeams(ctx context.Context, actorUserID string, it
 				{Name: aws.String(departmentAttribute), Value: aws.String(it.Team)},
 			},
 		}); err != nil {
-			log.Printf("SyncTeams: update failed for %s: %v", it.UserID, err)
+			log.Printf("SyncTeams: update failed for %q: %v", it.UserID, err)
 			reject(it.UserID, "COGNITO_ERROR")
 			continue
 		}

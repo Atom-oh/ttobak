@@ -241,3 +241,28 @@ test('a directory transport failure ends with DIRECTORY_UNAVAILABLE and stores n
   assert.equal(existsSync(ctx.previewPath), false);
   assert.equal(ctx.writes.length, 0);
 });
+
+test('a non-success answer mentioning an expired Midway cookie ends with AUTH_EXPIRED_MIDWAY and stores nothing', async t => {
+  const ctx = realDirectory(t, [user('u1', 'alice@amazon.com', 'old'), user('u2', 'staleauth@amazon.com')]);
+  assert.equal(await ctx.run(['run']), 2);
+  assert.deepEqual(ctx.output(), { ok: false, code: 'AUTH_EXPIRED_MIDWAY' });
+  assert.equal(existsSync(ctx.previewPath), false);
+  assert.equal(ctx.writes.length, 0);
+});
+
+test('a non-success not-found answer still lands in notFound', async t => {
+  const ctx = realDirectory(t, [user('u1', 'alice@amazon.com', 'old'), user('u2', 'gone@amazon.com')]);
+  assert.equal(await ctx.run(['run']), 0);
+  assert.deepEqual(ctx.output().notFound, ['gone']);
+});
+
+test('a builder-mcp that fails to start is DIRECTORY_UNAVAILABLE', async t => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'ttobak-tstest-')));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const bin = join(home, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'builder-mcp'), `#!${process.execPath}\nprocess.exit(1);\n`);
+  chmodSync(join(bin, 'builder-mcp'), 0o755);
+  await assert.rejects(openDirectory({ home, env: { PATH: bin }, now: () => NOW, zone: 'UTC', stdout: () => {} }),
+    error => error.code === 'DIRECTORY_UNAVAILABLE');
+});

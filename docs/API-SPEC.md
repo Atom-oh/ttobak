@@ -2230,6 +2230,7 @@ AdminUpdateUserAttributes, then the
 `USER#{id}/PROFILE` copy read by account people lists; a missing PROFILE row is
 not an error. A profile-sync failure after the Cognito write returns 500 and an
 identical retry converges. The caller's ID-token `name` changes on the next refresh.
+Both display-name routes are non-delegable connector operations.
 
 Team sync: admin-only `POST /api/settings/users/team-sync` takes
 `{ "items": [{ "userId", "team", "expected" }] }` (at most 200 items, 64 KiB body,
@@ -2244,7 +2245,7 @@ with arrays never null; rejection codes are `NOT_FOUND`, `NOT_DIRECTORY_USER`,
 `INVALID_TEAM` and `COGNITO_ERROR`. A per-item failure does not stop later items.
 Each write logs an audit line with actor and target sub and old and new value, never
 an email. `GET /api/settings/users` rows include `department` (empty when unset).
-Both routes are non-delegable connector operations.
+The connector operation `api.userAdmin.syncTeams` is read/write and non-delegable.
 
 ### Personal dictionary
 
