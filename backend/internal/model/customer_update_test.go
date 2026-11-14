@@ -101,3 +101,20 @@ func TestUpdateKeyHelpers(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestNormalizeUpdateURLRejectsIntegerLabelHosts(t *testing.T) {
+	for _, raw := range []string{
+		"https://0x7f.0x1/x", "https://0177.0.0.0x1/x", "https://0xc0.0xa8.0x0.0x1/x",
+		"https://0x7f.1/x", "https://0177.0.0.1/x", "https://0x7f000001.0x1/x",
+		"https://99999999999999999999.0x1/x",
+	} {
+		if _, _, err := NormalizeUpdateURL(raw); !errors.Is(err, ErrUpdateURLRejected) || !strings.Contains(err.Error(), "host") {
+			t.Errorf("%q: want host rejection, got %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"https://0x7f.example.com/x", "https://123.example.com/x", "https://a1.0x1.example.org/x"} {
+		if _, _, err := NormalizeUpdateURL(raw); err != nil {
+			t.Errorf("%q: unexpected rejection %v", raw, err)
+		}
+	}
+}

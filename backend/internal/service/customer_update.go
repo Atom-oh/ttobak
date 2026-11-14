@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log"
 	"regexp"
 	"sort"
 	"strconv"
@@ -29,6 +30,11 @@ type customerUpdateRepo interface {
 	ListSources(ctx context.Context, userID string, limit int) ([]model.UpdateSource, error)
 	UpdateSource(ctx context.Context, userID, sourceID string, label *string, status *string) error
 	DeleteSource(ctx context.Context, userID, sourceID string) error
+	PutSourceWithFeedSub(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) error
+	SetSourceStatusWithFeedSub(ctx context.Context, userID string, sourceID string, sub *model.UpdateFeedSub) error
+	DeleteSourceWithFeedSub(ctx context.Context, userID, sourceID, feedHash string) error
+	HealSourceFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error
+	GetFeedState(ctx context.Context, feedHash string) (*model.UpdateFeedState, error)
 	PutItemsIfAbsent(ctx context.Context, userID, sourceID string, items []model.UpdateItem) (int, error)
 	EnsureURLPending(ctx context.Context, urlHash, url string) error
 	MarkPending(ctx context.Context, userID string) error
@@ -113,16 +119,19 @@ func (s *CustomerUpdateService) AddSource(ctx context.Context, userID string, re
 		return nil, ErrInvalidInput
 	}
 	src := &model.UpdateSource{Kind: req.Kind, Label: label, Status: model.UpdateSourceActive}
+	feedHash := ""
 	switch req.Kind {
 	case model.UpdateSourceKindRSS, model.UpdateSourceKindSite, model.UpdateSourceKindYouTube:
 		if req.LocalSourceID != "" {
 			return nil, ErrInvalidInput
 		}
-		normalized, _, err := model.NormalizeUpdateURL(req.URL)
+		normalized, hash, err := model.NormalizeUpdateURL(req.URL)
 		if err != nil {
 			return nil, ErrInvalidInput
 		}
 		src.URL = normalized
+		src.FeedHash = hash
+		feedHash = hash
 	case model.UpdateSourceKindSlack:
 		if strings.TrimSpace(req.URL) != "" || !resummaryID.MatchString(req.LocalSourceID) {
 			return nil, ErrInvalidInput
@@ -141,7 +150,13 @@ func (s *CustomerUpdateService) AddSource(ctx context.Context, userID string, re
 	}
 	src.SourceID = uuid.NewString()
 	src.CreatedAt = s.now().UTC()
-	if err := s.repo.PutSourceIfAbsent(ctx, userID, src); err != nil {
+	// Non-Slack sources register their feed in the same transaction.
+	if feedHash != "" {
+		err = s.repo.PutSourceWithFeedSub(ctx, userID, src, feedSubFor(src, userID, feedHash))
+	} else {
+		err = s.repo.PutSourceIfAbsent(ctx, userID, src)
+	}
+	if err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrConflict
 		}
@@ -150,9 +165,80 @@ func (s *CustomerUpdateService) AddSource(ctx context.Context, userID string, re
 	return src, nil
 }
 
-// ListSources returns the user's sources.
+func feedSubFor(src *model.UpdateSource, userID, feedHash string) *model.UpdateFeedSub {
+	return &model.UpdateFeedSub{
+		FeedHash: feedHash, URL: src.URL, Kind: src.Kind, UserID: userID,
+		SourceID: src.SourceID, Status: src.Status,
+	}
+}
+
+// feedHashOf returns the feed hash of a non-Slack source: the stored one, else
+// one computed from the URL. A legacy URL that no longer normalizes has none.
+func feedHashOf(src *model.UpdateSource) (string, bool) {
+	if src.Kind == model.UpdateSourceKindSlack {
+		return "", false
+	}
+	if src.FeedHash != "" {
+		return src.FeedHash, true
+	}
+	_, hash, err := model.NormalizeUpdateURL(src.URL)
+	if err != nil {
+		return "", false
+	}
+	return hash, true
+}
+
+func (s *CustomerUpdateService) findSource(ctx context.Context, userID, sourceID string) (*model.UpdateSource, error) {
+	sources, err := s.repo.ListSources(ctx, userID, model.MaxUpdateSources)
+	if err != nil {
+		return nil, err
+	}
+	for i := range sources {
+		if sources[i].SourceID == sourceID {
+			return &sources[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// ListSources returns the user's sources. A non-Slack source whose feed keeps
+// failing carries the feed's last error as FeedError; an unreadable feed state
+// omits it. A legacy non-Slack source (no stored feedHash) is healed: it gains
+// its registry row with its current status and its stored feedHash. Heal and
+// state-read failures are logged, not returned.
 func (s *CustomerUpdateService) ListSources(ctx context.Context, userID string) ([]model.UpdateSource, error) {
-	return s.repo.ListSources(ctx, userID, model.MaxUpdateSources)
+	sources, err := s.repo.ListSources(ctx, userID, model.MaxUpdateSources)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.UpdateSource, len(sources))
+	copy(out, sources)
+	states := map[string]*model.UpdateFeedState{}
+	for i := range out {
+		hash, ok := feedHashOf(&out[i])
+		if !ok {
+			continue
+		}
+		if out[i].FeedHash == "" {
+			sub := feedSubFor(&out[i], userID, hash)
+			if err := s.repo.HealSourceFeedSub(ctx, userID, out[i].SourceID, sub); err != nil {
+				log.Printf("customer update source heal failed feed=%s: %v", shortHash(hash), err)
+			}
+		}
+		state, read := states[hash]
+		if !read {
+			state, err = s.repo.GetFeedState(ctx, hash)
+			if err != nil {
+				log.Printf("customer update feed state read failed feed=%s: %v", shortHash(hash), err)
+				state = nil
+			}
+			states[hash] = state
+		}
+		if state != nil && state.Failures > 0 {
+			out[i].FeedError = state.LastError
+		}
+	}
+	return out, nil
 }
 
 // UpdateSource changes a source's label and/or status.
@@ -171,19 +257,54 @@ func (s *CustomerUpdateService) UpdateSource(ctx context.Context, userID, source
 	if req.Status != nil && *req.Status != model.UpdateSourceActive && *req.Status != model.UpdateSourceDisabled {
 		return ErrInvalidInput
 	}
-	if err := s.repo.UpdateSource(ctx, userID, sourceID, label, req.Status); err != nil {
+	wrap := func(err error) error {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
 		return err
 	}
-	return nil
+	if req.Status != nil {
+		src, err := s.findSource(ctx, userID, sourceID)
+		if err != nil {
+			return err
+		}
+		// An unknown source falls through to the conditional plain update,
+		// which reports it missing.
+		hash, ok := "", false
+		if src != nil {
+			hash, ok = feedHashOf(src)
+		}
+		if ok {
+			// The status change and the registry row commit together; the label
+			// follows, so a failed transaction never applies a label alone.
+			sub := feedSubFor(src, userID, hash)
+			sub.Status = *req.Status
+			if err := s.repo.SetSourceStatusWithFeedSub(ctx, userID, sourceID, sub); err != nil {
+				return wrap(err)
+			}
+			if label == nil {
+				return nil
+			}
+			return wrap(s.repo.UpdateSource(ctx, userID, sourceID, label, nil))
+		}
+	}
+	return wrap(s.repo.UpdateSource(ctx, userID, sourceID, label, req.Status))
 }
 
-// DeleteSource removes a source; deleting an absent source succeeds.
+// DeleteSource removes a source and, for a non-Slack source, its feed
+// registry row; deleting an absent source succeeds.
 func (s *CustomerUpdateService) DeleteSource(ctx context.Context, userID, sourceID string) error {
 	if !resummaryID.MatchString(sourceID) {
 		return ErrInvalidInput
+	}
+	src, err := s.findSource(ctx, userID, sourceID)
+	if err != nil {
+		return err
+	}
+	if src != nil {
+		if hash, ok := feedHashOf(src); ok {
+			return s.repo.DeleteSourceWithFeedSub(ctx, userID, sourceID, hash)
+		}
 	}
 	return s.repo.DeleteSource(ctx, userID, sourceID)
 }
@@ -497,4 +618,12 @@ func (s *CustomerUpdateService) PutAccountSetting(ctx context.Context, userID, a
 		return err
 	}
 	return s.repo.PutAccountOpt(ctx, userID, accountID, enabled)
+}
+
+// shortHash is the feed hash prefix used in logs; logs never carry URLs.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
 }

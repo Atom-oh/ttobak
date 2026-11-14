@@ -1784,6 +1784,15 @@ qualify).
 | `PATCH /api/customer-updates/drafts/{accountId}/{urlHash}` | 16 KiB | updated draft |
 | `GET`/`PUT /api/accounts/{accountId}/customer-update-setting` | 1 KiB | `{ "enabled": bool }` |
 
+Each non-Slack source is registered in the feed registry partition (`CUFEEDS`,
+one row per feed hash, user and source; the feed hash is the normalized-URL
+hash, so equal URLs share one feed). Creating a source, changing its `status`
+and deleting it write the source row and the registry row in one transaction;
+a status change also creates the registry row of a source that predates it.
+Slack sources have no registry row. `GET .../sources` adds `feedError` to a
+non-Slack source while its feed state has `failures > 0` (the last fetch
+error text); it is omitted otherwise and never stored on the source row.
+
 The two draft list routes take `limit` (default 30, max 50) and an opaque
 `cursor`. The service reads up to `model.MaxUpdateDraftsScan` (1,000) of the
 caller's draft rows for the scope, drops expired drafts and drafts of accounts

@@ -21,6 +21,9 @@ manifests.
 - Customer update drafts on the web: followed-source settings, an account drafts tab
   and the `/drafts` inbox with copy, done and dismiss actions; lists stay empty
   until the collector and generator ship (#961).
+- Customer update feed registry: RSS, site and YouTube sources register a shared feed
+  subscription, source lists report a feed error, and the feed collector code is
+  added without a schedule yet (#964).
 
 ### Changed
 
