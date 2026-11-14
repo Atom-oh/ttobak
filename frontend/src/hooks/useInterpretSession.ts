@@ -19,9 +19,10 @@ interface UseInterpretSessionOptions {
   interimTranslation: boolean;
   /**
    * Every recognized segment, for the floating caption windows. The ID is
-   * unique within one interpretation run, across caption reconnects.
+   * unique within one interpretation run, across caption reconnects. A
+   * final segment also names its speaker when Transcribe told one apart.
    */
-  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string) => void;
+  onSegment?: (id: string, text: string, isFinal: boolean, languageCode?: string, speaker?: string) => void;
   /** Third recognition language chosen for the caption windows, read when a caption session starts. */
   getExtraLanguage?: () => ExtraLiveLanguage | undefined;
   /** The spoken languages to recognize (one or two); read when a caption session starts. */
@@ -123,8 +124,9 @@ export function useInterpretSession({
           transcribeStreamingConfig,
           extraLanguage: getExtraLanguageRef.current?.(),
           nativeLanguages: getSpeechLanguagesRef.current?.(),
-          onSegment: (id, text, isFinal, languageCode) =>
-            onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode),
+          speakerLabels: true,
+          onSegment: (id, text, isFinal, languageCode, speaker) =>
+            onSegmentRef.current?.(`${session}/${id}`, text, isFinal, languageCode, speaker),
         });
         return {
           start: () => manager.startNative('transcribe-streaming'),
