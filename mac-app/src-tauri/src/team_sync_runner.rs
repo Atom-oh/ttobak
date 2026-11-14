@@ -7,8 +7,8 @@
 //! add no trust. The mode is an enum and the preview ID must match
 //! `^[a-f0-9]{32}$`, both checked before anything spawns, so no free-form
 //! string reaches argv. The WebView gets only the CLI's final JSON line and
-//! its stderr progress lines. The child gets only the intake's cleared
-//! environment (HOME, LANG, PATH).
+//! its stderr progress lines, emitted to the main window only. The child
+//! gets only the intake's cleared environment (HOME, LANG, PATH).
 //!
 //! Team sync runs use their own run slot; the CLI holds its own lock and
 //! reports `RUN_IN_PROGRESS` if another team-sync CLI is running.
@@ -178,7 +178,7 @@ async fn run_team_sync(
     let on_line = move |line: String| {
         let state = line_app.state::<TeamSyncState>();
         if state.run_gen.load(Ordering::SeqCst) == gen {
-            let _ = line_app.emit(PROGRESS_EVENT, json!({ "line": line }));
+            let _ = line_app.emit_to("main", PROGRESS_EVENT, json!({ "line": line }));
             state.progress.lock().push(line);
         }
     };
@@ -227,7 +227,7 @@ pub async fn team_sync_run(
         let state = app.state::<TeamSyncState>();
         *state.last_result.lock() = Some(payload.clone());
         state.end();
-        let _ = app.emit(FINISHED_EVENT, payload);
+        let _ = app.emit_to("main", FINISHED_EVENT, payload);
     });
     Ok(())
 }
