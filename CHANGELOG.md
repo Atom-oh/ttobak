@@ -24,6 +24,7 @@ manifests.
 
 ### Changed
 
+- Validate private asset paths before signing uploads or downloads, and bind meeting audio and attachments to their owner and meeting while preserving authorized sharing.
 - The SA performance report accepts Claude Code 2.1.311 or newer (was 2.1.322); 2.1.311 has the same verified sandbox settings schema.
 
 ## [1.0.0] - 2026-11-11

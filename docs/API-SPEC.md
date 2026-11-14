@@ -386,6 +386,14 @@ public access from a handler comment alone.
 Downloads are signed CloudFront `/media/{s3Key}` URLs, usually valid for one hour;
 public-document downloads use five minutes. Signing-key read failure falls back
 to S3 GET presigns. PUT uploads continue to use signed S3 URLs.
+Both download signers reject unsafe private paths, including encoded traversal,
+control characters and invalid UTF-8. Supported prefixes include `audio`,
+`audio-playback`, `images`, `files`, `docs`, `docs-pdf` and `skillpkg`; callers
+still authorize the resource before signing. Meeting audio and original attachment
+downloads additionally require the exact owner/meeting path. Invalid audio keys
+return 404; invalid attachment keys receive no download URL. Upload presigning
+rejects invalid meeting IDs or generated keys with 400 `BAD_REQUEST`. Managing
+members' permitted image/file uploads retain the meeting creator's key prefix.
 
 Application request logs contain the registered route pattern, allowlisted HTTP
 method, response status/size, elapsed time and a hash of the request ID. They
