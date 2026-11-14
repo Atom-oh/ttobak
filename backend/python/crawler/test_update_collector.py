@@ -39,8 +39,24 @@ class FakeTable:
         return {"Item": dict(row)} if row else {}
 
     def update_item(self, Key, UpdateExpression, ExpressionAttributeNames,
-                    ExpressionAttributeValues):
+                    ExpressionAttributeValues, ConditionExpression=None):
         self.ops.append("update_item")
+        current = self.rows.get((Key["PK"], Key["SK"]), {})
+        if ConditionExpression is not None:
+            ok = False
+            for clause in ConditionExpression.split(" OR "):
+                absent = re.fullmatch(r"attribute_not_exists\((#\w+)\)", clause)
+                equal = re.fullmatch(r"(#\w+) = (:\w+)", clause)
+                if absent:
+                    ok = ok or ExpressionAttributeNames[absent.group(1)] not in current
+                elif equal:
+                    attr = ExpressionAttributeNames[equal.group(1)]
+                    ok = ok or (attr in current and
+                                current[attr] == ExpressionAttributeValues[equal.group(2)])
+                else:
+                    raise AssertionError("unsupported condition " + clause)
+            if not ok:
+                raise CondFailed()
         row = self.rows.setdefault((Key["PK"], Key["SK"]), dict(Key))
         m = re.match(r"SET (.*?)(?: REMOVE (.*))?$", UpdateExpression)
         for part in re.split(r", (?![^(]*\))", m.group(1)):
@@ -570,6 +586,178 @@ class TestHardening(unittest.TestCase):
             self.assertEqual(result["failed"], 1)
             self.assertEqual(t.state("h1")["lastError"], reason)
             self.assertEqual(t.state("h1")["failures"], 1)
+
+
+class AwsError(Exception):
+    """botocore ClientError lookalike with a code and a message."""
+
+    def __init__(self, code, message="secret https://secret.example/key"):
+        super().__init__(message)
+        self.response = {"Error": {"Code": code, "Message": message}}
+
+
+def state_row(**attrs):
+    row = {"PK": "CUFEED#h1", "SK": "STATE"}
+    row.update(attrs)
+    return row
+
+
+class TestMarkerFence(unittest.TestCase):
+    def feed(self):
+        return doc(rss(("https://a.example/new", "New", pub(1))))
+
+    def test_young_foreign_marker_and_fetch_failure_kept(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        young = uc._iso(NOW - timedelta(minutes=5))
+        t.rows[("CUFEED#h1", "STATE")] = state_row(writingAt=young)
+        result, _ = run(t, {URL: FetchRejected("TIMEOUT")})
+        self.assertEqual(result["skipped"], 1)
+        st = t.state("h1")
+        self.assertEqual(st["writingAt"], young)
+        self.assertNotIn("updatedAt", st)
+        self.assertNotIn("lastError", st)
+
+    def test_young_foreign_marker_skips_feed(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        young = uc._iso(NOW - timedelta(minutes=20))
+        t.rows[("CUFEED#h1", "STATE")] = state_row(writingAt=young)
+        result, calls = run(t, {URL: self.feed()})
+        self.assertEqual((result["skipped"], result["entries"], calls), (1, 0, []))
+        self.assertEqual(t.entries("h1"), [])
+        self.assertEqual(t.state("h1")["writingAt"], young)
+        self.assertNotIn("update_item", t.ops)
+
+    def test_old_marker_published(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        old = uc._iso(NOW - timedelta(minutes=21))
+        t.rows[("CUFEED#h1", "STATE")] = state_row(writingAt=old)
+        result, _ = run(t, {URL: FetchRejected("TIMEOUT")})
+        self.assertEqual(result["failed"], 1)
+        st = t.state("h1")
+        self.assertEqual(st["updatedAt"], old)
+        self.assertNotIn("writingAt", st)
+
+    def test_marker_set_after_read_is_not_published_or_cleared(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        foreign = uc._iso(NOW - timedelta(minutes=1))
+
+        def fake(url):
+            t.rows[("CUFEED#h1", "STATE")] = state_row(writingAt=foreign)
+            raise FetchRejected("TIMEOUT")
+        with mock.patch.object(uc, "fetch_feed_document", fake):
+            result = uc.collect(uc.FeedStore(t), NOW, None, shuffle=lambda o: None)
+        self.assertEqual(result["failed"], 1)
+        st = t.state("h1")
+        self.assertEqual(st["writingAt"], foreign)
+        self.assertNotIn("updatedAt", st)
+        self.assertEqual(st["failures"], 1)
+
+    def test_marker_set_after_read_blocks_own_marker(self):
+        t = FakeTable()
+        register(t, "h1", URL)
+        foreign = uc._iso(NOW - timedelta(minutes=1))
+        feed = self.feed()
+
+        def fake(url):
+            t.rows[("CUFEED#h1", "STATE")] = state_row(writingAt=foreign)
+            return feed
+        with mock.patch.object(uc, "fetch_feed_document", fake):
+            result = uc.collect(uc.FeedStore(t), NOW, None, shuffle=lambda o: None)
+        self.assertEqual((result["skipped"], result["entries"]), (1, 0))
+        self.assertEqual(t.entries("h1"), [])
+        self.assertEqual(t.state("h1")["writingAt"], foreign)
+
+
+class EntryPutFails(FakeTable):
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    def put_item(self, Item, ConditionExpression=None):
+        if self.exc is not None:
+            self.ops.append("put_item")
+            raise self.exc
+        return super().put_item(Item, ConditionExpression)
+
+
+class TestAmbiguousEntryPut(unittest.TestCase):
+    def test_put_error_keeps_marker_then_fenced_publish(self):
+        t = EntryPutFails(AwsError("InternalServerError"))
+        register(t, "h" * 40, URL)
+        feed = doc(rss(("https://a.example/new", "New", pub(1))))
+        with self.assertLogs(uc.logger, level="INFO") as logs:
+            result, _ = run(t, {URL: feed})
+        text = "\n".join(logs.output)
+        self.assertIn("h" * 12 + " store error code=InternalServerError", text)
+        self.assertNotIn("secret", text)
+        self.assertEqual(result["failed"], 1)
+        st = t.state("h" * 40)
+        self.assertEqual(st["writingAt"], uc._iso(NOW))
+        self.assertNotIn("updatedAt", st)
+        # Before the fence the marker is another run's: left alone.
+        t.exc = None
+        result, _ = run(t, {URL: feed}, now=NOW + timedelta(minutes=10))
+        self.assertEqual(result["skipped"], 1)
+        self.assertNotIn("updatedAt", t.state("h" * 40))
+        # After the fence it is published; the entry is written and covered.
+        result, _ = run(t, {URL: feed}, now=LATER)
+        st = t.state("h" * 40)
+        self.assertEqual(st["updatedAt"], uc._iso(LATER))
+        self.assertNotIn("writingAt", st)
+        self.assertEqual(len(t.entries("h" * 40)), 1)
+
+    def test_store_error_keeps_botocore_code(self):
+        for code in ("AccessDeniedException", "ProvisionedThroughputExceededException"):
+            t = EntryPutFails(AwsError(code))
+            with self.assertRaises(uc.StoreError) as cm:
+                uc.FeedStore(t).put_entry("h1", "https://a.example/x", "", None, NOW)
+            self.assertEqual(cm.exception.code, code)
+            self.assertNotIn("secret", str(cm.exception))
+
+    def test_conditional_failure_still_means_exists(self):
+        t = FakeTable()
+        store = uc.FeedStore(t)
+        self.assertTrue(store.put_entry("h1", "https://a.example/x", "", None, NOW))
+        self.assertFalse(store.put_entry("h1", "https://a.example/x", "", None, NOW))
+
+    def test_entry_puts_use_separate_table(self):
+        state_table, entry_table = FakeTable(), FakeTable()
+        uc.FeedStore(state_table, entry_table).put_entry("h1", "https://a.example/x", "", None, NOW)
+        self.assertEqual(len(entry_table.entries("h1")), 1)
+        self.assertEqual(state_table.rows, {})
+
+    def test_handler_builds_no_retry_entry_table(self):
+        tables = []
+
+        class Resource:
+            def __init__(self, config):
+                self.config = config
+
+            def Table(self, name):
+                t = FakeTable()
+                t.config, t.name = self.config, name
+                tables.append(t)
+                return t
+
+        def resource(service, config=None):
+            self.assertEqual(service, "dynamodb")
+            return Resource(config)
+        stores = []
+        with mock.patch("boto3.resource", resource), \
+                mock.patch.dict("os.environ", {"TABLE_NAME": "tbl"}), \
+                mock.patch.object(uc, "collect", lambda store, now, ctx: stores.append(store) or {}):
+            uc.handler({}, None)
+        store = stores[0]
+        self.assertIsNone(store.table.config)
+        cfg = store.entry_table.config
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.retries, {"max_attempts": 1, "mode": "standard"})
+        self.assertEqual({t.name for t in tables}, {"tbl"})
+        self.assertIsNot(store.table, store.entry_table)
 
 
 if __name__ == "__main__":

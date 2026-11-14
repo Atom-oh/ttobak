@@ -5,7 +5,17 @@ the shared ``CUFEED#{feedHash}`` partition. A separate Go worker fans entries
 out to users; this module never touches ``USER#`` rows. IAM allows only Query on
 ``CUFEEDS`` and GetItem/PutItem/UpdateItem/Query on ``CUFEED#*``.
 
-Logs carry feedHash[:12] and counts only, never URLs, titles or user data.
+Logs carry feedHash[:12], counts and DynamoDB error codes only, never URLs,
+titles, keys, error messages or user data.
+
+Write-intent marker (``writingAt``): a run sets it, compare-and-set on the value
+it observed, before its first entry put, and clears it (again compare-and-set)
+when it publishes ``updatedAt``. A marker not acknowledged by ``updatedAt`` is
+publishable by a later run only once it is older than MARKER_FENCE (twice the
+10-minute function timeout); a younger one belongs to an overlapping invocation,
+so the feed is skipped and the marker left untouched. Entry puts use a table
+without SDK retries: an ambiguous put surfaces as a StoreError and leaves the
+marker for a later run to publish instead of reading as "already exists".
 """
 import hashlib
 import logging
@@ -31,6 +41,7 @@ MAX_SITE_ENTRIES = 30
 MAX_STORED_LINK_IDS = 2000  # 16-hex ids: 32 KB, far below DynamoDB's 400 KB item limit
 BACKOFF_FAILURES = 5
 BACKOFF_SECONDS = 24 * 3600
+MARKER_FENCE = timedelta(minutes=20)  # function timeout is 10 minutes
 MIN_REMAINING_MS = 270000  # one feed can take about 250 s (retries and redirects)
 HTML_TYPES = {"text/html", "application/xhtml+xml"}
 FETCH_REASONS = {"content_type", "too_large"}
@@ -86,25 +97,55 @@ class _Failure(Exception):
 class StoreError(Exception):
     """A DynamoDB failure. It is contained to one feed and counted in the run
     stats, but it says nothing about the feed itself, so it never reaches the
-    feed's failure state."""
+    feed's failure state. ``code`` is the botocore error code (or the exception
+    type); the message is never kept."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+class MarkerConflict(Exception):
+    """Another invocation's write-intent marker appeared after this run read the
+    feed state; the run leaves it untouched."""
+
+
+def _error_code(exc):
+    code = None
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+    return code if isinstance(code, str) and code else type(exc).__name__
 
 
 def _guarded(fn):
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except StoreError:
+        except (StoreError, MarkerConflict):
             raise
         except Exception as exc:  # botocore ClientError, without importing it here
-            raise StoreError(type(exc).__name__) from None
+            raise StoreError(_error_code(exc)) from None
     return wrapper
+
+
+def _marker_condition(names, values, allowed):
+    """Condition: writingAt absent or equal to one of the allowed values."""
+    names["#cw"] = "writingAt"
+    parts = ["attribute_not_exists(#cw)"]
+    for i, v in enumerate(v for v in allowed if v is not None):
+        values[":cw%d" % i] = v
+        parts.append("#cw = :cw%d" % i)
+    return " OR ".join(parts)
 
 
 class FeedStore:
     """All DynamoDB access for the collector. Per-feed methods raise StoreError."""
 
-    def __init__(self, table):
+    def __init__(self, table, entry_table=None):
         self.table = table
+        # Entry puts go through a table without SDK retries (see handler).
+        self.entry_table = entry_table if entry_table is not None else table
 
     def active_feeds(self):
         """Return {feedHash: (url, kind)} from active registry rows.
@@ -138,13 +179,23 @@ class FeedStore:
         return resp.get("Item") or {}
 
     @_guarded
-    def mark_writing(self, feed_hash, now):
-        """Write-intent marker, set before the first entry put of a run."""
-        self.table.update_item(
-            Key={"PK": "CUFEED#" + feed_hash, "SK": STATE_SK},
-            UpdateExpression="SET #h = :h, #t = :t, #w = :w",
-            ExpressionAttributeNames={"#h": "feedHash", "#t": "entityType", "#w": "writingAt"},
-            ExpressionAttributeValues={":h": feed_hash, ":t": STATE_ENTITY, ":w": _iso(now)})
+    def mark_writing(self, feed_hash, now, observed):
+        """Write-intent marker, set before the first entry put of a run, only
+        while the stored marker is still the one this run observed (or this
+        run's own value, for an SDK retry). Raises MarkerConflict otherwise."""
+        names = {"#h": "feedHash", "#t": "entityType", "#w": "writingAt"}
+        values = {":h": feed_hash, ":t": STATE_ENTITY, ":w": _iso(now)}
+        cond = _marker_condition(names, values, [observed, _iso(now)])
+        try:
+            self.table.update_item(
+                Key={"PK": "CUFEED#" + feed_hash, "SK": STATE_SK},
+                UpdateExpression="SET #h = :h, #t = :t, #w = :w",
+                ConditionExpression=cond,
+                ExpressionAttributeNames=names, ExpressionAttributeValues=values)
+        except Exception as exc:
+            if _error_code(exc) == "ConditionalCheckFailedException":
+                raise MarkerConflict() from None
+            raise
 
     @_guarded
     def put_entry(self, feed_hash, url, title, published_at, now):
@@ -161,7 +212,7 @@ class FeedStore:
         if published_at is not None:
             item["publishedAt"] = _iso(published_at)
         try:
-            self.table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+            self.entry_table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
         except Exception as exc:  # botocore ClientError, without importing it here
             code = getattr(exc, "response", {}).get("Error", {}).get("Code")
             if code == "ConditionalCheckFailedException":
@@ -171,12 +222,28 @@ class FeedStore:
 
     @_guarded
     def update_state(self, feed_hash, now, *, failed=False, error=None,
-                     updated_at=None, resolved_url=None, links=None, drop_resolved=False):
-        """Attribute-level update; never replaces the whole state item. It
-        always removes the write-intent marker, acknowledging the run."""
+                     updated_at=None, resolved_url=None, links=None, drop_resolved=False,
+                     marker=None):
+        """Attribute-level update; never replaces the whole state item.
+
+        It publishes updated_at and removes the write-intent marker only while
+        the stored marker is absent or equal to ``marker`` (the value this run
+        set or observed as publishable). When another invocation's marker
+        appeared meanwhile, it retries without publishing or removing it."""
+        try:
+            self._update_state(feed_hash, now, failed, error, updated_at, resolved_url,
+                               links, drop_resolved, marker, True)
+        except Exception as exc:
+            if _error_code(exc) != "ConditionalCheckFailedException":
+                raise
+            self._update_state(feed_hash, now, failed, error, None, resolved_url,
+                               links, drop_resolved, marker, False)
+
+    def _update_state(self, feed_hash, now, failed, error, updated_at, resolved_url,
+                      links, drop_resolved, marker, acknowledge):
         sets = {"feedHash": feed_hash, "entityType": STATE_ENTITY,
                 "lastFetchedAt": _iso(now)}
-        removes = ["writingAt"] + (["resolvedUrl"] if drop_resolved else [])
+        removes = (["writingAt"] if acknowledge else []) + (["resolvedUrl"] if drop_resolved else [])
         if updated_at is not None:
             sets["updatedAt"] = _iso(updated_at)
         if resolved_url:
@@ -203,10 +270,13 @@ class FeedStore:
             for i, key in enumerate(removes):
                 names["#r%d" % i] = key
             expr += " REMOVE " + ", ".join("#r%d" % i for i in range(len(removes)))
+        kwargs = {}
+        if acknowledge:
+            kwargs["ConditionExpression"] = _marker_condition(names, values, [marker])
         self.table.update_item(
             Key={"PK": "CUFEED#" + feed_hash, "SK": STATE_SK},
             UpdateExpression=expr, ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values)
+            ExpressionAttributeValues=values, **kwargs)
 
 
 def _fetch(url):
@@ -252,7 +322,8 @@ def _publish_at(pending, now, written):
 def process_feed(store, feed_hash, url, kind, now):
     """Collect one feed. Returns (outcome, written); outcome is fetched|skipped|failed."""
     written = 0
-    pending = None  # an earlier run's unacknowledged write-intent time
+    pending = None  # an earlier run's unacknowledged, fenced write-intent time
+    marker = None  # stored marker value this run may clear (observed or its own)
     # A stored resolvedUrl that fails or stops yielding a feed is dropped so the
     # next run rediscovers from the subscription URL.
     drop_resolved = False
@@ -266,10 +337,16 @@ def process_feed(store, feed_hash, url, kind, now):
         if (failures >= BACKOFF_FAILURES and last is not None
                 and now - last <= timedelta(seconds=BACKOFF_SECONDS)):
             return "skipped", 0
-        w = _parse_iso(state.get("writingAt"))
+        observed = state.get("writingAt")
+        w = _parse_iso(observed)
         u = _parse_iso(state.get("updatedAt"))
         if w is not None and (u is None or u < w):
+            if now - w <= MARKER_FENCE:
+                # An overlapping invocation may still be writing: leave its
+                # marker alone and skip the feed for this run.
+                return "skipped", 0
             pending = w
+        marker = observed
         drop_resolved = bool(state.get("resolvedUrl"))
         entries, links, resolved = _collect(url, kind, state)
         drop_resolved = False
@@ -277,7 +354,8 @@ def process_feed(store, feed_hash, url, kind, now):
         if entries is not None:
             fresh_entries = list(recent(entries, now))
             if fresh_entries:
-                store.mark_writing(feed_hash, now)
+                store.mark_writing(feed_hash, now, observed)
+                marker = _iso(now)
             for e in fresh_entries:
                 if store.put_entry(feed_hash, e.url, e.title, e.published_at, now):
                     written += 1
@@ -293,7 +371,8 @@ def process_feed(store, feed_hash, url, kind, now):
                 # stays new and is delivered on later runs.
                 fresh = [(l, i) for l, i in zip(links, ids) if i not in known][:MAX_SITE_ENTRIES]
                 if fresh:
-                    store.mark_writing(feed_hash, now)
+                    store.mark_writing(feed_hash, now, observed)
+                    marker = _iso(now)
                 for link, i in fresh:
                     if store.put_entry(feed_hash, link, "", None, now):
                         written += 1
@@ -302,21 +381,26 @@ def process_feed(store, feed_hash, url, kind, now):
                 stored = merge_link_ids([i for i in ids if i in known],
                                         [i for i in old_ids if i not in on_page])
         store.update_state(feed_hash, now, updated_at=_publish_at(pending, now, written),
-                           resolved_url=resolved, links=stored)
+                           resolved_url=resolved, links=stored, marker=marker)
         return "fetched", written
+    except MarkerConflict:
+        # Another invocation set its marker after this run read the state.
+        logger.warning("feed=%s skipped: concurrent marker", feed_hash[:12])
+        return "skipped", written
     except StoreError as exc:
         # Not a feed failure: no lastError, no failure count. Any marker stays
-        # and the next run publishes the unacknowledged entries.
-        logger.error("feed=%s store error %s", feed_hash[:12], exc)
+        # (including after an ambiguous entry put) and a run after the fence
+        # publishes the unacknowledged entries.
+        logger.error("feed=%s store error code=%s", feed_hash[:12], exc.code)
         return "failed", written
     except Exception as exc:
         reason = exc.reason if isinstance(exc, _Failure) else "fetch"
         try:
             store.update_state(feed_hash, now, failed=True, error=reason,
                                updated_at=_publish_at(pending, now, written),
-                               drop_resolved=drop_resolved)
-        except StoreError:
-            logger.error("feed=%s state update failed", feed_hash[:12])
+                               drop_resolved=drop_resolved, marker=marker)
+        except StoreError as store_exc:
+            logger.error("feed=%s state update failed code=%s", feed_hash[:12], store_exc.code)
         logger.warning("feed=%s failed reason=%s", feed_hash[:12], reason)
         return "failed", written
 
@@ -343,9 +427,18 @@ def collect(store, now, context=None, shuffle=random.shuffle):
     return result
 
 
+# One attempt only: a retried conditional put whose first attempt committed
+# would read as "already exists" and the entry would never be published.
+ENTRY_PUT_RETRIES = {"max_attempts": 1, "mode": "standard"}
+
+
 def handler(event, context):
     import boto3
-    table = boto3.resource("dynamodb").Table(os.environ.get("TABLE_NAME", "ttobak-main"))
-    result = collect(FeedStore(table), datetime.now(timezone.utc), context)
+    from botocore.config import Config
+    name = os.environ.get("TABLE_NAME", "ttobak-main")
+    table = boto3.resource("dynamodb").Table(name)
+    entry_table = boto3.resource(
+        "dynamodb", config=Config(retries=dict(ENTRY_PUT_RETRIES))).Table(name)
+    result = collect(FeedStore(table, entry_table), datetime.now(timezone.utc), context)
     logger.info("collector done %s", result)
     return result
