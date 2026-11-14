@@ -7,7 +7,8 @@
     "items": [
       {
         "urlHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "url": "https://example.com/news/bedrock-korea-launch"
+        "url": "https://example.com/news/bedrock-korea-launch",
+        "decidedAccounts": []
       }
     ],
     "accounts": [
@@ -66,6 +67,7 @@
     "runIdPattern": "^[0-9a-f]{32}$",
     "urlHashPattern": "^[0-9a-f]{64}$",
     "urlScheme": "https",
+    "decidedAccounts": "optional per item (absent means []): unique account ids, each one of the payload's accountIds, else the payload is rejected (shape, duplicate, decided_accounts); a pair whose account is listed already has a final stored decision, so the runtime does not score, decide or research it and writes no DEC row for it",
     "blockList": "names (companies, people, products) never to mention; each entry is matched as an ASCII-case-insensitive substring of the draft body and why"
   },
   "budgets": {

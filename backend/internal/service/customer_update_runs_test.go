@@ -259,6 +259,20 @@ func (m *mockRunsRepo) GetDecision(_ context.Context, _, urlHash, accountID stri
 	}
 	return nil, nil
 }
+
+// ListDecidedAccounts mirrors the repository filter: not_needed, or an
+// outcome of drafted or discarded.
+func (m *mockRunsRepo) ListDecidedAccounts(_ context.Context, _, urlHash string) ([]string, error) {
+	m.record("ListDecidedAccounts", urlHash, "", "", 0)
+	out := []string{}
+	for _, d := range m.decisions {
+		if d.URLHash == urlHash && (d.Choice == model.UpdateChoiceNotNeeded ||
+			d.Outcome == model.UpdateOutcomeDrafted || d.Outcome == model.UpdateOutcomeDiscarded) {
+			out = append(out, d.AccountID)
+		}
+	}
+	return out, nil
+}
 func (m *mockRunsRepo) SetDecisionOutcome(_ context.Context, _, urlHash, accountID, outcome, reason string) error {
 	if err := m.hook("SetDecisionOutcome"); err != nil {
 		return err

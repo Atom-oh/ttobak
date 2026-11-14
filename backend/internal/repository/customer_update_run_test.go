@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -348,6 +349,39 @@ func TestCustomerUpdateRunQueryInputs(t *testing.T) {
 	del, err := runRowKeysQueryInput("tbl", testRunID)
 	if err != nil || del.ProjectionExpression == nil || !hasName(del.ExpressionAttributeNames, "SK") {
 		t.Fatalf("keys query = %+v %v", del, err)
+	}
+}
+
+func TestCustomerUpdateDecidedAccountsQuery(t *testing.T) {
+	if _, err := decidedAccountsQueryInput("tbl", "u1", "AB", time.Unix(100, 0)); !errors.Is(err, ErrInvalidUpdateRun) {
+		t.Fatalf("bad hash: %v", err)
+	}
+	in, err := decidedAccountsQueryInput("tbl", "u1", testHashA, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := condString(in.FilterExpression)
+	if in.ConsistentRead == nil || !*in.ConsistentRead || in.IndexName != nil || in.ProjectionExpression == nil ||
+		!hasValue(in.ExpressionAttributeValues, "USER#u1") || !hasValue(in.ExpressionAttributeValues, "CUDEC#"+testHashA+"#") ||
+		!strings.Contains(condString(in.KeyConditionExpression), "begins_with") {
+		t.Fatalf("query = %+v", in)
+	}
+	for _, v := range []string{"not_needed", "drafted", "discarded", "100"} {
+		if !hasValue(in.ExpressionAttributeValues, v) {
+			t.Fatalf("filter %s lacks %s", filter, v)
+		}
+	}
+	if hasValue(in.ExpressionAttributeValues, "deferred") || !hasName(in.ExpressionAttributeNames, "pendingShareExpiresAt") {
+		t.Fatalf("filter = %s %v", filter, in.ExpressionAttributeValues)
+	}
+	got := decidedAccountIDs([]map[string]types.AttributeValue{
+		{"SK": sAttr("CUDEC#" + testHashA + "#" + testAccount)},
+		{"SK": sAttr("CUDEC#" + testHashB + "#" + testAccount)},
+		{"SK": sAttr("CUDEC#" + testHashA + "#bad#id")},
+		{"SK": nAttr("1")},
+	}, testHashA)
+	if !reflect.DeepEqual(got, []string{testAccount}) {
+		t.Fatalf("ids = %v", got)
 	}
 }
 

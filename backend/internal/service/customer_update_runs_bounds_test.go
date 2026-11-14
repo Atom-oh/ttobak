@@ -164,6 +164,8 @@ func TestUpdateRuns_RuntimeBudgetDeferrals(t *testing.T) {
 			accounts := []string{"acct-1", "acct-2"}[:len(c.pairs)]
 			rows := f.doneRun([]*model.UpdateItem{a}, accounts)
 			rows.Drafts = nil
+			// An undecided account keeps the item in the next start's batch.
+			f.ctx.packs = append(f.ctx.packs, runsPack("acct-9"))
 			for i, p := range c.pairs {
 				rows.Decisions[i].Outcome, rows.Decisions[i].DiscardReason = p.outcome, p.reason
 				if p.outcome == "" {
