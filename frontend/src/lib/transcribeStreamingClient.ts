@@ -29,6 +29,7 @@ import type {
   AudioStream,
 } from '@aws-sdk/client-transcribe-streaming';
 import { getIdToken, refreshSession } from '@/lib/auth';
+import { dominantSpeaker } from '@/lib/interpretSpeakers';
 import { isVocabularyBadRequest, shouldRetryWithoutVocabulary, vocabularyRequestFields, type LiveVocabularyNames } from '@/lib/liveVocabulary';
 
 export interface TranscribeStreamingConfig {
@@ -39,9 +40,11 @@ export interface TranscribeStreamingConfig {
   multiLanguage?: boolean;
   languageOptions?: string;
   preferredLanguage?: string;
+  /** Ask Transcribe to tell voices apart; final results then carry a speaker label. */
+  showSpeakerLabel?: boolean;
   vocabularies?: LiveVocabularyNames; // READY names only
   onVocabularyFallback?: () => void; // Transcribe rejected the vocabulary
-  onTranscript: (text: string, isFinal: boolean, languageCode?: string, resultId?: string) => void;
+  onTranscript: (text: string, isFinal: boolean, languageCode?: string, resultId?: string, speaker?: string) => void;
   onError: (error: string) => void;
 }
 
@@ -267,6 +270,8 @@ export class TranscribeStreamingSession {
         commandInput.LanguageCode = (this.config.languageCode || 'ko-KR') as StartStreamTranscriptionCommandInput['LanguageCode'];
       }
 
+      if (this.config.showSpeakerLabel) commandInput.ShowSpeakerLabel = true;
+
       if (!withoutVocabulary) {
         const fields = vocabularyRequestFields({
           vocabularies: this.config.vocabularies,
@@ -297,7 +302,12 @@ export class TranscribeStreamingSession {
           for (const result of event.TranscriptEvent.Transcript.Results) {
             const text = result.Alternatives?.[0]?.Transcript || '';
             if (text) {
-              this.config.onTranscript(text, !result.IsPartial, result.LanguageCode, result.ResultId);
+              if (this.config.showSpeakerLabel) {
+                const speaker = dominantSpeaker(result.Alternatives?.[0]?.Items);
+                this.config.onTranscript(text, !result.IsPartial, result.LanguageCode, result.ResultId, speaker);
+              } else {
+                this.config.onTranscript(text, !result.IsPartial, result.LanguageCode, result.ResultId);
+              }
             }
           }
         }
