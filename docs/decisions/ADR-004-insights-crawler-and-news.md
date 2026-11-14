@@ -591,11 +591,12 @@ writer for the same rows.
   error codes (for example `ProvisionedThroughputExceededException`); never
   URLs, titles, keys, error messages or user data.
 - **IAM.** The collector role holds `Query` on leading key `CUFEEDS` and
-  `GetItem`/`PutItem`/`UpdateItem`/`Query` on `CUFEED#*`. The worker role holds
-  exactly the actions its repository uses per prefix: `PutItem`/`UpdateItem` on
-  `USER#*`, `Query`/`UpdateItem` on `CUFEEDS`, `GetItem`/`Query` on `CUFEED#*`
-  and `PutItem` on `CUURL#*` and `CUPENDING`. Neither has KMS, S3, Bedrock or
-  secret access; neither has a function URL.
+  `GetItem`/`PutItem`/`UpdateItem`/`Query` on `CUFEED#*`. For fan-out the worker
+  uses `PutItem`/`UpdateItem` on `USER#*`, `Query`/`UpdateItem` on `CUFEEDS`,
+  `GetItem`/`Query` on `CUFEED#*` and `PutItem` on `CUURL#*` and `CUPENDING`;
+  its run phases add the grants recorded in
+  [ADR-030](ADR-030-customer-update-drafts.md). The collector has no KMS, S3,
+  Bedrock or secret access; neither function has a URL.
 - **Retries and concurrency.** Both schedule targets and both functions' Lambda
   asynchronous invocation configs use zero retries; the next scheduled run is
   the retry. Both functions have reserved concurrency 1. Maximum event age is 30

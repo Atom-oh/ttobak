@@ -54,6 +54,45 @@ describe('CrawlerStack', () => {
     expect(JSON.stringify(kms[0].Resource)).toContain(':key/test-key-id');
   });
 
+  test('customer update worker: run configuration without runtime ARN or Billing', () => {
+    const fns = Object.values(template.findResources('AWS::Lambda::Function', {
+      Properties: { FunctionName: 'ttobak-customer-updates' },
+    })) as any[];
+    expect(fns).toHaveLength(1);
+    const vars = fns[0].Properties.Environment.Variables;
+    expect(vars).toMatchObject({ KMS_KEY_ID: 'test-key-id', CUSTOMER_UPDATE_INCLUDE_NOTES: '1' });
+    expect(vars.CUSTOMER_UPDATE_RUNTIME_ARN).toBeUndefined();
+    expect(vars.BILLING_DATA_BUCKET).toBeUndefined();
+    expect(Object.keys(template.toJSON().Parameters ?? {}).some(p => p.includes('billing'))).toBe(false);
+  });
+
+  test('customer update worker: runtime ARN and Billing bucket from SSM', () => {
+    const app = new cdk.App();
+    const mockStack = new cdk.Stack(app, 'MockStack');
+    const stack = new CrawlerStack(app, 'TestCrawlerStackRuns', {
+      crawlerRole: new iam.Role(mockStack, 'CrawlerRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') }),
+      table: new dynamodb.Table(mockStack, 'Table', { partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING } }),
+      kbBucket: new s3.Bucket(mockStack, 'KbBucket'),
+      artifactBucket: new s3.Bucket(mockStack, 'ArtifactBucket'),
+      webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
+      webSearchGatewayArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/test',
+      customerUpdateRecordKeyId: 'test-key-id',
+      customerUpdateRuntimeArn: 'arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/cu-abc',
+      customerUpdateBillingBucketFromSsm: true,
+    });
+    const t = Template.fromStack(stack);
+    const params = t.toJSON().Parameters as Record<string, any>;
+    const ssmParam = Object.entries(params).find(([, p]) => p.Default === '/ttobak/billing/data-bucket-name');
+    expect(ssmParam).toBeDefined();
+    const fns = Object.values(t.findResources('AWS::Lambda::Function', {
+      Properties: { FunctionName: 'ttobak-customer-updates' },
+    })) as any[];
+    const vars = fns[0].Properties.Environment.Variables;
+    expect(vars.BILLING_DATA_BUCKET).toEqual({ Ref: ssmParam![0] });
+    expect(vars.CUSTOMER_UPDATE_RUNTIME_ARN).toBe('arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/cu-abc');
+    expect(vars.CUSTOMER_UPDATE_ENDPOINT_NAME).toBe('DEFAULT');
+  });
+
   test('creates Step Functions state machine', () => {
     template.resourceCountIs('AWS::StepFunctions::StateMachine', 3);
     template.hasResourceProperties('AWS::StepFunctions::StateMachine', {

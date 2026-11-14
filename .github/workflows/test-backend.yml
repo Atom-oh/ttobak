@@ -9,6 +9,7 @@ on:
       - 'backend/go.*'
       - 'backend/whisper/**'
       - 'backend/python/**'
+      - 'contracts/customer-updates/**'
   pull_request:
     paths:
       - 'backend/cmd/**'
@@ -16,11 +17,13 @@ on:
       - 'backend/go.*'
       - 'backend/whisper/**'
       - 'backend/python/**'
+      - 'contracts/customer-updates/**'
       # Re-run on workflow changes so PRs that only touch CI still trigger
       # the required `test` check (branch protection blocks otherwise).
       - '.github/workflows/test-backend.yml'
       # Review-tool-only PRs also need the protected `test` check.
       - 'scripts/pr-review/**'
+      - 'scripts/customer-updates/**'
 
 permissions:
   contents: read
@@ -76,6 +79,7 @@ jobs:
           cd ../qa && python3 -m unittest test_handler -v
           cd ../sim && python3 -m unittest test_handler -v
           cd ../customer-update-agent && python3 -m unittest discover -p 'test_*.py' -v
+          cd ../../.. && python3 -m unittest discover -s scripts/customer-updates -p 'test_*.py' -v
 
       - name: Run whisper engine tests
         # The workflow's path trigger has always included backend/whisper/**,

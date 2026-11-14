@@ -208,6 +208,14 @@ retired. Its data moves in a one-time cutover
    Research and QA can call an external search provider. Simulator code runs under
    an empty interpreter role plus SANDBOX networking and receives validated
    requirements/options, not the raw transcript.
+7. Customer updates: followed sources feed an hourly collector (shared `CUFEED#`
+   rows), and a 10-minute Go worker fans new entries out to per-user inboxes.
+   The same worker starts one run per user: it builds context packs with the
+   user's existing authorization, leases the items and invokes the customer
+   update AgentCore runtime, which writes sealed results under `CURUN#{runId}`.
+   A later tick finalizes the run: Go re-validates every row and stores sealed
+   decisions and owner-private, unsent drafts within day budgets. With no
+   runtime ARN configured the run phases are off (ADR-004, ADR-011, ADR-030).
 
 The SA workflow connects private preparation documents, initial meeting notes,
 authorized reference catalogues, and private follow-up snapshots through existing

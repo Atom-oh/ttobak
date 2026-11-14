@@ -11,7 +11,9 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import { DATA_BUCKET_PARAMETER } from './billing-stack';
 import { NewsPublication } from './news-publication';
 import { CustomerUpdates } from './customer-updates';
 import { NEWS_MODEL_ID } from './model-config';
@@ -31,6 +33,19 @@ export interface CrawlerStackProps extends cdk.StackProps {
    * an ARN: it reuses AiStack's existing key-ID export, so no new export.
    */
   customerUpdateRecordKeyId?: string;
+  /**
+   * Customer update AgentCore runtime ARN (context customerUpdateRuntimeArn).
+   * Unset keeps the worker's run phases off (ADR-030).
+   */
+  customerUpdateRuntimeArn?: string;
+  /**
+   * Resolve BILLING_DATA_BUCKET from the operator-created SSM parameter
+   * /ttobak/billing/data-bucket-name. Only set when Billing is enabled
+   * (ttobak:billingEnabled): a missing parameter fails the deployment.
+   */
+  customerUpdateBillingBucketFromSsm?: boolean;
+  /** CUSTOMER_UPDATE_INCLUDE_NOTES (context customerUpdateIncludeNotes); default on. */
+  customerUpdateIncludeNotes?: boolean;
 }
 
 export class CrawlerStack extends cdk.Stack {
@@ -188,12 +203,21 @@ export class CrawlerStack extends cdk.Stack {
     });
 
     // Customer update collection: hourly feed collector and 10-minute fan-out
-    // worker, plus the agent runtime execution role when the record key is set.
+    // worker, plus the agent runtime execution role and the worker's run
+    // phases when the record key is set (the runs stay off without a runtime ARN).
+    const recordKeyId = props.customerUpdateRecordKeyId;
+    const recordKeyArn = recordKeyId
+      ? `arn:${this.partition}:kms:${this.region}:${this.account}:key/${recordKeyId}` : undefined;
     new CustomerUpdates(this, 'CustomerUpdates', {
       table: props.table,
-      agentRuntime: props.customerUpdateRecordKeyId ? {
-        webSearchGatewayArn: props.webSearchGatewayArn,
-        recordKeyArn: `arn:${this.partition}:kms:${this.region}:${this.account}:key/${props.customerUpdateRecordKeyId}`,
+      agentRuntime: recordKeyArn ? { webSearchGatewayArn: props.webSearchGatewayArn, recordKeyArn } : undefined,
+      runs: recordKeyId && recordKeyArn ? {
+        recordKeyId,
+        recordKeyArn,
+        runtimeArn: props.customerUpdateRuntimeArn || undefined,
+        billingDataBucket: props.customerUpdateBillingBucketFromSsm
+          ? ssm.StringParameter.valueForStringParameter(this, DATA_BUCKET_PARAMETER) : undefined,
+        includeNotes: props.customerUpdateIncludeNotes,
       } : undefined,
     });
 

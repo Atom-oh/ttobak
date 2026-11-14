@@ -63,8 +63,9 @@
   The reviewer (no tools) also sees the account's insights and notes, fenced as
   internal material it must not let the draft quote or paraphrase.
 - The runtime and its ECR repository are created by hand
-  ([runbook](../runbooks/customer-update-agent.md)); nothing invokes it until the
-  Go worker ships.
+  ([runbook](../runbooks/customer-update-agent.md)). The Go worker invokes it
+  only once its ARN is configured
+  ([ADR-030](ADR-030-customer-update-drafts.md)).
 
 ## Not implemented or off by default
 

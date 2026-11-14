@@ -201,6 +201,13 @@ const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
   // One-directional AiStack -> CrawlerStack reference (already a dependency).
   customerUpdateRecordKeyId: aiStack.kmsKey.keyId,
+  // Hand-created runtime (runbook customer-update-agent.md); unset keeps the
+  // worker's run phases off. Set it in cdk.json context or with -c.
+  customerUpdateRuntimeArn: app.node.tryGetContext('customerUpdateRuntimeArn') || undefined,
+  // The parameter exists wherever Billing is enabled (BillingStack and
+  // FrontendStack already resolve it); without Billing there is no bucket.
+  customerUpdateBillingBucketFromSsm: app.node.tryGetContext('ttobak:billingEnabled') === 'true',
+  customerUpdateIncludeNotes: String(app.node.tryGetContext('customerUpdateIncludeNotes')) !== 'false',
 });
 crawlerStack.addDependency(aiStack);
 crawlerStack.addDependency(storageStack);

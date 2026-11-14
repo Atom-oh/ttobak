@@ -924,18 +924,88 @@ no VPC, function URL or other public resource (ADR-004):
   `backend/cmd/customer-updates` built as `bootstrap`, 512 MB, 5 minutes,
   reserved concurrency 1) runs from rule `ttobak-customer-update-tick`,
   `rate(10 minutes)`, input `{"kind":"tick"}`, no retries, 10-minute maximum
-  event age. Its own role has one statement per leading-key prefix:
-  `PutItem`/`UpdateItem` on `USER#*`, `Query`/`UpdateItem` on `CUFEEDS`,
-  `GetItem`/`Query` on `CUFEED#*`, and `PutItem` on `CUURL#*` and `CUPENDING`,
-  plus its own log group. Its feed state read and entry Query are strongly
-  consistent.
+  event age. It runs fan-out and then the run phases (ADR-030); its grants are
+  listed below. Its feed state read and entry Query are strongly consistent.
 
 Both functions also set Lambda asynchronous invocation retries to 0 and a
 maximum event age (collector 30 minutes, worker 10 minutes) in
 `AWS::Lambda::EventInvokeConfig`, since the schedule target setting does not
-cover Lambda's own retries. Both policies use `dynamodb:LeadingKeys` with a
-`Null` guard and have no KMS, S3, Bedrock or secret statement. Deploy
-TtobakCrawlerStack with `--exclusively`.
+cover Lambda's own retries. Every table statement uses `dynamodb:LeadingKeys`
+with a `Null` guard. The collector has no KMS, S3, Bedrock or secret statement.
+Deploy TtobakCrawlerStack with `--exclusively`.
+
+### Customer update worker run phases
+
+TtobakCrawlerStack passes `runs` to `CustomerUpdates` whenever
+`customerUpdateRecordKeyId` is set (it is, from `aiStack.kmsKey.keyId`). The
+worker environment then holds:
+
+| Variable | Value |
+|---|---|
+| `KMS_KEY_ID` | AiStack record key ID |
+| `CUSTOMER_UPDATE_INCLUDE_NOTES` | `1`; context `customerUpdateIncludeNotes=false` makes it `0` |
+| `CUSTOMER_UPDATE_RESEARCH_PAIRS_PER_DAY` | `30`: per-user per-KST-day research cap, owner-tunable in `infra/lib/customer-updates.ts`; `0` starts no runs; the worker treats an unparseable value as 30 |
+| `BILLING_DATA_BUCKET` | Only with `ttobak:billingEnabled` `"true"`: CloudFormation resolves the operator-created SSM parameter `/ttobak/billing/data-bucket-name` (the same parameter BillingStack and FrontendStack resolve). Without Billing the variable and the S3 statement are absent, because a missing parameter would fail the stack |
+| `CUSTOMER_UPDATE_RUNTIME_ARN`, `CUSTOMER_UPDATE_ENDPOINT_NAME=DEFAULT` | Only with CDK context `customerUpdateRuntimeArn` (an exact `arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/ID`; anything else fails synth). No value is committed; unset keeps the run phases off |
+
+The context keys `customerUpdateRuntimeArn` and `customerUpdateIncludeNotes`
+are unprefixed, unlike the `ttobak:` keys elsewhere in `cdk.json`.
+
+The worker role has one table statement per prefix group, exactly the
+operations the code performs:
+
+| Leading keys | Actions | Used by |
+|---|---|---|
+| `USER#*` | `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query` | fan-out inbox puts; lease `CURUN`, `CUITEM#`, `CUCURSOR`, `CUDAY#`, `CUDEC#`, `CUDRAFT#`, `CUOPT#`; reads of `PROFILE`, `MEETING#`, `SHARED#` |
+| `CUFEEDS` | `Query`, `UpdateItem` | fan-out |
+| `CUFEED#*` | `GetItem`, `Query` | fan-out |
+| `CUURL#*` | `PutItem` | fan-out |
+| `CUPENDING` | `PutItem`, `Query`, `DeleteItem` | pending marks and the rotation cursor row (`#CURSOR`) |
+| `CURUN#*` | `Query`, `BatchWriteItem` | reading and deleting run result rows |
+| `ACCOUNT#*` (read-only) | `GetItem`, `Query`, `BatchGetItem` | account META/MEMBER#, MEETINGREF#, INSIGHT#, NEWSSRC#, PROJECTREF#, CHILD# |
+| `PROJECT#*` (read-only) | `GetItem` | project CONFIG |
+| `CRAWLER#*` (read-only) | `GetItem`, `Query`, `BatchGetItem` | news source CONFIG and DOC# rows |
+
+`LeadingKeys` constrains only the partition key. `USER#*` is the partition of
+every user-owned row (meetings, documents, contacts, ...), so the worker can
+read, and write with these actions, any `USER#` row; this is an accepted limit
+of single-table least privilege (ADR-030). Index statements:
+
+- `Query` on `index/GSI1` with `LeadingKeys` `USER#*` and `dynamodb:Attributes`
+  limited to `PK`, `SK`, `GSI1PK`, `GSI1SK` (account discovery). GSI1 projects
+  all attributes and is shared with meeting and project rows; the conditions
+  return only keys.
+- `Query` on `index/GSI3` with `dynamodb:Attributes` limited to `PK`, `SK`,
+  `meetingId`, `entityType`, `userId` and no `LeadingKeys` (GSI3 is keyed by
+  the bare meeting id). It exposes the owner user id of any meeting id
+  (accepted, ADR-030).
+
+An attribute allow-list must name every key attribute of the table and of the
+index in addition to what the query projects, or DynamoDB denies the query.
+Both statements use `StringEqualsIfExists dynamodb:Select = SPECIFIC_ATTRIBUTES`
+(AWS fine-grained access control examples 1 and 3) and a `Null` guard on
+`dynamodb:Attributes`. The Go queries (`QueryNavigationCandidates`,
+`GetMeetingByID`) set a `ProjectionExpression` and `Select:
+SPECIFIC_ATTRIBUTES` explicitly; a plain `StringEquals` on `Select` is not used
+because the documented default value of `Select` is `ALL_ATTRIBUTES`.
+
+Other statements: `s3:GetObject` on
+`arn:aws:s3:::{bucket}/accounts/*/derived/services-in-use.json` only. There is
+no `ListBucket`, so a missing object reads as access denied; the worker counts
+it as `servicesUnavailable` (no service signal), not a failure. The key
+pattern's `*` also matches `/`; this is accepted because the object name is
+fixed and only this worker reads it. Also `kms:Decrypt` on the record key with
+`kms:EncryptionContext:purpose = ttobak-customer-update-run`;
+`kms:Decrypt`/`kms:GenerateDataKey` on the record key with purpose
+`ttobak-customer-update-draft` or `ttobak-customer-update-decision`; with the
+runtime ARN, `bedrock-agentcore:InvokeAgentRuntime` on that ARN and `ARN/*` (the
+research worker's form). No statement has `Resource: "*"`. The
+`BillingDataPlane` bucket uses SSE-S3, so no key grant is needed; the SSM
+parameter is resolved only during a stack update and names the companion
+bucket until the Billing cutover ([billing release](runbooks/billing-release.md));
+only the data-plane worker in this repository writes the services object, so
+until then expect no service signal, and redeploy TtobakCrawlerStack
+with `--exclusively --force` after the parameter is repointed.
 
 ### Customer update agent runtime role
 
@@ -977,7 +1047,8 @@ ARM64 image from `backend/python`, pushes `latest` and the 8-character commit ta
 and calls `update-agent-runtime` with this role, `PUBLIC` network mode and
 `TABLE_NAME`, `KMS_KEY_ID`, `WEB_SEARCH_GATEWAY_URL`,
 `WEB_SEARCH_GATEWAY_REGION=us-east-1` (plus optional `ORCHESTRATOR_MODEL_ID`).
-Nothing grants `InvokeAgentRuntime` on this runtime yet.
+Only the worker's run-phase statement, with context `customerUpdateRuntimeArn`
+set, grants `InvokeAgentRuntime` on this runtime.
 
 ## Summary privacy writer activation
 
