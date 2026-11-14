@@ -76,7 +76,8 @@ linked, not restated:
   names can appear in web-search queries sent to the search provider, and an
   opportunity name may contain the customer's name; this egress is accepted.
 - **Billing signal.** Service names come only from the names-only object; an
-  object over 45 days old, or missing, is no signal (ADR-012). Under ADR-012
+  object over 45 days old, or missing, is no signal (ADR-012). Only COT
+  publishes write it, so an account with CUR uploads only has none. Under ADR-012
   any direct member already has Billing read for the account, so service
   names in a draft's `why` expose nothing new.
 - **Drafts.** Drafts are owner-private, never sent, and expire after 90 days;
