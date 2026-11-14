@@ -406,6 +406,16 @@ An unverified user who cannot sign in uses the
 [operator recovery procedure](runbooks/unverified-account-recovery.md);
 the application never silently verifies the address or changes credentials.
 
+The admin user table has a Team column (`custom:department` from the user list;
+an em dash when empty). In the Mac app only, and only for admins, a sync button
+(`TeamSyncPanel`, `useTeamSync`) runs the `team_sync_*` commands: a preview lists
+each `alias: from → to` change, directory aliases not found and the unchanged
+count, notes that cc-on-bedrock department budgets follow the value, and offers
+Apply only when there are changes. The result lists updated users, conflicts and
+rejections, then the user list is refetched. An older app without the command
+shows only the column; hiding the button is cosmetic, the API enforces admin.
+Copy lives in `lib/teamSync.ts`.
+
 ## Accounts, filters and sharing
 
 Render accessible accounts as a collapsible hierarchy. On `/accounts` and

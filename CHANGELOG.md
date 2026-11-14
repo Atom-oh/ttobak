@@ -13,6 +13,7 @@ manifests.
 
 ### Added
 
+- Admin team sync: a Team column in the admin user list and an admin-only Mac app action that previews and writes each `@amazon.com` user's team from the internal directory into the shared user pool's `custom:department`.
 - User guide: a Mac app tab covering install and updates, macOS permissions, System audio recording, meeting detection and mute following, caption windows and interpretation, local intake, and troubleshooting; the Mac app opens the guide on that tab.
 - Drag and drop a Remember CSV or .xlsx export onto the contact import fields on the Account page and in Settings, in the browser and the Mac app; the Mac app's other upload drop zones now receive drops too.
 - Personalized Assistant cards and meeting-aware questions; automatic read-only answers to spoken questions, enabled by default with a separate external-search opt-in (#894).

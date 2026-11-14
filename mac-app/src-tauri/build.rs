@@ -49,6 +49,9 @@ const COMMANDS: &[&str] = &[
     "report_settings_get",
     "report_settings_set",
     "report_slack_channels_refresh",
+    "team_sync_run",
+    "team_sync_cancel",
+    "team_sync_get_state",
     // Granted only to the local overlay windows (capabilities/caption-overlay.json).
     "caption_overlay_idle",
     "caption_overlay_dismiss",

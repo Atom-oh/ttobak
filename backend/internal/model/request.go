@@ -364,12 +364,41 @@ type AdminUserSummary struct {
 	UserID        string     `json:"userId"`
 	Email         string     `json:"email"`
 	Name          string     `json:"name,omitempty"`
-	Status        string     `json:"status"` // Cognito UserStatus (e.g. CONFIRMED, FORCE_CHANGE_PASSWORD)
+	Department    string     `json:"department"` // custom:department; empty when unset
+	Status        string     `json:"status"`     // Cognito UserStatus (e.g. CONFIRMED, FORCE_CHANGE_PASSWORD)
 	Enabled       bool       `json:"enabled"`
 	IsAdmin       bool       `json:"isAdmin"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	LastLoginAt   *time.Time `json:"lastLoginAt"` // nil = no login recorded yet (not necessarily dormant -- see Dormant)
 	Dormant       bool       `json:"dormant"`     // true only when LastLoginAt is set and older than the dormancy threshold
+}
+
+// TeamSyncItem is one requested custom:department change. Expected is the
+// caller's last-known value; a mismatch with the current value is a conflict.
+type TeamSyncItem struct {
+	UserID   string `json:"userId"`
+	Team     string `json:"team"`
+	Expected string `json:"expected"`
+}
+
+// TeamSyncRequest is the body of POST /api/settings/users/team-sync.
+type TeamSyncRequest struct {
+	Items []TeamSyncItem `json:"items"`
+}
+
+// TeamSyncRejection reports one item that was not written and why
+// (NOT_FOUND, NOT_DIRECTORY_USER, INVALID_TEAM, COGNITO_ERROR).
+type TeamSyncRejection struct {
+	UserID string `json:"userId"`
+	Code   string `json:"code"`
+}
+
+// TeamSyncResponse is the per-item outcome. Slices are never null.
+type TeamSyncResponse struct {
+	Updated   []string            `json:"updated"`
+	Unchanged int                 `json:"unchanged"`
+	Conflicts []string            `json:"conflicts"`
+	Rejected  []TeamSyncRejection `json:"rejected"`
 }
 
 // AdminUserListResponse represents the response for the admin user list

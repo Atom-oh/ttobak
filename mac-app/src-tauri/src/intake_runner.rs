@@ -830,7 +830,7 @@ fn wait_group_gone(pgid: i32, max: Duration) {
     }
 }
 
-/// Kills the current intake and report runs' process groups (app exit) and
+/// Kills the current intake, report and team sync runs' process groups (app exit) and
 /// refuses any later spawn of either.
 pub fn kill_running(app: &AppHandle) {
     let mut intake = 0;
@@ -846,7 +846,13 @@ pub fn kill_running(app: &AppHandle) {
         report = track.pgid.swap(0, Ordering::SeqCst);
         channels = state.channels_track().pgid.swap(0, Ordering::SeqCst);
     }
-    let groups: Vec<i32> = [intake, report, channels]
+    let mut team_sync = 0;
+    if let Some(state) = app.try_state::<crate::team_sync_runner::TeamSyncState>() {
+        let track = state.track();
+        track.shutting_down.store(true, Ordering::SeqCst);
+        team_sync = track.pgid.swap(0, Ordering::SeqCst);
+    }
+    let groups: Vec<i32> = [intake, report, channels, team_sync]
         .into_iter()
         .filter(|&g| g > 1)
         .collect();

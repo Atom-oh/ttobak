@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -111,6 +112,35 @@ func (h *UserAdminHandler) ResetPassword(w http.ResponseWriter, r *http.Request)
 	auditAdminAction(actorID, targetID, "ResetPassword")
 
 	writeJSON(w, http.StatusOK, model.AdminUserActionResponse{UserID: targetID})
+}
+
+// maxTeamSyncBodyBytes bounds the team-sync request body.
+const maxTeamSyncBodyBytes = 64 << 10
+
+// SyncTeams handles POST /api/settings/users/team-sync
+func (h *UserAdminHandler) SyncTeams(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	actorID := middleware.GetUserID(ctx)
+
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTeamSyncBodyBytes))
+	dec.DisallowUnknownFields()
+	var req model.TeamSyncRequest
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	resp, err := h.userAdmin.SyncTeams(ctx, actorID, req.Items)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+			return
+		}
+		log.Printf("SyncTeams failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Request failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // auditAdminAction logs a successful destructive/identity-affecting admin
