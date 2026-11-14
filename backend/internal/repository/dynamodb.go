@@ -560,6 +560,7 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		ExpressionAttributeValues: expr.Values(),
 		ProjectionExpression:      expr.Projection(),
 		Limit:                     aws.Int32(1),
+		Select:                    types.SelectSpecificAttributes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query for meeting: %w", err)
