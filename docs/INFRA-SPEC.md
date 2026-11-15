@@ -946,7 +946,7 @@ worker environment then holds:
 | `CUSTOMER_UPDATE_INCLUDE_NOTES` | `1`; context `customerUpdateIncludeNotes=false` makes it `0` |
 | `CUSTOMER_UPDATE_RESEARCH_PAIRS_PER_DAY` | `30`: per-user per-KST-day research cap, owner-tunable in `infra/lib/customer-updates.ts`; `0` starts no runs; the worker treats an unparseable value as 30 |
 | `BILLING_DATA_BUCKET` | Only with `ttobak:billingEnabled` `"true"`: CloudFormation resolves the operator-created SSM parameter `/ttobak/billing/data-bucket-name` (the same parameter BillingStack and FrontendStack resolve). Without Billing the variable and the S3 statement are absent, because a missing parameter would fail the stack |
-| `CUSTOMER_UPDATE_RUNTIME_ARN`, `CUSTOMER_UPDATE_ENDPOINT_NAME=DEFAULT` | Only with CDK context `customerUpdateRuntimeArn` (an exact `arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/ID`; anything else fails synth). No value is committed; unset keeps the run phases off |
+| `CUSTOMER_UPDATE_RUNTIME_ARN`, `CUSTOMER_UPDATE_ENDPOINT_NAME=DEFAULT` | Only with CDK context `customerUpdateRuntimeArn` (an exact `arn:aws:bedrock-agentcore:REGION:ACCOUNT:runtime/ID`; anything else fails synth). `infra/cdk.json` commits the `ttobakCustomerUpdate` runtime ARN, so the run phases are on; removing the value turns them off |
 
 The context keys `customerUpdateRuntimeArn` and `customerUpdateIncludeNotes`
 are unprefixed, unlike the `ttobak:` keys elsewhere in `cdk.json`.

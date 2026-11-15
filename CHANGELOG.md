@@ -45,6 +45,7 @@ manifests.
 
 ### Changed
 
+- Customer update drafts: the worker's run phases are switched on by setting the `ttobakCustomerUpdate` runtime ARN in `infra/cdk.json`; every 10 minutes it builds per-customer context (meeting-note excerpts included by default) and stores owner-private drafts. Nothing is sent automatically (#PR).
 - Validate private asset paths before signing uploads or downloads, and bind meeting audio and attachments to their owner and meeting while preserving authorized sharing.
 - Enable the project REA Claude plugin and permit standard PR merges while denying `--admin` merges; retain the existing review-size and secret-scan hooks.
 - The SA performance report accepts Claude Code 2.1.311 or newer (was 2.1.322); 2.1.311 has the same verified sandbox settings schema.
