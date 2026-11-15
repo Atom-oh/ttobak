@@ -56,6 +56,7 @@ export function MeetingRow({ meeting, accountName, preview, onDelete, assign }: 
   const [isLinking, setIsLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const assignOptions = assign?.options ?? [];
+  const canPick = !!assign?.onLinked && (!!assign.loading || assignOptions.length > 0);
   const date = new Date(meeting.date);
   const hasDate = Number.isFinite(date.getTime());
   const duration = meeting.duration != null && Number.isFinite(meeting.duration) && meeting.duration > 0
@@ -94,7 +95,7 @@ export function MeetingRow({ meeting, accountName, preview, onDelete, assign }: 
 
   return (
     <li className="border-b border-border-subtle last:border-0" aria-busy={isDeleting || isLinking}>
-      <div className={`flex items-center gap-3 px-3 py-3 hover:bg-surface md:px-5 ${isDeleting ? 'opacity-50' : ''}`}>
+      <div className={`flex flex-wrap items-center gap-3 px-3 py-3 hover:bg-surface md:flex-nowrap md:px-5 ${isDeleting ? 'opacity-50' : ''}`}>
         <Link
           href={`/meeting/${meeting.meetingId}`}
           className="group grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-2 rounded-md focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary md:grid-cols-[minmax(0,1fr)_7.5rem_5.5rem_3.5rem]"
@@ -127,8 +128,9 @@ export function MeetingRow({ meeting, accountName, preview, onDelete, assign }: 
           </span>
         </Link>
         {assign?.slot && (
-          <div className="w-28 shrink-0 md:w-36">
-            {assign.onLinked && (assign.loading || assignOptions.length > 0) && (
+          // Phones put the picker on its own full-width line; md+ keeps the reserved header column.
+          <div className={`order-last w-full shrink-0 md:order-none md:w-36 ${canPick ? '' : 'hidden md:block'}`}>
+            {canPick && (
               <select value="" disabled={assign.loading || isLinking || isDeleting}
                 onChange={event => void handleAssign(event.target.value)}
                 aria-label={`${meeting.title} 고객 지정`} title="고객을 지정합니다. 팀 공유는 미팅 상세에서 별도로 합니다."
