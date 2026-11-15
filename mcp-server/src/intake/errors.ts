@@ -9,6 +9,8 @@ export const INTAKE_CODES = [
   'SERVER_START_FAILED',
   'SOURCE_TIMEOUT',
   'SOURCE_ERROR',
+  /** A source holds more new items than a run can read without skipping some; nothing was sent. */
+  'SOURCE_TOO_LARGE',
   'AUTH_EXPIRED_MIDWAY',
   'SCHEMA_CHANGED',
   'PARSE_FAILED',

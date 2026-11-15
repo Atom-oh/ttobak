@@ -501,7 +501,13 @@ configuration.
   - `specreq` (`spec-req-mcp`): `check_user_is_tam`, `search_requests_advanced`,
     `get_request`, `acknowledge_request`;
   - `slack` (`slack-mcp`): `lookup_user`, `open_dm_channel`, `list_drafts`,
-    `post_draft`.
+    `post_draft`;
+  - `links` (the user's own Slack MCP server, same entry as `slack`):
+    `list_my_channels`, `get_messages` only. It reads new messages of the
+    channels the user chose in the Mac settings (`intake_links_channels`,
+    `intake_links_select`) and uploads only filtered public https links and a
+    seen-at time as customer update sources. Message text, author, thread,
+    permalink and channel ID never leave the Mac.
   Never `post_message`, `schedule_message`, `complete_request` or any other
   write. Classification, linking and drafting are deterministic; no model runs.
 - **Mac notices (amendment, 2026-11-10).** The runner appends one line per

@@ -13973,10 +13973,10 @@ var init_protocol = __esm({
           });
           this.setRequestHandler(ListTasksRequestSchema, async (request2, extra) => {
             try {
-              const { tasks, nextCursor } = await this._taskStore.listTasks(request2.params?.cursor, extra.sessionId);
+              const { tasks, nextCursor: nextCursor2 } = await this._taskStore.listTasks(request2.params?.cursor, extra.sessionId);
               return {
                 tasks,
-                nextCursor,
+                nextCursor: nextCursor2,
                 _meta: {}
               };
             } catch (error3) {
@@ -17024,20 +17024,20 @@ var require_resolve = __commonJS({
       return false;
     }
     function countKeys(schema) {
-      let count = 0;
+      let count2 = 0;
       for (const key in schema) {
         if (key === "$ref")
           return Infinity;
-        count++;
+        count2++;
         if (SIMPLE_INLINED.has(key))
           continue;
         if (typeof schema[key] == "object") {
-          (0, util_1.eachItem)(schema[key], (sch) => count += countKeys(sch));
+          (0, util_1.eachItem)(schema[key], (sch) => count2 += countKeys(sch));
         }
-        if (count === Infinity)
+        if (count2 === Infinity)
           return Infinity;
       }
-      return count;
+      return count2;
     }
     function getFullPath(resolver, id = "", normalize2) {
       if (normalize2 !== false)
@@ -20519,8 +20519,8 @@ var require_contains = __commonJS({
         cxt.result(valid, () => cxt.reset());
         function validateItemsWithCount() {
           const schValid = gen.name("_valid");
-          const count = gen.let("count", 0);
-          validateItems(schValid, () => gen.if(schValid, () => checkLimits(count)));
+          const count2 = gen.let("count", 0);
+          validateItems(schValid, () => gen.if(schValid, () => checkLimits(count2)));
         }
         function validateItems(_valid, block) {
           gen.forRange("i", 0, len, (i) => {
@@ -20533,16 +20533,16 @@ var require_contains = __commonJS({
             block();
           });
         }
-        function checkLimits(count) {
-          gen.code((0, codegen_1._)`${count}++`);
+        function checkLimits(count2) {
+          gen.code((0, codegen_1._)`${count2}++`);
           if (max === void 0) {
-            gen.if((0, codegen_1._)`${count} >= ${min}`, () => gen.assign(valid, true).break());
+            gen.if((0, codegen_1._)`${count2} >= ${min}`, () => gen.assign(valid, true).break());
           } else {
-            gen.if((0, codegen_1._)`${count} > ${max}`, () => gen.assign(valid, false).break());
+            gen.if((0, codegen_1._)`${count2} > ${max}`, () => gen.assign(valid, false).break());
             if (min === 1)
               gen.assign(valid, true);
             else
-              gen.if((0, codegen_1._)`${count} >= ${min}`, () => gen.assign(valid, true));
+              gen.if((0, codegen_1._)`${count2} >= ${min}`, () => gen.assign(valid, true));
           }
         }
       }
@@ -23963,7 +23963,7 @@ function parseApiResponse(status, body) {
   }
   return parsed;
 }
-var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, MAX_TEAM_SYNC_ITEMS, MAX_TEAM_SYNC_BODY_BYTES, MAX_TEAM_SYNC_RESPONSE_BYTES, MAX_ADMIN_USERS_BYTES, TtobakApi;
+var MIME_BY_EXT, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES, UploadRejectedError, MAX_AUDIO_UPLOAD_BYTES, AUDIO_MIME_BY_EXT, BLOCKED_SYSTEM_PREFIXES, BLOCKED_NAME_PATTERNS, PROJECT_OPTIONAL_FIELDS, PERFORMANCE_SOURCES, MAX_PERFORMANCE_API_BYTES, MAX_PERFORMANCE_MAPPINGS_BYTES, MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES, PERFORMANCE_REPORT_KEY, MAX_PERFORMANCE_REPORT_BYTES, ApiResponseError, MAX_CUSTOMER_UPDATE_LINKS, MAX_CUSTOMER_UPDATE_LINKS_BODY_BYTES, MAX_CUSTOMER_UPDATE_SOURCES_BYTES, MAX_CUSTOMER_UPDATE_RESULT_BYTES, MAX_TEAM_SYNC_ITEMS, MAX_TEAM_SYNC_BODY_BYTES, MAX_TEAM_SYNC_RESPONSE_BYTES, MAX_ADMIN_USERS_BYTES, TtobakApi;
 var init_api2 = __esm({
   "src/api.ts"() {
     "use strict";
@@ -24021,6 +24021,10 @@ var init_api2 = __esm({
       status;
       code;
     };
+    MAX_CUSTOMER_UPDATE_LINKS = 200;
+    MAX_CUSTOMER_UPDATE_LINKS_BODY_BYTES = 512 * 1024;
+    MAX_CUSTOMER_UPDATE_SOURCES_BYTES = 256 * 1024;
+    MAX_CUSTOMER_UPDATE_RESULT_BYTES = 16 * 1024;
     MAX_TEAM_SYNC_ITEMS = 200;
     MAX_TEAM_SYNC_BODY_BYTES = 64 * 1024;
     MAX_TEAM_SYNC_RESPONSE_BYTES = 64 * 1024;
@@ -24064,6 +24068,41 @@ var init_api2 = __esm({
         if (body.items.length > MAX_TEAM_SYNC_ITEMS) throw new Error(`team sync is limited to ${MAX_TEAM_SYNC_ITEMS} items`);
         if (Buffer.byteLength(JSON.stringify(body)) > MAX_TEAM_SYNC_BODY_BYTES) throw new Error("team sync body exceeds 64 KiB");
         return await this.request("POST", "/api/settings/users/team-sync", body, MAX_TEAM_SYNC_RESPONSE_BYTES, false, true);
+      }
+      /** The caller's customer update sources: `{sources: [...]}`. */
+      async listCustomerUpdateSources() {
+        return this.request("GET", "/api/customer-updates/sources", void 0, MAX_CUSTOMER_UPDATE_SOURCES_BYTES, false, true);
+      }
+      /** Registers one Slack source; the cloud row holds only the label and the opaque local ID. */
+      async addCustomerUpdateSource(body) {
+        return this.request("POST", "/api/customer-updates/sources", body, MAX_CUSTOMER_UPDATE_RESULT_BYTES, false, true);
+      }
+      /** Changes a source's label (`PatchUpdateSourceRequest`); returns `{status: "updated"}`. */
+      async patchCustomerUpdateSource(sourceId, body) {
+        return this.request(
+          "PATCH",
+          `/api/customer-updates/sources/${identifier(sourceId, "sourceId")}`,
+          { label: body.label },
+          MAX_CUSTOMER_UPDATE_RESULT_BYTES,
+          false,
+          true
+        );
+      }
+      async deleteCustomerUpdateSource(sourceId) {
+        return this.request(
+          "DELETE",
+          `/api/customer-updates/sources/${identifier(sourceId, "sourceId")}`,
+          void 0,
+          MAX_CUSTOMER_UPDATE_RESULT_BYTES,
+          false,
+          true
+        );
+      }
+      /** Uploads at most 200 links of one Slack source; refused client-side above the server limits. */
+      async uploadCustomerUpdateLinks(body) {
+        if (body.links.length > MAX_CUSTOMER_UPDATE_LINKS) throw new Error(`link upload is limited to ${MAX_CUSTOMER_UPDATE_LINKS} links`);
+        if (Buffer.byteLength(JSON.stringify(body)) > MAX_CUSTOMER_UPDATE_LINKS_BODY_BYTES) throw new Error("link upload body exceeds 512 KiB");
+        return await this.request("POST", "/api/customer-updates/links", body, MAX_CUSTOMER_UPDATE_RESULT_BYTES, false, true);
       }
       /** The owner's per-source performance sync revisions. */
       async performanceSources() {
@@ -25833,23 +25872,23 @@ async function runCalendar(options2) {
     for (const item2 of lookups) facts.set(item2.meetingId, await options2.attendees.factsFor(item2));
     options2.attendees.save(now);
   }
-  const plan = planCalendar(items, state.ledger, window, zone, options2.responses, { sourceId, matcher, facts });
-  plan.counts.attendeesUnavailable = options2.attendees?.unavailable ?? 0;
-  if (plan.counts.responseUnknown > 0) {
-    throw new IntakeError("SCHEMA_CHANGED", `${plan.counts.responseUnknown} calendar_view items carry no known response`);
+  const plan2 = planCalendar(items, state.ledger, window, zone, options2.responses, { sourceId, matcher, facts });
+  plan2.counts.attendeesUnavailable = options2.attendees?.unavailable ?? 0;
+  if (plan2.counts.responseUnknown > 0) {
+    throw new IntakeError("SCHEMA_CHANGED", `${plan2.counts.responseUnknown} calendar_view items carry no known response`);
   }
-  if (dryRun) return { counts: plan.counts, revision: state.revision, preview: plan.preview };
-  if (plan.counts.sensitivityUnknown > 0 && !options2.acceptUnknownSensitivity) {
+  if (dryRun) return { counts: plan2.counts, revision: state.revision, preview: plan2.preview };
+  if (plan2.counts.sensitivityUnknown > 0 && !options2.acceptUnknownSensitivity) {
     throw new IntakeError(
       "SENSITIVITY_UNKNOWN",
       "items carry no sensitivity flag; confirm private items are hidden, then select with --accept-unknown-sensitivity"
     );
   }
-  state.held = { ...state.held ?? {}, ...plan.held };
-  for (const id of plan.released) delete state.held[id];
+  state.held = { ...state.held ?? {}, ...plan2.held };
+  for (const id of plan2.released) delete state.held[id];
   store.write(state, ...statePath(state));
   const api = options2.api;
-  const groups = batches2(plan.mutations);
+  const groups = batches2(plan2.mutations);
   if (!groups.length) groups.push([]);
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index];
@@ -25864,8 +25903,8 @@ async function runCalendar(options2) {
         complete: index === groups.length - 1,
         mutations: group
       },
-      set: Object.fromEntries(Object.entries(plan.set).filter(([id]) => ids.has(id))),
-      remove: plan.remove.filter((id) => ids.has(id))
+      set: Object.fromEntries(Object.entries(plan2.set).filter(([id]) => ids.has(id))),
+      remove: plan2.remove.filter((id) => ids.has(id))
     };
     validateCalendarSync(state.pending.request);
     store.write(state, ...statePath(state));
@@ -25876,8 +25915,8 @@ async function runCalendar(options2) {
   state.held = pruneLedger(state.held, now);
   store.write(state, ...statePath(state));
   const upserted = /* @__PURE__ */ new Map();
-  for (const item2 of items) if (Object.hasOwn(plan.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);
-  return { counts: plan.counts, revision: state.revision, upserted: [...upserted.values()] };
+  for (const item2 of items) if (Object.hasOwn(plan2.set, item2.meetingId) && !upserted.has(item2.meetingId)) upserted.set(item2.meetingId, item2);
+  return { counts: plan2.counts, revision: state.revision, upserted: [...upserted.values()] };
 }
 var CALENDAR_TOOL, PAST_DAYS, FUTURE_DAYS, MAX_ITEMS, LEDGER_RETENTION_DAYS, MAX_BATCH2, UNTITLED, CALENDAR_RESPONSES, DEFAULT_CALENDAR_RESPONSES, LONG_EVENT_MS, MATCH_TEXT_BYTES, SCOPE_PATTERN, IDENTIFIER2, MAX_DIRECTORY_ACCOUNTS, MAX_DIRECTORY_PAGES;
 var init_calendar2 = __esm({
@@ -26067,7 +26106,7 @@ function isTaskConnector(value) {
 function allowedToolNames(connector) {
   return CONNECTOR_TOOLS[connector].map((tool) => tool.name);
 }
-var TASK_CONNECTORS, CONNECTOR_TOOLS;
+var TASK_CONNECTORS, CONNECTOR_TOOLS, LINKS_TOOLS;
 var init_connectors = __esm({
   "src/intake/connectors.ts"() {
     "use strict";
@@ -26098,6 +26137,10 @@ var init_connectors = __esm({
         { name: "post_draft", properties: ["channel", "text"] }
       ]
     };
+    LINKS_TOOLS = [
+      { name: "list_my_channels", properties: [] },
+      { name: "get_messages", properties: ["channel", "since", "until", "limit", "cursor", "includeThreadReplies"] }
+    ];
   }
 });
 
@@ -26588,6 +26631,99 @@ var init_hosts = __esm({
       kiro: [".kiro", "settings", "mcp.json"]
     };
     TTOBAK_ENDPOINT_KEYS = ["TTOBAK_API_URL", "TTOBAK_COGNITO_DOMAIN", "TTOBAK_CLIENT_ID", "TTOBAK_USER_POOL_ID"];
+  }
+});
+
+// src/intake/link-extract.ts
+function unescapeSlack(text5) {
+  return text5.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+function count(text5, character) {
+  let total = 0;
+  for (const c of text5) if (c === character) total++;
+  return total;
+}
+function stripTrailing(url2) {
+  let end = url2.length;
+  while (end > 0 && TRAILING.has(url2[end - 1])) {
+    const head = url2.slice(0, end);
+    if (url2[end - 1] === ")" && count(head, ")") <= count(head, "(")) break;
+    end--;
+  }
+  return url2.slice(0, end);
+}
+function extractUrls(text5, max = MAX_URLS_PER_MESSAGE) {
+  const found = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const match of text5.matchAll(TOKEN)) {
+    let url2;
+    if (match[1] !== void 0) {
+      if (!SCHEME.test(match[1])) continue;
+      url2 = unescapeSlack(match[1]);
+    } else {
+      url2 = stripTrailing(unescapeSlack(match[0]));
+    }
+    if (!SCHEME.test(url2) || seen.has(url2)) continue;
+    seen.add(url2);
+    found.push(url2);
+    if (found.length >= max) break;
+  }
+  return found;
+}
+function internalHost(host) {
+  return INTERNAL_HOST_SUFFIXES.some((suffix2) => host === suffix2 || host.endsWith("." + suffix2));
+}
+function allLabelsInteger(host) {
+  return host.split(".").every((label) => /^(0x[0-9a-f]+|[0-9]+)$/i.test(label));
+}
+function publicUrl(raw) {
+  if (typeof raw !== "string") return null;
+  const url2 = raw.trim();
+  if (url2.length === 0 || Buffer.byteLength(url2, "utf8") > MAX_URL_LENGTH) return null;
+  if (/[\s\u0000-\u001f\u007f-\u009f]/.test(url2)) return null;
+  let parsed;
+  try {
+    parsed = new URL(url2);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "" || host.startsWith("[") || host.includes(":") || !host.includes(".")) return null;
+  if (/^[0-9]+$/.test(host.slice(host.lastIndexOf(".") + 1)) || allLabelsInteger(host)) return null;
+  if (internalHost(host)) return null;
+  return url2;
+}
+var INTERNAL_HOST_SUFFIXES, MAX_URLS_PER_MESSAGE, MAX_URL_LENGTH, TOKEN, SCHEME, TRAILING;
+var init_link_extract = __esm({
+  "src/intake/link-extract.ts"() {
+    "use strict";
+    INTERNAL_HOST_SUFFIXES = [
+      "slack.com",
+      "slack-files.com",
+      "amazon.dev",
+      "aws.dev",
+      "a2z.com",
+      "corp.amazon.com",
+      "w.amazon.com",
+      "quip-amazon.com",
+      "amazon.work",
+      "awsapps.com",
+      "sharepoint.com",
+      "salesforce.com",
+      "force.com",
+      "sim.amazon.com",
+      "issues.amazon.com",
+      "code.amazon.com",
+      "phonetool.amazon.com",
+      "broadcast.amazon.com"
+    ];
+    MAX_URLS_PER_MESSAGE = 20;
+    MAX_URL_LENGTH = 2048;
+    TOKEN = /<([^<>|\s]*)(?:\|[^<>]*)?>|https?:\/\/[^\s<>]+/gi;
+    SCHEME = /^https?:\/\//i;
+    TRAILING = /* @__PURE__ */ new Set([".", ",", "!", "?", "]", ")", ">"]);
   }
 });
 
@@ -28072,6 +28208,459 @@ var init_mcp_client = __esm({
   }
 });
 
+// src/intake/links.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+function record17(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+async function listChannels(session) {
+  const payload = resultJson(
+    await session.call("list_my_channels", { excludeArchived: true, compactOutput: true }),
+    "list_my_channels"
+  );
+  if (!record17(payload) || !Array.isArray(payload.sections)) {
+    throw new IntakeError("SCHEMA_CHANGED", "list_my_channels returned an unexpected shape");
+  }
+  const channels = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const section2 of payload.sections) {
+    if (!record17(section2) || !Array.isArray(section2.channels)) {
+      throw new IntakeError("SCHEMA_CHANGED", "list_my_channels section has an unexpected shape");
+    }
+    for (const channel of section2.channels) {
+      if (!record17(channel) || typeof channel.id !== "string" || !CHANNEL_ID.test(channel.id) || typeof channel.name !== "string" || seen.has(channel.id)) continue;
+      seen.add(channel.id);
+      channels.push({ id: channel.id, name: [...channel.name].slice(0, MAX_NAME_LENGTH).join("") });
+      if (channels.length >= MAX_LISTED_CHANNELS) return channels;
+    }
+  }
+  return channels;
+}
+function validLabel(value) {
+  if (typeof value !== "string") return null;
+  const label = value.trim();
+  const length = [...label].length;
+  return length >= 1 && length <= MAX_LABEL_CODE_POINTS ? label : null;
+}
+function validChoices(choices) {
+  if (!Array.isArray(choices) || choices.length > MAX_LINK_CHANNELS) {
+    throw new IntakeError("INVALID_ARGUMENT", `at most ${MAX_LINK_CHANNELS} channels can be selected`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return choices.map((choice) => {
+    const label = validLabel(choice?.label);
+    if (typeof choice?.id !== "string" || !CHANNEL_ID.test(choice.id) || seen.has(choice.id)) {
+      throw new IntakeError("INVALID_ARGUMENT", "channel ID is invalid or repeated");
+    }
+    if (label === null) throw new IntakeError("INVALID_ARGUMENT", `label must be 1-${MAX_LABEL_CODE_POINTS} characters`);
+    seen.add(choice.id);
+    return { id: choice.id, label };
+  });
+}
+function readLinksSelection(store) {
+  const selection = store.read("selection.json");
+  const links = record17(selection) ? selection.links : void 0;
+  if (links === void 0) return { channels: [], pendingCleanup: [] };
+  const invalid4 = () => new IntakeError("STORE_INVALID", "links selection is invalid");
+  if (!record17(links) || !Array.isArray(links.channels)) throw invalid4();
+  const channels = links.channels.map((channel) => {
+    if (!record17(channel) || typeof channel.id !== "string" || !CHANNEL_ID.test(channel.id) || validLabel(channel.label) === null || typeof channel.localSourceId !== "string" || !LOCAL_ID.test(channel.localSourceId) || typeof channel.sourceId !== "string" || !SOURCE_ID.test(channel.sourceId)) throw invalid4();
+    return {
+      id: channel.id,
+      label: channel.label,
+      localSourceId: channel.localSourceId,
+      sourceId: channel.sourceId
+    };
+  });
+  const pending = links.pendingCleanup ?? [];
+  if (!Array.isArray(pending) || !pending.every((id) => typeof id === "string" && LOCAL_ID.test(id))) throw invalid4();
+  return { channels, pendingCleanup: pending };
+}
+function writeLinksSelection(store, links) {
+  const previous = store.read("selection.json");
+  const disabled = record17(previous) && record17(previous.links) && previous.links.disabled === true;
+  store.write(
+    { ...record17(previous) ? previous : { version: 1 }, links: { ...links, ...disabled ? { disabled } : {} } },
+    "selection.json"
+  );
+}
+function busy(error3) {
+  return error3 instanceof ApiResponseError && error3.status === 503 && error3.code === "SOURCES_BUSY";
+}
+async function withBusyRetry(write, sleep) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await write();
+    } catch (error3) {
+      if (!busy(error3) || attempt >= BUSY_ATTEMPTS) throw error3;
+      await sleep(BUSY_DELAY_MS * attempt);
+    }
+  }
+}
+function sourceFailure(error3, action) {
+  const failure2 = deliveryFailure(error3);
+  if (failure2.kind === "login") return new IntakeError("TTOBAK_LOGIN_REQUIRED");
+  if (busy(error3)) return new IntakeError("TTOBAK_UNAVAILABLE", `${action}: sources are busy; try again`);
+  if (failure2.kind === "rejected" && failure2.status === 409) {
+    return new IntakeError("TTOBAK_CONFLICT", `${action}: the customer update source limit is reached`);
+  }
+  if (failure2.kind === "rejected") return new IntakeError("TTOBAK_REJECTED", `${action}: HTTP ${failure2.status}`);
+  return new IntakeError("TTOBAK_UNAVAILABLE", `${action} failed`);
+}
+async function cloudSlackSources(api) {
+  let value;
+  try {
+    value = await api.listCustomerUpdateSources();
+  } catch (error3) {
+    throw sourceFailure(error3, "source list");
+  }
+  if (!record17(value) || !Array.isArray(value.sources)) {
+    throw new IntakeError("TTOBAK_UNAVAILABLE", "source list has an unexpected shape");
+  }
+  const result = /* @__PURE__ */ new Map();
+  for (const source of value.sources) {
+    if (record17(source) && source.kind === "slack" && typeof source.localSourceId === "string" && typeof source.sourceId === "string" && SOURCE_ID.test(source.sourceId)) {
+      result.set(source.localSourceId, source.sourceId);
+    }
+  }
+  return result;
+}
+async function selectChannels(store, api, choices, now, options2 = {}) {
+  void now;
+  const wanted = validChoices(choices);
+  const sleep = options2.sleep ?? sleepFor;
+  const current = readLinksSelection(store);
+  const cloud = await cloudSlackSources(api);
+  const pending = new Set(current.pendingCleanup);
+  const remove = async (localSourceId, sourceId) => {
+    if (sourceId === void 0) return;
+    try {
+      await withBusyRetry(() => api.deleteCustomerUpdateSource(sourceId), sleep);
+      cloud.delete(localSourceId);
+      pending.delete(localSourceId);
+    } catch (error3) {
+      if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+      pending.add(localSourceId);
+    }
+  };
+  for (const localSourceId of [...pending]) {
+    if (cloud.has(localSourceId)) await remove(localSourceId, cloud.get(localSourceId));
+    else pending.delete(localSourceId);
+  }
+  const wantedIds = new Set(wanted.map((choice) => choice.id));
+  for (const channel of current.channels) {
+    if (!wantedIds.has(channel.id)) await remove(channel.localSourceId, cloud.get(channel.localSourceId));
+  }
+  const kept = new Map(current.channels.filter((channel) => wantedIds.has(channel.id) && cloud.get(channel.localSourceId) === channel.sourceId).map((channel) => [channel.id, channel]));
+  const channels = [];
+  const save2 = () => writeLinksSelection(store, { channels: [...channels], pendingCleanup: [...pending] });
+  const relabelFailed = [];
+  for (const choice of wanted) {
+    const existing = kept.get(choice.id);
+    if (!existing) continue;
+    let label = existing.label;
+    if (choice.label !== existing.label) {
+      try {
+        await withBusyRetry(() => api.patchCustomerUpdateSource(existing.sourceId, { label: choice.label }), sleep);
+        label = choice.label;
+      } catch (error3) {
+        if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+        relabelFailed.push(choice.id);
+      }
+    }
+    channels.push({ ...existing, label });
+  }
+  save2();
+  dropCursors(store, new Set(channels.map((channel) => channel.id)));
+  for (const choice of wanted) {
+    if (kept.has(choice.id)) continue;
+    const localSourceId = randomUUID4();
+    pending.add(localSourceId);
+    save2();
+    let created;
+    try {
+      created = await withBusyRetry(() => api.addCustomerUpdateSource({ kind: "slack", label: choice.label, localSourceId }), sleep);
+    } catch (error3) {
+      if (deliveryFailure(error3).kind === "rejected" && !busy(error3)) pending.delete(localSourceId);
+      save2();
+      throw sourceFailure(error3, "source create");
+    }
+    if (!record17(created) || typeof created.sourceId !== "string" || !SOURCE_ID.test(created.sourceId)) {
+      save2();
+      throw new IntakeError("TTOBAK_UNAVAILABLE", "source create returned an unexpected shape");
+    }
+    pending.delete(localSourceId);
+    channels.push({ id: choice.id, label: choice.label, localSourceId, sourceId: created.sourceId });
+    save2();
+  }
+  const order = new Map(wanted.map((choice, index) => [choice.id, index]));
+  channels.sort((a, b) => order.get(a.id) - order.get(b.id));
+  save2();
+  return { channels, pendingCleanup: [...pending], relabelFailed };
+}
+function unwrapText(text5) {
+  return text5.replace(DATAMARK, " ").replace(WRAPPER_OPEN, "").replace(WRAPPER_CLOSE, "");
+}
+function blockLinks(blocks) {
+  const urls = [];
+  let nodes = 0;
+  const walk = (items, depth) => {
+    if (!Array.isArray(items) || depth > MAX_BLOCK_DEPTH) return;
+    for (const item2 of items) {
+      if (++nodes > MAX_BLOCK_NODES) return;
+      if (!record17(item2)) continue;
+      if (item2.type === "link" && typeof item2.url === "string") urls.push(item2.url);
+      walk(item2.elements, depth + 1);
+    }
+  };
+  walk(blocks, 0);
+  return urls;
+}
+function messageUrls(item2) {
+  const fromText = typeof item2.text === "string" ? extractUrls(unwrapText(item2.text), MAX_CANDIDATES_PER_MESSAGE) : [];
+  const urls = /* @__PURE__ */ new Set();
+  for (const raw of [...fromText, ...blockLinks(item2.blocks)]) {
+    const url2 = publicUrl(raw);
+    if (url2 !== null) urls.add(url2);
+    if (urls.size >= MAX_URLS_PER_MESSAGE2) break;
+  }
+  return [...urls];
+}
+function messageTime(message) {
+  const { ts, timestamp } = message;
+  let ms = NaN;
+  if (typeof timestamp === "string") ms = Date.parse(timestamp);
+  else if (typeof ts === "string" && /^\d{1,12}(\.\d{1,9})?$/.test(ts)) ms = Number(ts) * 1e3;
+  else if (typeof ts === "number") ms = ts * 1e3;
+  return Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : null;
+}
+function nextCursor(payload) {
+  const metadata = record17(payload.response_metadata) ? payload.response_metadata.next_cursor : void 0;
+  for (const value of [payload.nextCursor, payload.next_cursor, metadata, payload.cursor]) {
+    if (typeof value === "string" && value && value.length <= MAX_CURSOR_LENGTH) return value;
+  }
+  return null;
+}
+async function readWindow(session, channel, since2, until) {
+  const sinceMs = Date.parse(since2);
+  const messages = [];
+  const cursors = /* @__PURE__ */ new Set();
+  let cursor = null;
+  for (let page2 = 0; page2 < MAX_PAGES; page2++) {
+    const args = { channel, since: since2, limit: PAGE_LIMIT, includeThreadReplies: false };
+    if (until !== null) args.until = until;
+    if (cursor) args.cursor = cursor;
+    const payload = resultJson(await session.call("get_messages", args), "get_messages");
+    if (!record17(payload) || !Array.isArray(payload.messages)) {
+      throw new IntakeError("SCHEMA_CHANGED", "get_messages returned an unexpected shape");
+    }
+    let reachedSince = false;
+    for (const item2 of payload.messages) {
+      if (!record17(item2) || typeof item2.text !== "string" && !Array.isArray(item2.blocks)) continue;
+      const timeMs = messageTime(item2);
+      if (timeMs === null) continue;
+      if (timeMs <= sinceMs) reachedSince = true;
+      messages.push({ urls: messageUrls(item2), timeMs });
+    }
+    if (reachedSince || payload.hasMore === false) return { messages, truncated: false };
+    cursor = nextCursor(payload);
+    if (!cursor || cursors.has(cursor)) return { messages, truncated: payload.hasMore === true };
+    cursors.add(cursor);
+  }
+  return { messages, truncated: true };
+}
+async function readMessages(session, channel, since2, now, firstRun) {
+  const sinceMs = Date.parse(since2);
+  let read = await readWindow(session, channel, since2, null);
+  if (firstRun) return { messages: read.messages, upperMs: null };
+  let upperMs = null;
+  for (let halving = 0; read.truncated && halving < MAX_HALVINGS; halving++) {
+    const previous = upperMs ?? now.getTime();
+    const next = sinceMs + Math.floor((previous - sinceMs) / 2);
+    if (next <= sinceMs + 1) break;
+    upperMs = next;
+    read = await readWindow(session, channel, since2, new Date(upperMs).toISOString());
+  }
+  if (read.truncated) throw new IntakeError("SOURCE_TOO_LARGE", "get_messages window is too busy to read completely");
+  return { messages: read.messages, upperMs };
+}
+function plan(messages, afterMs, upperMs, firstRun, windowStart) {
+  const ordered = messages.filter((message) => message.timeMs > afterMs && (upperMs === null || message.timeMs < upperMs)).sort((a, b) => a.timeMs - b.timeMs);
+  const cap = firstRun ? Infinity : RUN_MAX_LINKS;
+  let links = [];
+  const seen = /* @__PURE__ */ new Set();
+  let stoppedAt = null;
+  outer: for (const message of ordered) {
+    for (const url2 of message.urls) {
+      if (seen.has(url2)) continue;
+      if (links.length >= cap) {
+        stoppedAt = message.timeMs;
+        break outer;
+      }
+      seen.add(url2);
+      links.push({ url: url2, seenAt: new Date(message.timeMs).toISOString() });
+    }
+  }
+  if (firstRun) links = links.slice(-FIRST_RUN_MAX_LINKS);
+  let cursor;
+  if (stoppedAt !== null && !firstRun) cursor = new Date(stoppedAt - 1).toISOString();
+  else if (upperMs !== null) cursor = new Date(upperMs - 1).toISOString();
+  else if (ordered.length) cursor = new Date(ordered[ordered.length - 1].timeMs).toISOString();
+  else cursor = firstRun ? windowStart : null;
+  return { links, messages: ordered.length, cursor };
+}
+function cursorPath(scope) {
+  return ["links", scope, "cursors.json"];
+}
+function dropCursors(store, keep) {
+  for (const scope of store.directories("links")) {
+    if (!SCOPE_PATTERN.test(scope)) continue;
+    let cursors;
+    try {
+      cursors = readCursors(store, scope);
+    } catch (error3) {
+      if (error3 instanceof IntakeError && error3.code === "STORE_INVALID") continue;
+      throw error3;
+    }
+    const kept = Object.fromEntries(Object.entries(cursors).filter(([id]) => keep.has(id)));
+    if (Object.keys(kept).length !== Object.keys(cursors).length) store.write(kept, ...cursorPath(scope));
+  }
+}
+function readCursors(store, scope) {
+  const value = store.read(...cursorPath(scope));
+  if (value === null) return {};
+  if (!record17(value)) throw new IntakeError("STORE_INVALID", "links cursor ledger is invalid");
+  const cursors = {};
+  for (const [id, time3] of Object.entries(value)) {
+    if (!CHANNEL_ID.test(id) || typeof time3 !== "string" || !Number.isFinite(Date.parse(time3))) {
+      throw new IntakeError("STORE_INVALID", "links cursor ledger is invalid");
+    }
+    cursors[id] = time3;
+  }
+  return cursors;
+}
+function validCounts(value) {
+  if (!record17(value)) return null;
+  const counts = [value.accepted, value.duplicate, value.rejected];
+  if (!counts.every((count2) => Number.isSafeInteger(count2) && count2 >= 0)) return null;
+  return { accepted: value.accepted, duplicate: value.duplicate, rejected: value.rejected };
+}
+function uploadFailure(error3) {
+  const failure2 = deliveryFailure(error3);
+  if (failure2.kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
+  if (failure2.kind === "rejected") return failure2.status === 409 ? "TTOBAK_CONFLICT" : "TTOBAK_REJECTED";
+  return "TTOBAK_UNAVAILABLE";
+}
+async function collectLinks(deps) {
+  const { store, api, scope, now, dryRun } = deps;
+  let session = deps.session;
+  let sessionFailure = null;
+  if (scope !== void 0 && !SCOPE_PATTERN.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "invalid account scope");
+  if (!dryRun && (!api || scope === void 0)) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK API and account scope are required");
+  const batchSize = Math.max(1, Math.min(deps.batchSize ?? MAX_CUSTOMER_UPDATE_LINKS, MAX_CUSTOMER_UPDATE_LINKS));
+  const selection = readLinksSelection(store);
+  const selectedIds = new Set(selection.channels.map((channel) => channel.id));
+  const ledger = scope !== void 0 ? readCursors(store, scope) : {};
+  const cursors = Object.fromEntries(Object.entries(ledger).filter(([id]) => selectedIds.has(id)));
+  if (!dryRun && Object.keys(cursors).length !== Object.keys(ledger).length) store.write(cursors, ...cursorPath(scope));
+  const results = [];
+  for (const [index, channel] of selection.channels.entries()) {
+    const entry2 = { label: channel.label, result: "ok", messages: 0, links: 0, uploaded: 0, rejected: 0 };
+    results.push(entry2);
+    if (sessionFailure !== null) {
+      entry2.result = sessionFailure;
+      continue;
+    }
+    const stored = cursors[channel.id];
+    const firstRun = stored === void 0;
+    const windowStart = new Date(now.getTime() - FIRST_RUN_WINDOW_MS).toISOString();
+    const since2 = firstRun ? windowStart : new Date(Date.parse(stored)).toISOString();
+    let planned;
+    try {
+      const afterMs = firstRun ? Date.parse(windowStart) - 1 : Date.parse(stored);
+      const read = await readMessages(session, channel.id, since2, now, firstRun);
+      planned = plan(read.messages, afterMs, read.upperMs, firstRun, windowStart);
+    } catch (error3) {
+      const code = intakeCode(error3);
+      if (code === "AUTH_EXPIRED_MIDWAY") throw error3;
+      entry2.result = error3 instanceof IntakeError ? code : "SOURCE_ERROR";
+      if ((entry2.result === "SOURCE_ERROR" || entry2.result === "SOURCE_TIMEOUT") && deps.reopen && index < selection.channels.length - 1) {
+        try {
+          session = await deps.reopen();
+        } catch (reopenError) {
+          if (intakeCode(reopenError) === "AUTH_EXPIRED_MIDWAY") throw reopenError;
+          sessionFailure = reopenError instanceof IntakeError ? intakeCode(reopenError) : "SERVER_START_FAILED";
+        }
+      }
+      continue;
+    }
+    entry2.messages = planned.messages;
+    entry2.links = planned.links.length;
+    if (dryRun) continue;
+    let failed = null;
+    for (let start = 0; start < planned.links.length && failed === null; start += batchSize) {
+      const links = planned.links.slice(start, start + batchSize);
+      try {
+        const counts = validCounts(await api.uploadCustomerUpdateLinks({ sourceId: channel.sourceId, links }));
+        if (!counts) {
+          failed = "TTOBAK_UNAVAILABLE";
+          break;
+        }
+        entry2.uploaded += counts.accepted + counts.duplicate;
+        entry2.rejected += counts.rejected;
+      } catch (error3) {
+        failed = uploadFailure(error3);
+      }
+    }
+    if (failed !== null) {
+      entry2.result = failed;
+      continue;
+    }
+    if (planned.cursor !== null && (firstRun || Date.parse(planned.cursor) > Date.parse(stored))) {
+      cursors[channel.id] = planned.cursor;
+      store.write(cursors, ...cursorPath(scope));
+    }
+  }
+  return { channels: results };
+}
+var MAX_LINK_CHANNELS, MAX_LABEL_CODE_POINTS, FIRST_RUN_WINDOW_MS, FIRST_RUN_MAX_LINKS, RUN_MAX_LINKS, PAGE_LIMIT, MAX_PAGES, MAX_LISTED_CHANNELS, MAX_NAME_LENGTH, MAX_CURSOR_LENGTH, BUSY_ATTEMPTS, BUSY_DELAY_MS, LINK_CHANNEL_ID, CHANNEL_ID, LOCAL_ID, SOURCE_ID, sleepFor, MAX_URLS_PER_MESSAGE2, MAX_CANDIDATES_PER_MESSAGE, MAX_HALVINGS, MAX_BLOCK_DEPTH, MAX_BLOCK_NODES, DATAMARK, WRAPPER_OPEN, WRAPPER_CLOSE;
+var init_links = __esm({
+  "src/intake/links.ts"() {
+    "use strict";
+    init_api2();
+    init_batch();
+    init_calendar2();
+    init_errors4();
+    init_link_extract();
+    init_mcp_client();
+    MAX_LINK_CHANNELS = 20;
+    MAX_LABEL_CODE_POINTS = 100;
+    FIRST_RUN_WINDOW_MS = 3 * 24 * 60 * 60 * 1e3;
+    FIRST_RUN_MAX_LINKS = 50;
+    RUN_MAX_LINKS = 200;
+    PAGE_LIMIT = 200;
+    MAX_PAGES = 5;
+    MAX_LISTED_CHANNELS = 5e3;
+    MAX_NAME_LENGTH = 200;
+    MAX_CURSOR_LENGTH = 4096;
+    BUSY_ATTEMPTS = 4;
+    BUSY_DELAY_MS = 500;
+    LINK_CHANNEL_ID = /^[A-Z0-9]{6,20}$/;
+    CHANNEL_ID = LINK_CHANNEL_ID;
+    LOCAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+    sleepFor = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+    MAX_URLS_PER_MESSAGE2 = 20;
+    MAX_CANDIDATES_PER_MESSAGE = 200;
+    MAX_HALVINGS = 6;
+    MAX_BLOCK_DEPTH = 8;
+    MAX_BLOCK_NODES = 2e3;
+    DATAMARK = /\uE000/g;
+    WRAPPER_OPEN = /^\s*<slack-user-content\b[^<>]*>/;
+    WRAPPER_CLOSE = /<\/slack-user-content>\s*$/;
+  }
+});
+
 // src/intake/schedule.ts
 import { execFile as execFile3 } from "node:child_process";
 import { chmodSync as chmodSync2, mkdirSync as mkdirSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -28180,8 +28769,8 @@ var init_schedule = __esm({
 });
 
 // src/intake/sfdc.ts
-import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
-function record17(value) {
+import { createHash as createHash5, randomUUID as randomUUID5 } from "node:crypto";
+function record18(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseFailed(detail) {
@@ -28210,13 +28799,13 @@ function validDate(value) {
   return date4.getUTCFullYear() === year && date4.getUTCMonth() === month - 1 && date4.getUTCDate() === day2;
 }
 function parsePage(payload, tool) {
-  const data = record17(payload) ? payload.data : void 0;
-  if (!record17(data) || !Array.isArray(data.resultRecords) || data.resultRecords.length > PAGE_LIMIT || typeof data.totalCount !== "string" || !/^\d{1,9}$/.test(data.totalCount) || typeof data.hasNextPage !== "boolean" || !(data.cursor === void 0 || data.cursor === null || typeof data.cursor === "string")) {
+  const data = record18(payload) ? payload.data : void 0;
+  if (!record18(data) || !Array.isArray(data.resultRecords) || data.resultRecords.length > PAGE_LIMIT2 || typeof data.totalCount !== "string" || !/^\d{1,9}$/.test(data.totalCount) || typeof data.hasNextPage !== "boolean" || !(data.cursor === void 0 || data.cursor === null || typeof data.cursor === "string")) {
     throw parseFailed(`${tool} returned an unexpected shape`);
   }
   const cursor = typeof data.cursor === "string" && data.cursor ? data.cursor : null;
   if (data.hasNextPage && (cursor === null || cursor.length > 4096)) throw parseFailed(`${tool} page has no cursor`);
-  if (!data.resultRecords.every(record17)) throw parseFailed(`${tool} record is not an object`);
+  if (!data.resultRecords.every(record18)) throw parseFailed(`${tool} record is not an object`);
   return {
     records: data.resultRecords,
     hasNextPage: data.hasNextPage,
@@ -28225,8 +28814,8 @@ function parsePage(payload, tool) {
   };
 }
 function parsePersonal(payload) {
-  const data = record17(payload) ? payload.data : void 0;
-  if (!record17(data) || typeof data.alias !== "string" || !ALIAS.test(data.alias) || typeof data.sfdcId !== "string" || !ID.test(data.sfdcId)) {
+  const data = record18(payload) ? payload.data : void 0;
+  if (!record18(data) || typeof data.alias !== "string" || !ALIAS.test(data.alias) || typeof data.sfdcId !== "string" || !ID.test(data.sfdcId)) {
     throw parseFailed(`${SFDC_PERSONAL_TOOL.name} returned an unexpected shape`);
   }
   return { alias: data.alias, sfdcId: data.sfdcId };
@@ -28259,7 +28848,7 @@ function taskRecord(value) {
   if (!(accountId === void 0 || accountId === null || typeof accountId === "string" && ID.test(accountId))) {
     throw parseFailed("task record has an unexpected account");
   }
-  if (!(value.account === void 0 || value.account === null || record17(value.account))) {
+  if (!(value.account === void 0 || value.account === null || record18(value.account))) {
     throw parseFailed("task record has an unexpected account");
   }
   const saDate = text(value, "sa_Activity_Date__c", LABEL_BYTES);
@@ -28274,7 +28863,7 @@ function taskRecord(value) {
       subject: text(value, "subject", SUBJECT_BYTES),
       status: text(value, "status", LABEL_BYTES)
     },
-    accountName: record17(value.account) ? text(value.account, "name", NAME_BYTES) : ""
+    accountName: record18(value.account) ? text(value.account, "name", NAME_BYTES) : ""
   };
 }
 function taskWindow(now) {
@@ -28311,8 +28900,8 @@ function planSource(rows, key, ledger) {
   const external = (mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId;
   const rank = (mutation) => `${mutation.op === "remove" ? 0 : 1}${external(mutation)}`;
   mutations.sort((first, second) => rank(first) < rank(second) ? -1 : rank(first) > rank(second) ? 1 : 0);
-  const plan = { mutations, set: Object.fromEntries(set2), remove };
-  return { plan, upserts: set2.length, removals: remove.length, unchanged };
+  const plan2 = { mutations, set: Object.fromEntries(set2), remove };
+  return { plan: plan2, upserts: set2.length, removals: remove.length, unchanged };
 }
 function planSfdc(registry3, tasks, ledgers, now) {
   const { earliest, latest } = taskWindow(now);
@@ -28366,8 +28955,8 @@ async function readAll(source, tool, args) {
   const records2 = [];
   const seen = /* @__PURE__ */ new Set();
   let after;
-  for (let index = 0; index < MAX_PAGES; index++) {
-    const page2 = parsePage(await source.call(tool, { ...args, limit: PAGE_LIMIT, ...after ? { after } : {} }), tool);
+  for (let index = 0; index < MAX_PAGES2; index++) {
+    const page2 = parsePage(await source.call(tool, { ...args, limit: PAGE_LIMIT2, ...after ? { after } : {} }), tool);
     for (const { id } of page2.records) {
       if (typeof id === "string" && seen.size === seen.add(id).size) throw parseFailed(`${tool} repeated a record ID`);
     }
@@ -28379,7 +28968,7 @@ async function readAll(source, tool, args) {
     if (page2.cursor === after) throw parseFailed(`${tool} cursor did not advance`);
     after = page2.cursor;
   }
-  throw parseFailed(`${tool} exceeded ${MAX_PAGES} pages`);
+  throw parseFailed(`${tool} exceeded ${MAX_PAGES2} pages`);
 }
 function statePath2(state) {
   return ["sfdc", state.sourceId, state.scope, `${state.source}.json`];
@@ -28391,13 +28980,13 @@ function loadSfdcState(store, source, sourceId, scope) {
   if (!SCOPE_PATTERN.test(scope)) throw new IntakeError("INVALID_ARGUMENT", "sfdc state scope is invalid");
   const state = store.read(...statePath2({ source, sourceId, scope }));
   if (state === null) return emptyState2(source, sourceId, scope);
-  if (state.version !== 1 || state.source !== source || state.sourceId !== sourceId || state.scope !== scope || !record17(state.ledger)) {
+  if (state.version !== 1 || state.source !== source || state.sourceId !== sourceId || state.scope !== scope || !record18(state.ledger)) {
     throw new IntakeError("STORE_INVALID", "sfdc state does not match its source");
   }
   return state;
 }
 function validReceipt(receipt, body) {
-  if (!record17(receipt)) throw new Error("receipt");
+  if (!record18(receipt)) throw new Error("receipt");
   const upserts = body.mutations.filter((mutation) => mutation.op === "upsert").length;
   const revision = body.expectedRevision + 1;
   if (receipt.revision !== revision || !Number.isSafeInteger(revision) || receipt.completed !== body.complete || receipt.upserted !== upserts || receipt.removed !== body.mutations.length - upserts) throw new Error("receipt");
@@ -28442,11 +29031,11 @@ async function serverRevisions(api) {
     if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
     throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status could not be read");
   }
-  const sources = record17(value) && Array.isArray(value.sources) ? value.sources : null;
+  const sources = record18(value) && Array.isArray(value.sources) ? value.sources : null;
   if (!sources) throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
   const result = { "sfdc-assignments": 0, "sfdc-tasks": 0 };
   for (const item2 of sources) {
-    if (!record17(item2) || typeof item2.source !== "string" || !Number.isSafeInteger(item2.revision) || item2.revision < 0) {
+    if (!record18(item2) || typeof item2.source !== "string" || !Number.isSafeInteger(item2.revision) || item2.revision < 0) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
     }
     if (item2.source === "sfdc-assignments" || item2.source === "sfdc-tasks") result[item2.source] = item2.revision;
@@ -28461,33 +29050,33 @@ async function serverAssignmentIds(api) {
     if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
     throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments could not be read");
   }
-  if (!record17(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
+  if (!record18(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
     throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
   }
   const items = value.items;
   if (value.truncated) throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `server holds more than ${items.length} assignments`);
   return items.map((item2) => {
-    if (!record17(item2) || typeof item2.sfdcAccountId !== "string" || !ID.test(item2.sfdcAccountId)) {
+    if (!record18(item2) || typeof item2.sfdcAccountId !== "string" || !ID.test(item2.sfdcAccountId)) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "performance assignments have an unexpected shape");
     }
     return item2.sfdcAccountId;
   });
 }
-async function deliver(api, store, state, plan) {
-  const groups = batches(plan.mutations);
+async function deliver(api, store, state, plan2) {
+  const groups = batches(plan2.mutations);
   if (!groups.length) groups.push([]);
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index];
     const ids = new Set(group.map((mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId));
     state.pending = {
       body: {
-        batchId: randomUUID4(),
+        batchId: randomUUID5(),
         expectedRevision: state.revision,
         complete: index === groups.length - 1,
         mutations: group
       },
-      set: Object.fromEntries(Object.entries(plan.set).filter(([id]) => ids.has(id))),
-      remove: plan.remove.filter((id) => ids.has(id))
+      set: Object.fromEntries(Object.entries(plan2.set).filter(([id]) => ids.has(id))),
+      remove: plan2.remove.filter((id) => ids.has(id))
     };
     store.write(state, ...statePath2(state));
     await send2(api, store, state);
@@ -28529,17 +29118,17 @@ async function runSfdc(options2) {
     { field: "activityDate", operator: "LTE", value: queryLatest(now) }
   ] } })).map(taskRecord);
   const [assignmentState, taskState] = states;
-  const plan = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
+  const plan2 = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
   const revisions = () => ({ "sfdc-assignments": assignmentState.revision, "sfdc-tasks": taskState.revision });
-  if (dryRun) return { counts: plan.counts, revisions: revisions() };
-  if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
-    throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
+  if (dryRun) return { counts: plan2.counts, revisions: revisions() };
+  if (plan2.counts.assignments.fetched > MAX_ASSIGNMENTS) {
+    throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan2.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
   }
-  await deliver(options2.api, store, assignmentState, plan.assignments);
-  await deliver(options2.api, store, taskState, plan.tasks);
-  return { counts: plan.counts, revisions: revisions() };
+  await deliver(options2.api, store, assignmentState, plan2.assignments);
+  await deliver(options2.api, store, taskState, plan2.tasks);
+  return { counts: plan2.counts, revisions: revisions() };
 }
-var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_CONTACTS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT, MAX_ASSIGNMENTS, MAX_PAGES, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
+var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_CONTACTS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT2, MAX_ASSIGNMENTS, MAX_PAGES2, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
 var init_sfdc = __esm({
   "src/intake/sfdc.ts"() {
     "use strict";
@@ -28556,9 +29145,9 @@ var init_sfdc = __esm({
     SFDC_TOOLS = [SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL];
     ACTIVITY_ROLE = "activity";
     SOURCES = ["sfdc-assignments", "sfdc-tasks"];
-    PAGE_LIMIT = 500;
+    PAGE_LIMIT2 = 500;
     MAX_ASSIGNMENTS = 500;
-    MAX_PAGES = 20;
+    MAX_PAGES2 = 20;
     ID = /^[A-Za-z0-9_-]{1,64}$/;
     ALIAS = /^[A-Za-z0-9._-]{1,64}$/;
     NAME_BYTES = 200;
@@ -28752,10 +29341,10 @@ function contactPerson(value, accountId) {
   const ownAccount = canonicalSfdcId(value.accountId);
   if (!ownAccount) return "invalid";
   if (ownAccount !== accountId) return "mismatch";
-  if (!(value.recordType === void 0 || value.recordType === null || record17(value.recordType))) {
+  if (!(value.recordType === void 0 || value.recordType === null || record18(value.recordType))) {
     throw parseFailed("contact record has an unexpected record type");
   }
-  const recordType2 = record17(value.recordType) ? text(value.recordType, "name", FIELD_BYTES) : "";
+  const recordType2 = record18(value.recordType) ? text(value.recordType, "name", FIELD_BYTES) : "";
   const email3 = text(value, "email", 1024);
   if (INTERNAL_RECORD_TYPES.has(recordType2) || email3 && internalEmail(email3)) return "internal";
   const first = text(value, "firstName", FIELD_BYTES);
@@ -28773,10 +29362,10 @@ async function readAccount(source, accountId) {
   try {
     for (let index = 0; ; index++) {
       if (read.fetched >= MAX_READ_PER_ACCOUNT) break;
-      if (index >= MAX_PAGES2) throw parseFailed(`search_contacts exceeded ${MAX_PAGES2} pages`);
+      if (index >= MAX_PAGES3) throw parseFailed(`search_contacts exceeded ${MAX_PAGES3} pages`);
       const page2 = parsePage(await source.call(SFDC_CONTACTS_TOOL.name, {
         condition: { field: "accountId", operator: "EXACT_MATCH", value: accountId },
-        limit: PAGE_LIMIT2,
+        limit: PAGE_LIMIT3,
         ...after ? { after } : {}
       }), SFDC_CONTACTS_TOOL.name);
       for (const value of page2.records) {
@@ -28829,13 +29418,13 @@ async function mappedAccounts(api) {
     if (deliveryFailure(error3).kind === "login") throw new IntakeError("TTOBAK_LOGIN_REQUIRED");
     throw new IntakeError("TTOBAK_UNAVAILABLE", "performance mappings could not be read");
   }
-  if (!record17(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
+  if (!record18(value) || !Array.isArray(value.items) || typeof value.truncated !== "boolean") {
     throw new IntakeError("TTOBAK_UNAVAILABLE", "performance mappings have an unexpected shape");
   }
   const result = /* @__PURE__ */ new Map();
   let invalidIds = 0;
   for (const entry2 of value.items) {
-    if (!record17(entry2) || entry2.mapped !== true || typeof entry2.accountId !== "string" || !entry2.accountId) continue;
+    if (!record18(entry2) || entry2.mapped !== true || typeof entry2.accountId !== "string" || !entry2.accountId) continue;
     const group = result.get(entry2.accountId) ?? { ids: [], invalid: false };
     const sfdcAccountId = canonicalSfdcId(entry2.sfdcAccountId);
     if (sfdcAccountId) {
@@ -28858,11 +29447,11 @@ async function existingContacts(api, accountId, counts) {
   let cursor;
   for (let index = 0; index < MAX_CONTACT_PAGES; index++) {
     const page2 = await api.listAccountContacts(accountId, { limit: CONTACT_PAGE, ...cursor ? { cursor } : {} }, CONTACT_PAGE_BYTES);
-    if (!record17(page2) || !Array.isArray(page2.contacts) || page2.contacts.length > CONTACT_PAGE) {
+    if (!record18(page2) || !Array.isArray(page2.contacts) || page2.contacts.length > CONTACT_PAGE) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "account contacts have an unexpected shape");
     }
     for (const value of page2.contacts) {
-      if (!record17(value) || typeof value.contactId !== "string" || typeof value.revision !== "string" || typeof value.name !== "string") {
+      if (!record18(value) || typeof value.contactId !== "string" || typeof value.revision !== "string" || typeof value.name !== "string") {
         throw new IntakeError("TTOBAK_UNAVAILABLE", "account contacts have an unexpected shape");
       }
       const stored = optionalText(value.sfdcContactId);
@@ -28886,12 +29475,12 @@ async function existingContacts(api, accountId, counts) {
   throw new IntakeError("TTOBAK_UNAVAILABLE", `account contacts exceed ${MAX_CONTACT_PAGES} pages`);
 }
 function syncResponse(value, items) {
-  const count = (key) => record17(value) && Number.isSafeInteger(value[key]) && value[key] >= 0;
-  if (!record17(value) || !Array.isArray(value.results) || value.results.length !== items.length || !count("marked") || !count("unmarked") || !count("skipped")) {
+  const count2 = (key) => record18(value) && Number.isSafeInteger(value[key]) && value[key] >= 0;
+  if (!record18(value) || !Array.isArray(value.results) || value.results.length !== items.length || !count2("marked") || !count2("unmarked") || !count2("skipped")) {
     throw new IntakeError("TTOBAK_UNAVAILABLE", "sfdc-sync response has an unexpected shape");
   }
   const results = value.results.map((entry2, index) => {
-    if (!record17(entry2) || canonicalSfdcId(entry2.sfdcContactId) !== items[index].sfdcContactId || !RESULTS.includes(entry2.result)) {
+    if (!record18(entry2) || canonicalSfdcId(entry2.sfdcContactId) !== items[index].sfdcContactId || !RESULTS.includes(entry2.result)) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "sfdc-sync response has an unexpected shape");
     }
     return { sfdcContactId: items[index].sfdcContactId, result: entry2.result };
@@ -28919,7 +29508,7 @@ function readLedger(store, scope, accountId) {
   try {
     const ledger = store.read(...ledgerPath(scope, accountId));
     if (ledger === null) return { ids: /* @__PURE__ */ new Set(), reset: false };
-    const ids = record17(ledger) && ledger.version === 1 && Array.isArray(ledger.suppressed) ? ledger.suppressed.map(canonicalSfdcId) : [null];
+    const ids = record18(ledger) && ledger.version === 1 && Array.isArray(ledger.suppressed) ? ledger.suppressed.map(canonicalSfdcId) : [null];
     if (ids.some((id) => id === null)) return { ids: /* @__PURE__ */ new Set(), reset: true };
     return { ids: new Set(ids), reset: false };
   } catch {
@@ -29071,7 +29660,7 @@ async function runSfdcContacts(options2) {
   }
   return { result: failure2 ?? "ok", counts };
 }
-var PAGE_LIMIT2, MAX_READ_PER_ACCOUNT, MAX_PAGES2, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, SFDC_CONTACTS_BUDGET_MS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
+var PAGE_LIMIT3, MAX_READ_PER_ACCOUNT, MAX_PAGES3, MAX_SFDC_ACCOUNTS, MAX_ITEMS2, MAX_PRESENT_TOTAL, MAX_BODY_BYTES, FIELD_BYTES, CONTACT_PAGE, CONTACT_PAGE_BYTES, MAX_CONTACT_PAGES, MAX_LEDGER_IDS, SFDC_CONTACTS_BUDGET_MS, INTERNAL_RECORD_TYPES, RESULTS, CJK, byId, optionalText;
 var init_sfdc_contacts = __esm({
   "src/intake/sfdc-contacts.ts"() {
     "use strict";
@@ -29080,9 +29669,9 @@ var init_sfdc_contacts = __esm({
     init_errors4();
     init_sfdc();
     init_sfdc_id();
-    PAGE_LIMIT2 = 500;
+    PAGE_LIMIT3 = 500;
     MAX_READ_PER_ACCOUNT = 5e3;
-    MAX_PAGES2 = Math.ceil(MAX_READ_PER_ACCOUNT / PAGE_LIMIT2) + 1;
+    MAX_PAGES3 = Math.ceil(MAX_READ_PER_ACCOUNT / PAGE_LIMIT3) + 1;
     MAX_SFDC_ACCOUNTS = 20;
     MAX_ITEMS2 = 200;
     MAX_PRESENT_TOTAL = 2e4;
@@ -29322,12 +29911,12 @@ function linkRequests(requests, tasks, opptyAccounts, rule) {
       if (matches(request2, task, opptyAccounts, rule)) pairs.push([request2.requestId, task.eventId]);
     }
   }
-  const count = (values) => values.reduce(
+  const count2 = (values) => values.reduce(
     (map2, value) => map2.set(value, (map2.get(value) ?? 0) + 1),
     /* @__PURE__ */ new Map()
   );
-  const perRequest = count(pairs.map(([requestId]) => requestId));
-  const perTask = count(pairs.map(([, eventId]) => eventId));
+  const perRequest = count2(pairs.map(([requestId]) => requestId));
+  const perTask = count2(pairs.map(([, eventId]) => eventId));
   const out = /* @__PURE__ */ new Map();
   for (const [requestId, eventId] of pairs) {
     if (perRequest.get(requestId) === 1 && perTask.get(eventId) === 1) out.set(requestId, eventId);
@@ -29438,6 +30027,7 @@ import {
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync5,
   openSync as openSync2,
+  readdirSync as readdirSync2,
   readFileSync as readFileSync6,
   renameSync as renameSync4,
   unlinkSync as unlinkSync3,
@@ -29642,6 +30232,31 @@ var init_store = __esm({
         } finally {
           closeSync2(descriptor);
         }
+      }
+      /**
+       * Names of the subdirectories of a state directory that are valid path
+       * segments ([] when absent). Symlinks and entries of another owner are skipped.
+       */
+      directories(...relative2) {
+        const path2 = relative2.length ? this.path(relative2) : this.directory;
+        let names;
+        try {
+          if (!lstatSync3(path2).isDirectory()) return [];
+          names = readdirSync2(path2);
+        } catch (error3) {
+          if (error3.code === "ENOENT") return [];
+          throw new IntakeError("STORE_INVALID", "state directory unreadable");
+        }
+        const uid = process.getuid?.();
+        return names.filter((name) => {
+          if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name) || name === "." || name === "..") return false;
+          try {
+            const stat = lstatSync3(join7(path2, name));
+            return stat.isDirectory() && !stat.isSymbolicLink() && (uid === void 0 || stat.uid === uid);
+          } catch {
+            return false;
+          }
+        }).sort();
       }
       /** Size in bytes of a state file, or 0 when absent. */
       size(...relative2) {
@@ -29851,7 +30466,7 @@ async function prepareDraft(session, counterpartEmail, text5, options2 = {}) {
       await session.call("open_dm_channel", { userIds: userId }),
       "open_dm_channel"
     )?.channel);
-    if (!CHANNEL_ID.test(channel)) return "failed";
+    if (!CHANNEL_ID2.test(channel)) return "failed";
     const listed2 = resultJson(await session.call("list_drafts", {}), "list_drafts");
     const drafts = Array.isArray(listed2) ? listed2 : isRecord(listed2) && Array.isArray(listed2.drafts) ? listed2.drafts : null;
     if (!drafts) return "failed";
@@ -29899,7 +30514,7 @@ async function draftOnce(store, scope, eventId, session, counterpartEmail, text5
   save2({ at: now().toISOString(), outcome });
   return outcome;
 }
-var SLACK_REQUEST_TEMPLATE, SLACK_TEXT_MAX_CHARS, escapeSlack, USER_ID, CHANNEL_ID, isRecord, channelOf, ENTRY_OUTCOMES, SCOPE_PATTERN4, EVENT_ID_PATTERN3;
+var SLACK_REQUEST_TEMPLATE, SLACK_TEXT_MAX_CHARS, escapeSlack, USER_ID, CHANNEL_ID2, isRecord, channelOf, ENTRY_OUTCOMES, SCOPE_PATTERN4, EVENT_ID_PATTERN3;
 var init_slack_draft = __esm({
   "src/intake/slack-draft.ts"() {
     "use strict";
@@ -29909,7 +30524,7 @@ var init_slack_draft = __esm({
     SLACK_TEXT_MAX_CHARS = 2e3;
     escapeSlack = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     USER_ID = /^[UW][A-Z0-9]{2,20}$/;
-    CHANNEL_ID = /^[CDG][A-Z0-9]{2,20}$/;
+    CHANNEL_ID2 = /^[CDG][A-Z0-9]{2,20}$/;
     isRecord = (value) => !!value && typeof value === "object" && !Array.isArray(value);
     channelOf = (value) => typeof value === "string" ? value : isRecord(value) && typeof value.id === "string" ? value.id : "";
     ENTRY_OUTCOMES = ["attempting", "drafted", "kept_existing", "no_user", "failed"];
@@ -29970,14 +30585,14 @@ function loadIdentity(store, scope) {
 function loadSeen(store, scope) {
   const raw = store.read(...seenPath(scope));
   if (raw === null) return { version: 1, seen: {}, pending: {}, closing: {}, refreshed: {}, requestDue: {}, unknown: {} };
-  const record20 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
-  if (raw.version !== 1 || !record20(raw.seen) || !record20(raw.pending) || !record20(raw.closing)) {
+  const record21 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+  if (raw.version !== 1 || !record21(raw.seen) || !record21(raw.pending) || !record21(raw.closing)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   raw.refreshed ??= {};
   raw.requestDue ??= {};
   raw.unknown ??= {};
-  if (!record20(raw.refreshed) || !record20(raw.requestDue) || !record20(raw.unknown) || raw.tracked !== void 0 && !record20(raw.tracked)) {
+  if (!record21(raw.refreshed) || !record21(raw.requestDue) || !record21(raw.unknown) || raw.tracked !== void 0 && !record21(raw.tracked)) {
     throw new IntakeError("STORE_INVALID", "task seen state is malformed");
   }
   return raw;
@@ -30378,8 +30993,8 @@ var init_tasks = __esm({
             }), "get_meeting"));
             if (!attendees) {
               if (candidate.task) continue;
-              const count = (this.seen.unknown[candidate.eventId] ?? 0) + 1;
-              if (count < UNKNOWN_ATTENDEES_MAX) this.seen.unknown[candidate.eventId] = count;
+              const count2 = (this.seen.unknown[candidate.eventId] ?? 0) + 1;
+              if (count2 < UNKNOWN_ATTENDEES_MAX) this.seen.unknown[candidate.eventId] = count2;
               else this.markSeen(candidate.eventId);
               continue;
             }
@@ -30776,6 +31391,10 @@ function countsLine(results) {
     const counts = sfdc2.counts;
     parts.push(sfdc2.result === "ok" ? `SFDC \uB2F4\uB2F9 \uACC4\uC815 ${counts?.assignments?.upserts ?? 0}\uAC74, \uD65C\uB3D9 ${counts?.tasks?.upserts ?? 0}\uAC74` : `SFDC \uC2E4\uD328(${sfdc2.result})`);
   }
+  const links = results.links;
+  if (links && (links.result !== "ok" || Number(links.channels) > 0)) {
+    parts.push(links.result === "ok" ? `Slack \uB9C1\uD06C \uCC44\uB110 ${links.channels}\uAC1C, \uB9C1\uD06C ${links.links}\uAC74` : `Slack \uB9C1\uD06C \uC2E4\uD328(${links.result})`);
+  }
   return parts.join(", ");
 }
 async function setup(args, environment, store) {
@@ -30809,6 +31428,28 @@ async function setup(args, environment, store) {
     if (options2.skip.has(connector)) {
       connectors[connector] = { status: "skipped", code: "SKIPPED_BY_USER" };
       say(`${label}: \uAC74\uB108\uB700 (--skip)`);
+      continue;
+    }
+    if (connector === "links") {
+      const slack = connectors.slack;
+      if (slack?.status !== "selected") {
+        connectors[connector] = { status: "skipped", code: slack?.code ?? "SERVER_NOT_CONFIGURED" };
+        say(`${label}: Slack \uC120\uD0DD\uC774 \uC5C6\uC5B4 \uAC74\uB108\uB701\uB2C8\uB2E4.`);
+        continue;
+      }
+      try {
+        await selectConnector("links", { host: slack.host, server: slack.server }, environment, store);
+        connectors[connector] = { status: "selected", server: slack.server, host: slack.host };
+        say(`${label}: ${slack.host}\uC758 ${slack.server} \uD655\uC778 \uC644\uB8CC (\uCC44\uB110\uC740 \uC571\uC5D0\uC11C \uC120\uD0DD)`);
+      } catch (error3) {
+        const code = intakeCode(error3);
+        if (code === "AUTH_EXPIRED_MIDWAY") {
+          restore();
+          return stop(code, `${slack.server} reported an authentication failure`);
+        }
+        connectors[connector] = { status: "skipped", code };
+        say(`${label}: ${slack.server} \uD655\uC778 \uC2E4\uD328(${code}), \uAC74\uB108\uB701\uB2C8\uB2E4.`);
+      }
       continue;
     }
     const candidates = HOSTS.filter((host2) => reports.find((report2) => report2.host === host2)?.servers.some((item2) => item2.name === server && item2.transport === "stdio" && !item2.disabled && item2.commandFound));
@@ -30869,7 +31510,11 @@ async function setup(args, environment, store) {
     for (const connector of ORDER) {
       const entry2 = connectors[connector];
       const stored = next[connector];
-      if (entry2?.status === "skipped" && stored) {
+      if (entry2?.status === "skipped" && stored && connector === "links") {
+        next.links = { ...next.links, disabled: true };
+        connectors[connector] = { ...entry2, disabled: true };
+        say(`${LABELS[connector]}: \uC774\uC804 \uC120\uD0DD\uC744 \uBE44\uD65C\uC131\uD654\uD588\uC2B5\uB2C8\uB2E4 (\uCC44\uB110\uACFC \uC6D0\uBCF8 ID\uB294 \uC720\uC9C0).`);
+      } else if (entry2?.status === "skipped" && stored) {
         next[connector] = { ...stored, disabled: true };
         connectors[connector] = { ...entry2, disabled: true };
         say(`${LABELS[connector]}: \uC774\uC804 \uC120\uD0DD\uC744 \uBE44\uD65C\uC131\uD654\uD588\uC2B5\uB2C8\uB2E4 (\uC6D0\uBCF8 ID\uC640 \uAE30\uB85D\uC740 \uC720\uC9C0).`);
@@ -30932,20 +31577,23 @@ var init_setup = __esm({
     init_hosts();
     init_run();
     init_schedule();
-    ORDER = ["calendar", "sfdc", "meetings", "specreq", "slack"];
+    ORDER = ["calendar", "sfdc", "meetings", "specreq", "slack", "links"];
     DEFAULT_SERVERS = {
       calendar: "aws-outlook-mcp",
       sfdc: "aws-sentral-mcp",
       meetings: "amazon-meetings-mcp",
       specreq: "spec-req-mcp",
-      slack: "slack-mcp"
+      slack: "slack-mcp",
+      links: "slack-mcp"
     };
     LABELS = {
+      // `links` is the contract's `mac.links.setupLabel` (test: intake-links-cli.test.mjs).
       calendar: "\uCE98\uB9B0\uB354",
       sfdc: "SFDC",
       meetings: "\uD68C\uC758",
       specreq: "SpecReq",
-      slack: "Slack"
+      slack: "Slack",
+      links: "Slack \uB9C1\uD06C"
     };
     yes = (answer) => /^(y|yes|예|네|ㅇ)$/i.test(answer.trim());
   }
@@ -30959,6 +31607,7 @@ __export(run_exports, {
   calendarRun: () => calendarRun,
   defaultEnvironment: () => defaultEnvironment,
   enabled: () => enabled,
+  linksRun: () => linksRun,
   openSession: () => openSession,
   runConnectors: () => runConnectors,
   runIntake: () => runIntake,
@@ -30972,7 +31621,7 @@ __export(run_exports, {
 import { homedir as homedir6 } from "node:os";
 import { join as join9, resolve as resolve3 } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { createHash as createHash8, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID6 } from "node:crypto";
 function enabled(entry2) {
   return entry2 && !entry2.disabled ? entry2 : void 0;
 }
@@ -31115,6 +31764,16 @@ async function selectConnector(connector, request2, environment, store) {
   if (!HOSTS.includes(host) || typeof server !== "string") throw new IntakeError("INVALID_ARGUMENT", "--host and --server are required");
   if (isTaskConnector(connector)) return selectTaskConnector(connector, request2, environment, store);
   const pathDirs = parsePathList(environment.env.PATH);
+  if (connector === "links") {
+    const session2 = await openSession(environment, host, server, pathDirs, LINKS_TOOLS);
+    await session2.close();
+    const stored = store.read("selection.json");
+    if (stored?.links?.disabled) {
+      const { disabled: _disabled, ...links } = stored.links;
+      store.write({ ...stored, links }, "selection.json");
+    }
+    return { ok: true, connector, host, server, pathDirectories: pathDirs.length };
+  }
   const session = await openSession(
     environment,
     host,
@@ -31126,7 +31785,7 @@ async function selectConnector(connector, request2, environment, store) {
   const previous = store.read("selection.json");
   const ttobak = ttobakConfig(previous, { ...hostTtobakEndpoints(environment.home, host), ...definedTtobakEnv(environment.env) });
   if (connector === "sfdc") {
-    const sourceId2 = previous?.sfdc?.server === server ? previous.sfdc.sourceId : randomUUID5();
+    const sourceId2 = previous?.sfdc?.server === server ? previous.sfdc.sourceId : randomUUID6();
     store.write(
       {
         ...previous,
@@ -31139,7 +31798,7 @@ async function selectConnector(connector, request2, environment, store) {
     );
     return { ok: true, connector, host, server, sourceId: sourceId2, pathDirectories: pathDirs.length };
   }
-  const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID5();
+  const sourceId = previous?.calendar?.server === server ? previous.calendar.sourceId : randomUUID6();
   const selection = {
     ...previous ?? {},
     version: 1,
@@ -31512,20 +32171,144 @@ async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt, on, re
   }
   return step;
 }
+function linksEnabled(selection) {
+  return enabled(selection?.slack) !== void 0 && selection?.links?.disabled !== true;
+}
+function hasLinkChannels(selection) {
+  return Array.isArray(selection?.links?.channels) && selection.links.channels.length > 0;
+}
+async function linksRun(options2, environment, store, signedIn) {
+  const { dryRun } = options2;
+  const selection = store.read("selection.json");
+  if (!hasLinkChannels(selection)) {
+    return { ok: true, connector: "links", dryRun, result: "ok", channels: 0, links: 0, uploaded: 0 };
+  }
+  const slack = enabled(selection.slack);
+  if (!slack || !linksEnabled(selection)) throw new IntakeError("NOT_SELECTED", 'run "intake setup" first');
+  const release = store.lock("links");
+  const startedAt = environment.now();
+  let session;
+  const writeStatus = (entry2) => {
+    const status = store.read("status.json") ?? {};
+    store.write({ ...status, links: entry2 }, "status.json");
+  };
+  let previous;
+  try {
+    previous = store.read("status.json")?.links;
+    let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options2.noninteractive)))();
+    if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
+    session = await openSession(environment, slack.host, slack.server, slack.pathDirs, LINKS_TOOLS);
+    const reopen = async () => {
+      const old = session;
+      session = void 0;
+      await old?.close();
+      session = await openSession(environment, slack.host, slack.server, slack.pathDirs, LINKS_TOOLS);
+      return session;
+    };
+    const collected = await collectLinks({
+      store,
+      session,
+      now: startedAt,
+      dryRun,
+      reopen,
+      ...api ? { api } : {},
+      ...scope ? { scope } : {}
+    });
+    const counts = {
+      channels: collected.channels.length,
+      links: collected.channels.reduce((sum, channel) => sum + channel.links, 0),
+      uploaded: collected.channels.reduce((sum, channel) => sum + channel.uploaded, 0)
+    };
+    const failures = [...new Set(collected.channels.filter((channel) => channel.result !== "ok").map((channel) => channel.result))];
+    const failedAll = failures.length > 0 && collected.channels.every((channel) => channel.result !== "ok");
+    const result = failures.length === 0 ? "ok" : failedAll && failures.length === 1 ? failures[0] : "PARTIAL_FAILURE";
+    const lastSuccessAt = result === "ok" && !dryRun ? startedAt.toISOString() : previous?.lastSuccessAt;
+    writeStatus({
+      lastRunAt: startedAt.toISOString(),
+      result,
+      dryRun,
+      counts,
+      ...scope ? { scope } : {},
+      ...lastSuccessAt ? { lastSuccessAt } : {}
+    });
+    return { ok: true, connector: "links", dryRun, result, ...counts };
+  } catch (error3) {
+    const entry2 = {
+      ...previous ?? {},
+      lastRunAt: startedAt.toISOString(),
+      result: intakeCode(error3),
+      dryRun
+    };
+    delete entry2.counts;
+    try {
+      writeStatus(entry2);
+    } catch {
+    }
+    throw error3;
+  } finally {
+    await session?.close();
+    release();
+  }
+}
+function parseChannelChoice(value) {
+  const at = value.indexOf("=");
+  const id = at < 0 ? "" : value.slice(0, at);
+  const label = at < 0 ? "" : value.slice(at + 1).trim();
+  if (!LINK_CHANNEL_ID.test(id) || label === "" || label.includes("=") || [...label].length > MAX_LABEL_CODE_POINTS) {
+    throw new IntakeError(
+      "INVALID_ARGUMENT",
+      `--channel takes <id>=<label> with a label of 1-${MAX_LABEL_CODE_POINTS} characters and no "="`
+    );
+  }
+  return { id, label };
+}
+async function linksCommand(args, environment, store) {
+  const [sub, ...rest] = args;
+  if (sub === "channels") {
+    flags(rest, {});
+    const slack = enabled(store.read("selection.json")?.slack);
+    if (!slack) throw new IntakeError("NOT_SELECTED", 'run "intake setup" first');
+    const session = await openSession(environment, slack.host, slack.server, slack.pathDirs, LINKS_TOOLS);
+    try {
+      return { ok: true, channels: await listChannels(session) };
+    } finally {
+      await session.close();
+    }
+  }
+  if (sub !== "select") throw new IntakeError("INVALID_ARGUMENT", "links takes channels or select");
+  const given = flags(rest, { "--channel": "list", "--noninteractive": "flag" });
+  const choices = (given["--channel"] ?? []).map(parseChannelChoice);
+  if (choices.length > MAX_LINK_CHANNELS) throw new IntakeError("INVALID_ARGUMENT", `at most ${MAX_LINK_CHANNELS} channels can be selected`);
+  if (new Set(choices.map((choice) => choice.id)).size !== choices.length) throw new IntakeError("INVALID_ARGUMENT", "a channel is repeated");
+  const current = readLinksSelection(store);
+  if (!choices.length && !current.channels.length && !current.pendingCleanup.length) {
+    dropCursors(store, /* @__PURE__ */ new Set());
+    return { ok: true, channels: [] };
+  }
+  const { api } = await signIn(store.read("selection.json"), environment, false, given["--noninteractive"] === true);
+  const result = await selectChannels(store, api, choices, environment.now());
+  return {
+    ok: true,
+    channels: result.channels.map((channel) => ({ id: channel.id, label: channel.label })),
+    ...result.relabelFailed.length ? { relabelFailed: result.relabelFailed.length } : {}
+  };
+}
 async function runConnectors(options2, environment, store) {
   const selection = store.read("selection.json");
-  const wanted = options2.only ?? SYNC_CONNECTORS.filter((id) => enabled(selection?.[id]));
-  const missing = wanted.find((id) => !enabled(selection?.[id]));
-  if (!wanted.length || missing) throw new IntakeError("NOT_SELECTED", `run "intake select ${missing ?? "calendar"}" or "intake setup" first`);
+  const selectedNow = (id) => id === "links" ? linksEnabled(selection) && hasLinkChannels(selection) : enabled(selection?.[id]) !== void 0;
+  const wanted = options2.only ?? SYNC_CONNECTORS.filter(selectedNow);
+  const missing = wanted.find((id) => id === "links" ? hasLinkChannels(selection) && !linksEnabled(selection) : !selectedNow(id));
+  if (!wanted.length || missing) throw new IntakeError("NOT_SELECTED", missing === "links" ? 'run "intake setup" first' : `run "intake select ${missing ?? "calendar"}" or "intake setup" first`);
   let pending;
   const signedIn = () => pending ??= signIn(selection, environment, options2.dryRun, options2.noninteractive);
   const results = {};
   let code;
   for (const id of SYNC_CONNECTORS.filter((item2) => wanted.includes(item2))) {
     try {
-      const run2 = id === "calendar" ? calendarRun(options2, environment, store, signedIn) : sfdcRun(options2, environment, store, signedIn);
+      const run2 = id === "calendar" ? calendarRun(options2, environment, store, signedIn) : id === "sfdc" ? sfdcRun(options2, environment, store, signedIn) : linksRun(options2, environment, store, signedIn);
       const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run2;
       results[id] = { result: "ok", ...rest };
+      if (id === "links" && results[id].result !== "ok") code ??= "PARTIAL_FAILURE";
       const tasks = "tasks" in rest ? rest.tasks : void 0;
       if (tasks && (tasks.result === "AUTH_EXPIRED_MIDWAY" || Object.values(tasks.failures ?? {}).includes("AUTH_EXPIRED_MIDWAY"))) {
         code = "AUTH_EXPIRED_MIDWAY";
@@ -31559,7 +32342,7 @@ async function run(args, environment, store) {
   let only;
   if (typeof options2["--only"] === "string") {
     only = [...new Set(options2["--only"].split(","))];
-    if (only.some((id) => !SYNC_CONNECTORS.includes(id))) throw new IntakeError("INVALID_ARGUMENT", "--only takes calendar and/or sfdc");
+    if (only.some((id) => !SYNC_CONNECTORS.includes(id))) throw new IntakeError("INVALID_ARGUMENT", "--only takes calendar, sfdc and/or links");
   }
   return runConnectors({
     dryRun: options2["--dry-run"] === true,
@@ -31610,7 +32393,9 @@ async function runIntake(args, environment) {
     } else if (command === "select") output = await withRunLock(store, () => select(rest, environment, store));
     else if (command === "calendar") output = await withRunLock(store, () => calendar(rest, environment, store));
     else if (command === "sfdc") output = await withRunLock(store, () => sfdc(rest, environment, store));
-    else if (command === "options") output = await withRunLock(store, async () => options(rest, store));
+    else if (command === "links") {
+      output = rest[0] === "select" ? await withRunLock(store, () => linksCommand(rest, environment, store)) : await linksCommand(rest, environment, store);
+    } else if (command === "options") output = await withRunLock(store, async () => options(rest, store));
     else if (command === "login" && rest.length === 0) {
       const { email: email3 } = await login2(environment, store);
       output = { ok: true, email: email3 };
@@ -31627,9 +32412,10 @@ async function runIntake(args, environment) {
         const entry2 = selection?.[id];
         if (entry2) listed2[id] = { host: entry2.host, server: entry2.server, ...entry2.disabled ? { disabled: true } : {} };
       }
+      const links = selection?.slack || selection?.links ? { enabled: linksEnabled(selection), channels: Array.isArray(selection?.links?.channels) ? selection.links.channels.length : 0 } : void 0;
       output = {
         ok: true,
-        selection: listed2,
+        selection: { ...listed2, ...links ? { links } : {} },
         status: store.read("status.json") ?? {}
       };
     } else {
@@ -31679,6 +32465,7 @@ var init_run = __esm({
     init_connectors();
     init_errors4();
     init_hosts();
+    init_links();
     init_mcp_client();
     init_schedule();
     init_sfdc();
@@ -31698,13 +32485,15 @@ var init_run = __esm({
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
-  ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+  ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc,links]
+  ttobak-mcp intake links channels
+  ttobak-mcp intake links select [--channel <id>=<label>]... [--noninteractive]
   ttobak-mcp intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake login
   ttobak-mcp intake status`;
     OWN_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$/;
-    SYNC_CONNECTORS = ["calendar", "sfdc"];
+    SYNC_CONNECTORS = ["calendar", "sfdc", "links"];
   }
 });
 
@@ -31804,7 +32593,7 @@ var init_tools = __esm({
 
 // src/report/claude.ts
 import { execFile as execFile4, spawn as spawn3 } from "node:child_process";
-import { accessSync as accessSync2, constants as constants4, existsSync as existsSync3, lstatSync as lstatSync4, readFileSync as readFileSync7, readdirSync as readdirSync2, realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
+import { accessSync as accessSync2, constants as constants4, existsSync as existsSync3, lstatSync as lstatSync4, readFileSync as readFileSync7, readdirSync as readdirSync3, realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
 import { userInfo } from "node:os";
 import { delimiter as delimiter2, dirname as dirname3, isAbsolute as isAbsolute4, join as join10, relative, sep as sep2 } from "node:path";
 function executable2(path2) {
@@ -31844,7 +32633,7 @@ function pluginSkills(root, depth, found) {
   if (depth < 0) return;
   let entries3;
   try {
-    entries3 = readdirSync2(root);
+    entries3 = readdirSync3(root);
   } catch {
     return;
   }
@@ -31982,7 +32771,7 @@ function homePythonPrefix(home, path2) {
       if (prefix === join10(home, ".local")) {
         let libs = [];
         try {
-          libs = readdirSync2(join10(prefix, "lib")).filter((name) => /^python3/.test(name)).map((name) => join10(prefix, "lib", name));
+          libs = readdirSync3(join10(prefix, "lib")).filter((name) => /^python3/.test(name)).map((name) => join10(prefix, "lib", name));
         } catch {
         }
         return [join10(prefix, "bin"), ...libs];
@@ -32342,15 +33131,15 @@ function periodFor(kind, today2, custom2 = {}, utcYear) {
 }
 function plainText(value, max) {
   if (typeof value !== "string" || LONE_SURROGATE.test(value) || TAG_OR_LINK.test(value) || SLACK.test(value)) return false;
-  let count = 0;
+  let count2 = 0;
   for (const character of value) {
     const code = character.codePointAt(0);
     if (code < 32 && code !== 9 && code !== 10 && code !== 13 || code === 127) return false;
-    if (++count > max) return false;
+    if (++count2 > max) return false;
   }
   return true;
 }
-function record18(value, field) {
+function record19(value, field) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) invalid2(field);
   return value;
 }
@@ -32373,7 +33162,7 @@ function optional3(source, name, parse4) {
 }
 function highlights(value, field, code) {
   try {
-    const source = record18(value, field);
+    const source = record19(value, field);
     const known = ["projects", "initiatives", "channels", "programs"];
     if (Object.keys(source).some((key) => !known.includes(key))) invalid2(field);
     const result = {};
@@ -32388,7 +33177,7 @@ function validateHighlights(value) {
   return highlights(value, "highlights", "INVALID_ARGUMENT");
 }
 function section(value) {
-  const source = record18(value, "section");
+  const source = record19(value, "section");
   if (typeof source.id !== "string" || !SECTION_ID.test(source.id)) invalid2("section id");
   return {
     id: source.id,
@@ -32396,7 +33185,7 @@ function section(value) {
     lede: text2(source.lede, LONG, "section text"),
     paragraphs: texts(source.paragraphs, MAX_PARAGRAPHS, LONG, "section text"),
     ...optional3(source, "tables", (tables) => list(tables, MAX_TABLES, "section size").map((item2) => {
-      const table = record18(item2, "table");
+      const table = record19(item2, "table");
       const columns = texts(table.columns, MAX_COLUMNS, SHORT, "table");
       if (!columns.length) invalid2("table");
       const rows = list(table.rows, MAX_ROWS2, "table").map((row) => {
@@ -32407,7 +33196,7 @@ function section(value) {
       return { columns, rows };
     })),
     ...optional3(source, "cards", (cards) => list(cards, MAX_CARDS, "section size").map((item2) => {
-      const card = record18(item2, "card");
+      const card = record19(item2, "card");
       return { title: text2(card.title, SHORT, "card"), body: text2(card.body, LONG, "card") };
     }))
   };
@@ -32429,9 +33218,9 @@ function withServerDefaults(report2) {
 }
 function validateReport(key, value) {
   const { start, end } = periodBounds(key);
-  const source = record18(value, "report");
+  const source = record19(value, "report");
   if (source.schemaVersion !== SCHEMA_VERSION) invalid2("schemaVersion");
-  const period = record18(source.period, "period");
+  const period = record19(source.period, "period");
   if (source.periodKey !== key || period.start !== start || period.end !== end) invalid2("period");
   if (!validGeneratedAt(source.generatedAt)) invalid2("generatedAt");
   if (typeof source.partial !== "boolean") invalid2("partial");
@@ -32449,7 +33238,7 @@ function validateReport(key, value) {
     ...optional3(source, "highlights", (item2) => highlights(item2, "highlights", "REPORT_INVALID")),
     summary: text2(source.summary, LONG, "summary"),
     ledger: list(source.ledger, MAX_LEDGER, "ledger").map((item2) => {
-      const entry2 = record18(item2, "ledger");
+      const entry2 = record19(item2, "ledger");
       return {
         label: text2(entry2.label, SHORT, "ledger", true),
         value: cell(entry2.value, SHORT, "ledger"),
@@ -32459,7 +33248,7 @@ function validateReport(key, value) {
     }),
     sections,
     actions: list(source.actions, MAX_ACTIONS, "actions").map((item2) => {
-      const action = record18(item2, "actions");
+      const action = record19(item2, "actions");
       if (!SEVERITIES.includes(action.severity)) invalid2("actions");
       return {
         severity: action.severity,
@@ -32469,7 +33258,7 @@ function validateReport(key, value) {
       };
     }),
     dataBasis: list(source.dataBasis, MAX_DATA_BASIS, "dataBasis").map((item2) => {
-      const basis = record18(item2, "dataBasis");
+      const basis = record19(item2, "dataBasis");
       return {
         source: text2(basis.source, SHORT, "dataBasis", true),
         query: text2(basis.query, LONG, "dataBasis"),
@@ -32558,7 +33347,7 @@ var init_schema = __esm({
 });
 
 // src/report/sweep.ts
-import { lstatSync as lstatSync5, readdirSync as readdirSync3, realpathSync as realpathSync3, rmSync as rmSync4 } from "node:fs";
+import { lstatSync as lstatSync5, readdirSync as readdirSync4, realpathSync as realpathSync3, rmSync as rmSync4 } from "node:fs";
 import { basename as basename3, join as join11 } from "node:path";
 function ownedDirectory(path2, uid) {
   try {
@@ -32570,7 +33359,7 @@ function ownedDirectory(path2, uid) {
 }
 function entries2(directory) {
   try {
-    return readdirSync3(directory);
+    return readdirSync4(directory);
   } catch {
     return [];
   }
@@ -32648,7 +33437,7 @@ async function slackChannels(args, environment, store) {
   let partial2 = false;
   try {
     for (let page2 = 1; ; page2++) {
-      if (page2 > MAX_PAGES3) {
+      if (page2 > MAX_PAGES4) {
         partial2 = true;
         break;
       }
@@ -32667,17 +33456,17 @@ async function slackChannels(args, environment, store) {
   } finally {
     await close();
   }
-  const channels = [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const channels = [...counts].map(([name, count2]) => ({ name, count: count2 })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { ok: true, partial: partial2, since: after, channels };
 }
-var MAX_PAGES3, PAUSE_MS, SEARCH_TOOL;
+var MAX_PAGES4, PAUSE_MS, SEARCH_TOOL;
 var init_slack_channels = __esm({
   "src/report/slack-channels.ts"() {
     "use strict";
     init_run();
     init_mcp_client();
     init_errors5();
-    MAX_PAGES3 = 40;
+    MAX_PAGES4 = 40;
     PAUSE_MS = 4e3;
     SEARCH_TOOL = { name: "search", properties: ["query", "count", "page", "scope", "sort"] };
   }
@@ -33073,26 +33862,26 @@ function teamFor(alias2, person) {
   return team !== null && TEAM_PATTERN.test(team) ? team : null;
 }
 function planTeams(users, people) {
-  const plan = { changes: [], unchanged: 0, notFound: [], skippedNonDirectory: 0 };
+  const plan2 = { changes: [], unchanged: 0, notFound: [], skippedNonDirectory: 0 };
   for (const user of users) {
     const alias2 = directoryAlias(user);
     if (alias2 === null) {
-      plan.skippedNonDirectory++;
+      plan2.skippedNonDirectory++;
       continue;
     }
     const team = teamFor(alias2, people.get(alias2) ?? null);
     if (team === null) {
-      plan.notFound.push(alias2);
+      plan2.notFound.push(alias2);
       continue;
     }
     if (team === (user.department ?? "")) {
-      plan.unchanged++;
+      plan2.unchanged++;
       continue;
     }
-    plan.changes.push({ userId: user.userId, alias: alias2, from: user.department ?? "", to: team });
+    plan2.changes.push({ userId: user.userId, alias: alias2, from: user.department ?? "", to: team });
   }
-  plan.changes.sort((a, b) => a.alias.localeCompare(b.alias));
-  return plan;
+  plan2.changes.sort((a, b) => a.alias.localeCompare(b.alias));
+  return plan2;
 }
 var TEAM_PATTERN;
 var init_rule = __esm({
@@ -33103,7 +33892,7 @@ var init_rule = __esm({
 });
 
 // src/team-sync/directory.ts
-function record19(value) {
+function record20(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function login3(value) {
@@ -33117,8 +33906,8 @@ function parsePerson(_alias, toolText) {
     if (AUTH_PATTERN.test(toolText)) throw new IntakeError("AUTH_EXPIRED_MIDWAY", "the directory reported an authentication failure");
     return null;
   }
-  const outer = record19(value) ? value.content : void 0;
-  if (!record19(outer)) return null;
+  const outer = record20(value) ? value.content : void 0;
+  if (!record20(outer)) return null;
   if (outer.status !== "success") {
     if (AUTH_PATTERN.test(toolText)) {
       throw new IntakeError("AUTH_EXPIRED_MIDWAY", "the directory reported an authentication failure");
@@ -33126,10 +33915,10 @@ function parsePerson(_alias, toolText) {
     return null;
   }
   const person = outer.content;
-  if (!record19(person)) return null;
+  if (!record20(person)) return null;
   const own = login3(person.login);
   if (own === null || typeof person.is_manager !== "boolean") return null;
-  const manager = record19(person.manager) ? login3(person.manager.login) : null;
+  const manager = record20(person.manager) ? login3(person.manager.login) : null;
   return { login: own, isManager: person.is_manager, managerLogin: manager };
 }
 async function openDirectory(environment) {
@@ -33238,17 +34027,17 @@ async function preview(environment, store) {
       await directory.close();
     }
   }
-  const plan = planTeams(users, people);
+  const plan2 = planTeams(users, people);
   const previewId = randomBytes4(16).toString("hex");
-  const stored = { previewId, createdAt: environment.now().toISOString(), changes: plan.changes };
+  const stored = { previewId, createdAt: environment.now().toISOString(), changes: plan2.changes };
   store.write(stored, PREVIEW_FILE);
   return {
     ok: true,
     previewId,
-    changes: plan.changes.map(({ userId, alias: alias2, from, to }) => ({ userId, alias: alias2, from, to })),
-    unchanged: plan.unchanged,
-    notFound: plan.notFound,
-    skippedNonDirectory: plan.skippedNonDirectory,
+    changes: plan2.changes.map(({ userId, alias: alias2, from, to }) => ({ userId, alias: alias2, from, to })),
+    unchanged: plan2.unchanged,
+    notFound: plan2.notFound,
+    skippedNonDirectory: plan2.skippedNonDirectory,
     truncated: listed2.truncated === true
   };
 }
@@ -33354,12 +34143,12 @@ function crc32(data) {
 function readZip(data) {
   if (data.length > MAX_ZIP_BYTES) throw invalid3("zip-too-large");
   const end = findEnd(data);
-  const count = data.readUInt16LE(end + 10);
-  if (count > MAX_ENTRIES) throw invalid3("too-many-entries");
+  const count2 = data.readUInt16LE(end + 10);
+  if (count2 > MAX_ENTRIES) throw invalid3("too-many-entries");
   let offset = data.readUInt32LE(end + 16);
   const entries3 = [];
   let total = 0;
-  for (let index = 0; index < count; index++) {
+  for (let index = 0; index < count2; index++) {
     if (offset + 46 > data.length || data.readUInt32LE(offset) !== 33639248) throw invalid3("not-zip");
     const madeBy = data.readUInt16LE(offset + 4) >> 8;
     const flags3 = data.readUInt16LE(offset + 8);
@@ -33799,14 +34588,14 @@ async function planServers(env, servers) {
 function dirname4(path2) {
   return path2.slice(0, path2.lastIndexOf("/")) || "/";
 }
-async function applyServers(env, plan, approve) {
+async function applyServers(env, plan2, approve) {
   const confirmed = new Set(approve);
-  const pending = plan.actions.filter((action) => !action.approved && !confirmed.has(action.key));
-  const runnable = plan.actions.filter((action) => action.approved || confirmed.has(action.key));
+  const pending = plan2.actions.filter((action) => !action.approved && !confirmed.has(action.key));
+  const runnable = plan2.actions.filter((action) => action.approved || confirmed.has(action.key));
   const asking = { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) };
   if (runnable.length === 0 && pending.length) return asking;
-  if (plan.actions.length === 0) {
-    return plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
+  if (plan2.actions.length === 0) {
+    return plan2.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan2.unavailable } : { id: "servers", status: "current" };
   }
   if (runnable.some((action) => action.midway) && !existsSync5(join15(env.home, ".midway", "cookie"))) {
     return { id: "servers", status: "failed", code: "AUTH_EXPIRED_MIDWAY" };
@@ -33829,7 +34618,7 @@ async function applyServers(env, plan, approve) {
   }
   if (failed.length) return { id: "servers", status: "failed", code: "INSTALL_FAILED", items: failed };
   if (pending.length) return asking;
-  return plan.unavailable.length ? { id: "servers", status: "ok", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "ok" };
+  return plan2.unavailable.length ? { id: "servers", status: "ok", code: "TOOLBOX_MISSING", items: plan2.unavailable } : { id: "servers", status: "ok" };
 }
 var LIST_TIMEOUT_MS, INSTALL_TIMEOUT_MS, MAX_CONFIG_BYTES2;
 var init_servers = __esm({
@@ -33898,22 +34687,22 @@ function backup(home, name, now) {
 }
 function installSkills(home, plans, _packages, now) {
   if (plans.length === 0) return { id: "skills", status: "skipped" };
-  const missing = plans.filter((plan) => plan.state === "missing").map((plan) => plan.name);
+  const missing = plans.filter((plan2) => plan2.state === "missing").map((plan2) => plan2.name);
   if (missing.length) return { id: "skills", status: "failed", code: "PACKAGE_INVALID", items: missing };
-  const changed = plans.filter((plan) => plan.state !== "current");
-  for (const plan of changed) {
-    const dir = join16(skillsRoot(home), plan.name);
-    const targets = plan.files.map((file3) => join16(dir, file3.path));
+  const changed = plans.filter((plan2) => plan2.state !== "current");
+  for (const plan2 of changed) {
+    const dir = join16(skillsRoot(home), plan2.name);
+    const targets = plan2.files.map((file3) => join16(dir, file3.path));
     if (![skillsRoot(home), dir, ...targets].every((path2) => path2.startsWith(`${skillsRoot(home)}/`) || path2 === skillsRoot(home)) || ![backupRoot(home), ...targets].every((path2) => noLinks(home, path2))) {
-      return { id: "skills", status: "failed", code: "SKILL_PATH_UNSAFE", items: [plan.name] };
+      return { id: "skills", status: "failed", code: "SKILL_PATH_UNSAFE", items: [plan2.name] };
     }
   }
   const installed = [];
-  for (const plan of changed) {
-    const dir = join16(skillsRoot(home), plan.name);
+  for (const plan2 of changed) {
+    const dir = join16(skillsRoot(home), plan2.name);
     try {
-      if (plan.state === "update") backup(home, plan.name, now);
-      for (const file3 of plan.files) {
+      if (plan2.state === "update") backup(home, plan2.name, now);
+      for (const file3 of plan2.files) {
         const target = join16(dir, file3.path);
         mkdirSync8(join16(target, ".."), { recursive: true });
         const temporary = `${target}.tmp-${process.pid}`;
@@ -33928,9 +34717,9 @@ function installSkills(home, plans, _packages, now) {
           throw error3;
         }
       }
-      installed.push(plan.name);
+      installed.push(plan2.name);
     } catch {
-      return { id: "skills", status: "failed", code: "SKILL_WRITE_FAILED", items: [plan.name, ...installed] };
+      return { id: "skills", status: "failed", code: "SKILL_WRITE_FAILED", items: [plan2.name, ...installed] };
     }
   }
   return installed.length ? { id: "skills", status: "ok", items: installed } : { id: "skills", status: "current" };
@@ -34044,27 +34833,27 @@ async function setup2(args, environment, store) {
       progress("\uC2A4\uD0AC\uC744 \uC124\uCE58\uD558\uACE0 \uC788\uC5B4\uC694.");
       steps.push(installSkills(environment.home, plans, packages, environment.now()));
     } else {
-      const changed = plans.filter((plan2) => plan2.state !== "current").map((plan2) => plan2.name);
+      const changed = plans.filter((plan3) => plan3.state !== "current").map((plan3) => plan3.name);
       steps.push(plans.length === 0 ? { id: "skills", status: "skipped" } : changed.length ? { id: "skills", status: "ok", items: changed } : { id: "skills", status: "current" });
     }
     const env = { home: environment.home, path: environment.env.PATH ?? "", run: commandRunner(environment) };
-    const plan = await planServers(env, mergedServers(packages));
-    const known = new Set(plan.actions.map((action) => action.key));
+    const plan2 = await planServers(env, mergedServers(packages));
+    const known = new Set(plan2.actions.map((action) => action.key));
     for (const key of options2.approve) if (!known.has(key)) warnings.push(`\uC54C \uC218 \uC5C6\uB294 \uC2B9\uC778 \uD56D\uBAA9\uC744 \uBB34\uC2DC\uD588\uC5B4\uC694: ${key}`);
     const approve = options2.approve.filter((key) => known.has(key));
     let servers;
     if (options2.apply) {
       progress("MCP \uC11C\uBC84\uB97C \uD655\uC778\uD558\uACE0 \uC788\uC5B4\uC694.");
-      servers = await applyServers(env, plan, approve);
+      servers = await applyServers(env, plan2, approve);
     } else {
-      const pending = plan.actions.filter((action) => !action.approved);
-      servers = pending.length ? { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) } : plan.actions.length ? { id: "servers", status: "ok", items: plan.actions.map((action) => action.key) } : plan.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan.unavailable } : { id: "servers", status: "current" };
-      if (servers.status !== "skipped" && plan.unavailable.length) servers.code = "TOOLBOX_MISSING";
+      const pending = plan2.actions.filter((action) => !action.approved);
+      servers = pending.length ? { id: "servers", status: "needs-approval", items: pending.map((action) => action.key) } : plan2.actions.length ? { id: "servers", status: "ok", items: plan2.actions.map((action) => action.key) } : plan2.unavailable.length ? { id: "servers", status: "skipped", code: "TOOLBOX_MISSING", items: plan2.unavailable } : { id: "servers", status: "current" };
+      if (servers.status !== "skipped" && plan2.unavailable.length) servers.code = "TOOLBOX_MISSING";
     }
     steps.push(servers);
     const confirmed = new Set(approve);
-    const needsApproval = plan.actions.filter((action) => !action.approved && !confirmed.has(action.key)).map((action) => ({ key: action.key, label: action.label }));
-    if (plan.unavailable.length) warnings.push(`toolbox, aim \uB610\uB294 claude\uAC00 \uC5C6\uC5B4 \uAC74\uB108\uB6F4 \uD56D\uBAA9: ${plan.unavailable.join(", ")}`);
+    const needsApproval = plan2.actions.filter((action) => !action.approved && !confirmed.has(action.key)).map((action) => ({ key: action.key, label: action.label }));
+    if (plan2.unavailable.length) warnings.push(`toolbox, aim \uB610\uB294 claude\uAC00 \uC5C6\uC5B4 \uAC74\uB108\uB6F4 \uD56D\uBAA9: ${plan2.unavailable.join(", ")}`);
     return { ok: !steps.some((step) => step.status === "failed"), dryRun: !options2.apply, steps, needsApproval, warnings };
   } finally {
     release();
@@ -35097,8 +35886,8 @@ var CognitoAuth = class {
           }
           if (info.size > MAX_AUTH_BYTES) continue;
           const bytes = Buffer.alloc(MAX_AUTH_BYTES + 1);
-          let length = 0, count;
-          while (length < bytes.length && (count = readSync(fd, bytes, length, bytes.length - length, null)) > 0) length += count;
+          let length = 0, count2;
+          while (length < bytes.length && (count2 = readSync(fd, bytes, length, bytes.length - length, null)) > 0) length += count2;
           if (length > MAX_AUTH_BYTES) continue;
           try {
             saved = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)));
@@ -36081,10 +36870,10 @@ ${err.message}`;
     if (!UUID_PATTERN2.test(id)) throw new Error("Invalid recording id");
     const lock = join2(this.dir, `${id}.lock`);
     const token = `${process.pid}:${randomUUID()}`;
-    const busy = () => new Error(`Recording ${id} is being uploaded by another request; check ttobak_recording_status`);
+    const busy2 = () => new Error(`Recording ${id} is being uploaded by another request; check ttobak_recording_status`);
     if (!this.createExclusive(lock, token)) {
       const observed = this.readLock(lock);
-      if (observed === null || isProcessAlive(lockPid(observed))) throw busy();
+      if (observed === null || isProcessAlive(lockPid(observed))) throw busy2();
       const takeover = `${lock}.takeover`;
       if (!this.createExclusive(takeover, token)) {
         throw new Error(`Recording ${id} lock is being recovered; if this persists, delete ${takeover}`);
@@ -36094,7 +36883,7 @@ ${err.message}`;
       } finally {
         rmSync(takeover, { force: true });
       }
-      if (!this.createExclusive(lock, token)) throw busy();
+      if (!this.createExclusive(lock, token)) throw busy2();
     }
     let released = false;
     return () => {
