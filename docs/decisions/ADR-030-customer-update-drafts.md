@@ -114,7 +114,10 @@ linked, not restated:
 - **Feature switch.** With CDK context `customerUpdateRuntimeArn` unset, the
   worker has no runtime ARN or invoke grant and the run phases are off;
   fan-out continues. Setting the ARN and redeploying TtobakCrawlerStack turns
-  them on ([runbook](../runbooks/customer-update-agent.md)).
+  them on ([runbook](../runbooks/customer-update-agent.md)). `infra/cdk.json`
+  sets the ARN of the `ttobakCustomerUpdate` runtime, with meeting notes left
+  at their default (included); a deployed stack, not this file, shows whether
+  the phases run.
 
 ## Accepted limits
 
