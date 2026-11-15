@@ -73,8 +73,10 @@ export interface IntakeSelectionEntry {
 }
 
 // ---------------------------------------------------------------- Slack link channels
-// `intake_links_channels` / `intake_links_select` (mac-app intake_runner.rs). Channel
-// ids, names and labels stay in component state and these calls only.
+// `intake_links_channels` / `intake_links_select` (mac-app intake_runner.rs). The picker
+// makes no API call; channel ids and names stay in component state and these calls.
+// The saved label (the channel name by default) becomes the source label the adapter
+// stores in the user's TTOBAK account.
 
 export interface LinkChannel { id: string; name: string }
 export interface LinkChannelChoice { id: string; label: string }
@@ -103,6 +105,26 @@ export function linkChannelsOf(selection: unknown): LinkChannelChoice[] {
     const choice = validChoice(channel);
     return choice ? [choice] : [];
   });
+}
+
+/**
+ * The picker draft after a fresh read of the stored channels. An unedited draft
+ * becomes the stored list. An edited one keeps its edits and gains the stored
+ * channels it lacks unless the user removed them in this session: a save replaces
+ * the whole stored list, so channels stored after the draft began (e.g. by a save
+ * still running when the page was left) would otherwise lose their sources.
+ */
+export function nextLinkDraft(draft: LinkChannelChoice[], edited: boolean, stored: LinkChannelChoice[],
+  removed: ReadonlySet<string>): LinkChannelChoice[] {
+  if (!edited) return stored;
+  const inDraft = new Set(draft.map(({ id }) => id));
+  return [...draft, ...stored.filter(({ id }) => !inDraft.has(id) && !removed.has(id))];
+}
+
+/** False while a links call may still be writing the stored selection; an app
+ * without intake (`null`) counts as settled. */
+export function linkSelectionSettled(state: { running?: unknown } | null | undefined): boolean {
+  return state?.running !== 'links';
 }
 
 /** What blocks saving, mirroring the CLI: too many channels, a bad or repeated id, or a bad label. */

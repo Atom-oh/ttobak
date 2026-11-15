@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { COPY } from '@/lib/customerUpdates';
 import {
   SYNC_OPTIONS_COPY, errorCode, intakeCodeLabel, linkChannelList, linkChannelsOf, linkFailure, linkSelectionProblem,
-  visibleLinkChannels, type LinkChannel, type LinkChannelChoice,
+  linkSelectionSettled, nextLinkDraft, visibleLinkChannels, type LinkChannel, type LinkChannelChoice,
 } from '@/lib/intake';
-import { getIntakeState, isCommandNotFound, listLinkChannels, selectLinkChannels, useIsMacApp } from '@/lib/tauri';
+import { getIntakeState, isCommandNotFound, listLinkChannels, onIntakeFinished, selectLinkChannels, useIsMacApp } from '@/lib/tauri';
 
 const INPUT_CLASS =
   'w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400';
@@ -29,8 +29,10 @@ function failureText(err: unknown, saving: boolean): string {
 
 /**
  * Mac app only: choose the Slack channels whose public links the local intake
- * uploads. Channel ids, names and labels stay in this component's state and the
- * Tauri calls; they are never sent to the API, logged or stored in the browser.
+ * uploads. This component makes no API call; channel ids and names stay in its
+ * state and the Tauri calls and are never logged or stored in the browser. The
+ * label saved for a channel (its name by default) becomes the source label the
+ * adapter stores in the user's TTOBAK account.
  * `onSaved` reloads the source list after a save attempt (sources may have changed).
  */
 export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | Promise<void> }) {
@@ -40,25 +42,41 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Load and Save wait for the stored selection read on mount (success or failure), so a
-  // save cannot clear channels that were never shown.
+  // Load and Save wait until the stored selection is read (success or failure) and no
+  // links call is still writing it, so a save cannot drop channels that were never shown.
   const [ready, setReady] = useState(false);
-  // The stored selection read on mount must not replace what the user already edited or saved.
+  // The draft differs from the stored selection; `removed` holds channels the user took
+  // out in this session. Both reset when a save or a failed save shows the stored list.
   const edited = useRef(false);
+  const removed = useRef(new Set<string>());
+  // Bumped by a save so a read started before it cannot apply an older selection.
+  const generation = useRef(0);
 
   useEffect(() => {
     if (!isMac) return;
     let active = true;
-    getIntakeState()
-      .then(state => {
-        if (active && state && !edited.current) setChosen(linkChannelsOf(state.selection));
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setReady(true);
-      });
+    const read = (initial: boolean) => {
+      const started = generation.current;
+      getIntakeState()
+        .then(state => {
+          if (!active || generation.current !== started) return;
+          if (state) {
+            const stored = linkChannelsOf(state.selection);
+            setChosen(prev => nextLinkDraft(prev, edited.current, stored, removed.current));
+          }
+          setReady(linkSelectionSettled(state));
+        })
+        .catch(() => {
+          if (active && initial) setReady(true);
+        });
+    };
+    read(true);
+    // Any finished intake call may have changed the stored selection (a links save
+    // still running when the page was opened, a setup run).
+    const stop = onIntakeFinished(() => read(false));
     return () => {
       active = false;
+      stop();
     };
   }, [isMac]);
 
@@ -74,6 +92,12 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
     setChosen(update);
   };
 
+  const showStored = (stored: LinkChannelChoice[]) => {
+    edited.current = false;
+    removed.current = new Set();
+    setChosen(stored);
+  };
+
   const load = async () => {
     setBusy(true);
     setError(null);
@@ -87,26 +111,46 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
   };
 
   const save = async () => {
-    edited.current = true;
+    generation.current += 1;
     setBusy(true);
     setError(null);
+    let attempted = false;
     try {
-      const stored = await selectLinkChannels(chosen.map(({ id, label }) => ({ id, label: label.trim() })));
-      setChosen(linkChannelsOf([{ connector: 'links', channels: stored }]));
+      // A save replaces the whole stored list: re-read it first so channels stored after
+      // this draft began are kept unless the user removed them.
+      const current = await getIntakeState();
+      if (current && !linkSelectionSettled(current)) {
+        setError(COPY['mac.links.busy']);
+        return;
+      }
+      const draft = current ? nextLinkDraft(chosen, true, linkChannelsOf(current.selection), removed.current) : chosen;
+      setChosen(draft);
+      if (linkSelectionProblem(draft) !== null) return;
+      attempted = true;
+      const stored = await selectLinkChannels(draft.map(({ id, label }) => ({ id, label: label.trim() })));
+      generation.current += 1;
+      showStored(linkChannelsOf([{ connector: 'links', channels: stored }]));
     } catch (err) {
-      setError(failureText(err, true));
-      // A failed save may have stored some channels: show what is stored now.
-      try {
-        const state = await getIntakeState();
-        if (state) setChosen(linkChannelsOf(state.selection));
-      } catch { /* keep the edited list */ }
+      setError(failureText(err, attempted));
+      if (attempted) {
+        // A failed save may have stored some channels: show what is stored now.
+        try {
+          const state = await getIntakeState();
+          generation.current += 1;
+          if (state) showStored(linkChannelsOf(state.selection));
+        } catch { /* keep the edited list */ }
+      }
     } finally {
       setBusy(false);
-      try { await onSaved?.(); } catch { /* the list shows its own error */ }
+      if (attempted) {
+        try { await onSaved?.(); } catch { /* the list shows its own error */ }
+      }
     }
   };
 
   const toggle = (channel: LinkChannel, checked: boolean) => {
+    if (checked) removed.current.delete(channel.id);
+    else removed.current.add(channel.id);
     edit(prev => checked
       ? prev.some(item => item.id === channel.id) ? prev : [...prev, { id: channel.id, label: channel.name }]
       : prev.filter(item => item.id !== channel.id));
@@ -144,7 +188,10 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
               <button
                 type="button"
                 aria-label={`${nameOf(item)} ${COPY['settings.sources.delete']}`}
-                onClick={() => edit(prev => prev.filter(other => other.id !== item.id))}
+                onClick={() => {
+                  removed.current.add(item.id);
+                  edit(prev => prev.filter(other => other.id !== item.id));
+                }}
                 disabled={busy}
                 className="shrink-0 px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40"
               >

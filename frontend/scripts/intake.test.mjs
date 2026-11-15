@@ -269,6 +269,23 @@ test('setup skip toggles leave out links; labels and setup rows still know it', 
   assert.deepEqual(plain(rows.map(row => [row.connector, row.label])), [['links', 'Slack 링크']]);
 });
 
+test('a newer stored selection keeps channels the draft never removed', () => {
+  const A = { id: 'C0000000A', label: 'a' }, B = { id: 'C0000000B', label: 'b' };
+  const C = { id: 'C0000000C', label: 'c' }, D = { id: 'C0000000D', label: 'd' };
+  // Draft based on [A] (the CLI was still registering B and C); the user added D.
+  assert.deepEqual(plain(intake.nextLinkDraft([A, D], true, [A, B, C], new Set())), [A, D, B, C]);
+  // An explicit removal in this session is honored.
+  assert.deepEqual(plain(intake.nextLinkDraft([A, D], true, [A, B, C], new Set([B.id]))), [A, D, C]);
+  // Without edits the stored list is shown as is.
+  assert.deepEqual(plain(intake.nextLinkDraft([A], false, [A, B, C], new Set())), [A, B, C]);
+});
+
+test('the picker waits while a links call still writes the selection', () => {
+  assert.equal(intake.linkSelectionSettled({ running: 'links' }), false);
+  for (const running of [null, 'run', 'options']) assert.equal(intake.linkSelectionSettled({ running }), true);
+  assert.equal(intake.linkSelectionSettled(null), true);
+});
+
 test('links, options and schedule-off runs are quiet (no progress log or cancel)', () => {
   for (const kind of ['links', 'options', 'scheduleOff']) assert.equal(intake.isQuietRun(kind), true, kind);
   for (const kind of ['run', 'setup', 'login', 'oneClickSetup', null]) assert.equal(intake.isQuietRun(kind), false, String(kind));
