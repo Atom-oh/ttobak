@@ -76,6 +76,8 @@ func cuWriteServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Not found")
 	case errors.Is(err, service.ErrConflict):
 		writeError(w, http.StatusConflict, model.ErrCodeConflict, "Conflict")
+	case errors.Is(err, service.ErrSourcesBusy):
+		writeError(w, http.StatusServiceUnavailable, "SOURCES_BUSY", "Sources are busy; try again")
 	case errors.Is(err, repository.ErrUpdateDraftEncryptionUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "DRAFTS_UNAVAILABLE", "Drafts are temporarily unavailable")
 	default:

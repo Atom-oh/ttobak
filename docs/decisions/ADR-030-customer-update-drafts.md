@@ -18,6 +18,9 @@ linked, not restated:
 - **Sources.** Followed RSS, site and YouTube sources and uploaded links feed
   the user's inbox. Slack message bodies stay on the Mac; only filtered public
   URLs are uploaded (planned: the Mac side ships in a later plan).
+  The 30-source cap is a conditional counter (`USER#{userId}` / `CUSRCCOUNT`)
+  changed in the same transaction as the source row; a missing counter is
+  seeded from a consistent row count before any counted write.
 - **Sharing.** Link-derived state is shared per URL: `CUURL#{urlHash}` holds a
   normalized public https URL and what was derived from that public page. No
   submitter, user, account or draft data is recorded on the shared row.

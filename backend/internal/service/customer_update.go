@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log"
+	"math/rand/v2"
 	"regexp"
 	"sort"
 	"strconv"
@@ -26,12 +28,15 @@ const (
 var updateURLHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type customerUpdateRepo interface {
-	PutSourceIfAbsent(ctx context.Context, userID string, s *model.UpdateSource) error
+	CreateSource(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub, maxSources int) error
+	RemoveSource(ctx context.Context, userID, sourceID, feedHash string) error
+	GetSourceCount(ctx context.Context, userID string) (int, bool, error)
+	CountSources(ctx context.Context, userID string) (int, error)
+	SeedSourceCount(ctx context.Context, userID string, n int) error
 	ListSources(ctx context.Context, userID string, limit int) ([]model.UpdateSource, error)
 	GetSource(ctx context.Context, userID, sourceID string) (*model.UpdateSource, error)
 	UpdateSource(ctx context.Context, userID, sourceID string, label *string, status *string) error
 	DeleteSource(ctx context.Context, userID, sourceID string) error
-	PutSourceWithFeedSub(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) error
 	SetSourceStatusWithFeedSub(ctx context.Context, userID string, sourceID string, sub *model.UpdateFeedSub, label *string) error
 	DeleteSourceWithFeedSub(ctx context.Context, userID, sourceID, feedHash string) error
 	HealSourceFeedSub(ctx context.Context, userID, sourceID string, sub *model.UpdateFeedSub) error
@@ -94,6 +99,9 @@ type CustomerUpdateService struct {
 	repo    customerUpdateRepo
 	members directMemberChecker
 	now     func() time.Time
+	// sleep waits between source-write attempts; it returns ctx.Err() when the
+	// context ends first.
+	sleep func(context.Context, time.Duration) error
 }
 
 // NewCustomerUpdateService creates a CustomerUpdateService; a nil now uses time.Now.
@@ -101,7 +109,49 @@ func NewCustomerUpdateService(repo customerUpdateRepo, members directMemberCheck
 	if now == nil {
 		now = time.Now
 	}
-	return &CustomerUpdateService{repo: repo, members: members, now: now}
+	return &CustomerUpdateService{repo: repo, members: members, now: now, sleep: sleepCtx}
+}
+
+// ErrSourcesBusy means concurrent writes to the user's sources kept colliding
+// for every attempt; nothing was applied and the client may retry.
+var ErrSourcesBusy = errors.New("customer update sources are busy")
+
+// Source adds and deletes share the user's counter row, so concurrent ones can
+// cancel each other with a TransactionConflict. A cancelled attempt applied
+// nothing, so it is retried from a fresh read.
+const (
+	sourceWriteAttempts = 5
+	sourceWriteBackoff  = 20 * time.Millisecond
+)
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// retrySourceWrite runs attempt until it ends without a write conflict, at
+// most sourceWriteAttempts times with jittered linear backoff. Each attempt
+// re-reads the counter, so the cap and duplicate checks are re-evaluated.
+func (s *CustomerUpdateService) retrySourceWrite(ctx context.Context, attempt func() error) error {
+	for n := 1; ; n++ {
+		err := attempt()
+		if !errors.Is(err, repository.ErrUpdateSourceConflict) {
+			return err
+		}
+		if n == sourceWriteAttempts {
+			return fmt.Errorf("%w: %w", ErrSourcesBusy, err)
+		}
+		wait := sourceWriteBackoff*time.Duration(n) + rand.N(sourceWriteBackoff)
+		if err := s.sleep(ctx, wait); err != nil {
+			return err
+		}
+	}
 }
 
 func validUpdateLabel(label string) (string, bool) {
@@ -142,28 +192,63 @@ func (s *CustomerUpdateService) AddSource(ctx context.Context, userID string, re
 		return nil, ErrInvalidInput
 	}
 
-	existing, err := s.repo.ListSources(ctx, userID, model.MaxUpdateSources)
-	if err != nil {
-		return nil, err
-	}
-	if len(existing) >= model.MaxUpdateSources {
-		return nil, ErrConflict
-	}
 	src.SourceID = uuid.NewString()
 	src.CreatedAt = s.now().UTC()
 	// Non-Slack sources register their feed in the same transaction.
+	var sub *model.UpdateFeedSub
 	if feedHash != "" {
-		err = s.repo.PutSourceWithFeedSub(ctx, userID, src, feedSubFor(src, userID, feedHash))
-	} else {
-		err = s.repo.PutSourceIfAbsent(ctx, userID, src)
+		sub = feedSubFor(src, userID, feedHash)
 	}
+	err := s.retrySourceWrite(ctx, func() error {
+		// The early check only saves a write; the counter condition in the
+		// create transaction enforces the cap.
+		count, err := s.ensureSourceCount(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if count >= model.MaxUpdateSources {
+			return ErrConflict
+		}
+		return s.repo.CreateSource(ctx, userID, src, sub, model.MaxUpdateSources)
+	})
 	if err != nil {
+		// A full cap and a taken source id both stay 409 CONFLICT.
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrConflict
 		}
 		return nil, err
 	}
 	return src, nil
+}
+
+// ensureSourceCount returns the user's followed-source counter, seeding an
+// absent (legacy) counter from a strongly consistent count of the source rows.
+// Counted creates and removes require the counter, so none can change the rows
+// between that count and the seed. A lost seed race re-reads the winner's value.
+func (s *CustomerUpdateService) ensureSourceCount(ctx context.Context, userID string) (int, error) {
+	count, found, err := s.repo.GetSourceCount(ctx, userID)
+	if err != nil || found {
+		return count, err
+	}
+	rows, err := s.repo.CountSources(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	err = s.repo.SeedSourceCount(ctx, userID, rows)
+	if err == nil {
+		return rows, nil
+	}
+	if !errors.Is(err, repository.ErrConditionFailed) {
+		return 0, err
+	}
+	count, found, err = s.repo.GetSourceCount(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, errors.New("customer update source count missing after a lost seed")
+	}
+	return count, nil
 }
 
 func feedSubFor(src *model.UpdateSource, userID, feedHash string) *model.UpdateFeedSub {
@@ -280,21 +365,37 @@ func (s *CustomerUpdateService) UpdateSource(ctx context.Context, userID, source
 }
 
 // DeleteSource removes a source and, for a non-Slack source, its feed
-// registry row; deleting an absent source succeeds.
+// registry row, and frees its slot in the same transaction; deleting an absent
+// source (or one a concurrent delete removed) succeeds without a write.
 func (s *CustomerUpdateService) DeleteSource(ctx context.Context, userID, sourceID string) error {
 	if !resummaryID.MatchString(sourceID) {
 		return ErrInvalidInput
 	}
 	src, err := s.findSource(ctx, userID, sourceID)
-	if err != nil {
+	if err != nil || src == nil {
 		return err
 	}
-	if src != nil {
-		if hash, ok := feedHashOf(src); ok {
+	hash, _ := feedHashOf(src) // empty for Slack and unnormalizable legacy URLs
+	err = s.retrySourceWrite(ctx, func() error {
+		if _, err := s.ensureSourceCount(ctx, userID); err != nil {
+			return err
+		}
+		return s.repo.RemoveSource(ctx, userID, sourceID, hash)
+	})
+	switch {
+	case err == nil, errors.Is(err, repository.ErrUpdateSourceMissing):
+		return nil
+	case errors.Is(err, repository.ErrUpdateSourceCountFloor):
+		// The counter undercounts the rows (only writes that bypassed it can
+		// cause that). Deleting without a decrement keeps the source deletable
+		// and never lets the counter go negative.
+		log.Printf("customer update source count below its rows user=%s; deleting uncounted", userHashPrefix(userID))
+		if hash != "" {
 			return s.repo.DeleteSourceWithFeedSub(ctx, userID, sourceID, hash)
 		}
+		return s.repo.DeleteSource(ctx, userID, sourceID)
 	}
-	return s.repo.DeleteSource(ctx, userID, sourceID)
+	return err
 }
 
 // UploadLinks records links from a local Slack source. Links are normalized;

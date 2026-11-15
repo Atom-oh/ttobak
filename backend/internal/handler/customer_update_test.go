@@ -242,9 +242,15 @@ func (r *draftListRepo) OpenDraft(context.Context, string, *model.UpdateDraft) e
 	return r.openErr
 }
 
-func (r *draftListRepo) PutSourceIfAbsent(context.Context, string, *model.UpdateSource) error {
+func (r *draftListRepo) CreateSource(context.Context, string, *model.UpdateSource, *model.UpdateFeedSub, int) error {
 	return nil
 }
+func (r *draftListRepo) RemoveSource(context.Context, string, string, string) error { return nil }
+func (r *draftListRepo) GetSourceCount(context.Context, string) (int, bool, error) {
+	return 0, true, nil
+}
+func (r *draftListRepo) CountSources(context.Context, string) (int, error)  { return 0, nil }
+func (r *draftListRepo) SeedSourceCount(context.Context, string, int) error { return nil }
 func (r *draftListRepo) ListSources(context.Context, string, int) ([]model.UpdateSource, error) {
 	return nil, nil
 }
@@ -255,9 +261,6 @@ func (r *draftListRepo) UpdateSource(context.Context, string, string, *string, *
 	return nil
 }
 func (r *draftListRepo) DeleteSource(context.Context, string, string) error { return nil }
-func (r *draftListRepo) PutSourceWithFeedSub(context.Context, string, *model.UpdateSource, *model.UpdateFeedSub) error {
-	return nil
-}
 func (r *draftListRepo) SetSourceStatusWithFeedSub(context.Context, string, string, *model.UpdateFeedSub, *string) error {
 	return nil
 }
@@ -327,6 +330,7 @@ func TestCustomerUpdateDraftSealingErrors(t *testing.T) {
 	}{
 		{repository.ErrUpdateDraftEncryptionUnavailable, http.StatusServiceUnavailable, `"DRAFTS_UNAVAILABLE"`},
 		{fmt.Errorf("open: %w", repository.ErrUpdateDraftUnreadable), http.StatusInternalServerError, `"` + model.ErrCodeInternalError + `"`},
+		{fmt.Errorf("%w: %w", service.ErrSourcesBusy, repository.ErrUpdateSourceConflict), http.StatusServiceUnavailable, `"SOURCES_BUSY"`},
 	} {
 		rec := httptest.NewRecorder()
 		cuWriteServiceError(rec, tc.err)

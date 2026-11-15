@@ -26,35 +26,6 @@ func feedAttrS(t *testing.T, m map[string]types.AttributeValue, k string) string
 	return v.Value
 }
 
-func TestPutSourceWithFeedSubItems(t *testing.T) {
-	src := &model.UpdateSource{SourceID: "s1", Kind: model.UpdateSourceKindRSS, Label: "B", URL: "https://example.com/feed", Status: model.UpdateSourceActive}
-	items, err := putSourceWithFeedSubItems("tbl", "u1", src, feedTestSub())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 2 || items[0].Put == nil || items[1].Put == nil {
-		t.Fatalf("want two puts, got %+v", items)
-	}
-	srcPut, subPut := items[0].Put, items[1].Put
-	if feedAttrS(t, srcPut.Item, "PK") != "USER#u1" || feedAttrS(t, srcPut.Item, "SK") != "CUSRC#s1" {
-		t.Fatalf("source keys = %v", srcPut.Item)
-	}
-	if srcPut.ConditionExpression == nil || !strings.Contains(*srcPut.ConditionExpression, "attribute_not_exists") {
-		t.Fatalf("source put must be attribute_not_exists, got %v", srcPut.ConditionExpression)
-	}
-	if feedAttrS(t, subPut.Item, "PK") != "CUFEEDS" || feedAttrS(t, subPut.Item, "SK") != "fh1#u1#s1" {
-		t.Fatalf("registry keys = %v", subPut.Item)
-	}
-	if feedAttrS(t, subPut.Item, "entityType") != "UPDATE_FEED_SUB" {
-		t.Fatalf("entityType = %v", subPut.Item["entityType"])
-	}
-	for _, k := range []string{"feedHash", "url", "kind", "userId", "sourceId", "status", "fannedAt"} {
-		if _, ok := subPut.Item[k]; !ok {
-			t.Errorf("registry row lacks %s", k)
-		}
-	}
-}
-
 func TestSetSourceStatusWithFeedSubItemsUpsertsRegistry(t *testing.T) {
 	sub := feedTestSub()
 	sub.Status = model.UpdateSourceDisabled

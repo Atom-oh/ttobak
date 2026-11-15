@@ -35,43 +35,6 @@ func validFeedSub(sub *model.UpdateFeedSub) error {
 	return nil
 }
 
-// putSourceWithFeedSubItems builds the transaction that creates a source row
-// (attribute_not_exists) together with its registry row.
-func putSourceWithFeedSubItems(tableName, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) ([]types.TransactWriteItem, error) {
-	if err := validFeedSub(sub); err != nil {
-		return nil, err
-	}
-	srcAV, err := attributevalue.MarshalMap(updateSourceRow{
-		customerUpdateKeys: customerUpdateKeys{
-			PK: model.PrefixUser + userID, SK: model.UpdateSourceSK(s.SourceID), EntityType: "UPDATE_SOURCE",
-		},
-		UpdateSource: *s,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal update source: %w", err)
-	}
-	subAV, err := attributevalue.MarshalMap(updateFeedSubRow{
-		customerUpdateKeys: customerUpdateKeys{
-			PK: model.PKUpdateFeeds, SK: model.UpdateFeedSubSK(sub.FeedHash, sub.UserID, sub.SourceID), EntityType: "UPDATE_FEED_SUB",
-		},
-		UpdateFeedSub: *sub,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal feed subscription: %w", err)
-	}
-	cond, err := absentCondition()
-	if err != nil {
-		return nil, fmt.Errorf("build create-source condition: %w", err)
-	}
-	return []types.TransactWriteItem{
-		{Put: &types.Put{
-			TableName: aws.String(tableName), Item: srcAV,
-			ConditionExpression: cond.Condition(), ExpressionAttributeNames: cond.Names(),
-		}},
-		{Put: &types.Put{TableName: aws.String(tableName), Item: subAV}},
-	}, nil
-}
-
 // setSourceStatusWithFeedSubItems builds the transaction that sets the source
 // status and feedHash (the source row must exist) and upserts the full registry
 // row, so a source created before the registry existed gains its row. An
@@ -167,19 +130,6 @@ func transactCondition(err error, action, conflict string) error {
 	return fmt.Errorf("failed to %s: %w", action, err)
 }
 
-// PutSourceWithFeedSub creates a source and its feed registry row in one
-// transaction; an existing sourceId returns ErrConditionFailed.
-func (r *CustomerUpdateRepository) PutSourceWithFeedSub(ctx context.Context, userID string, s *model.UpdateSource, sub *model.UpdateFeedSub) error {
-	items, err := putSourceWithFeedSubItems(r.tableName, userID, s, sub)
-	if err != nil {
-		return err
-	}
-	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
-		return transactCondition(err, "create update source with feed subscription", "update source already exists")
-	}
-	return nil
-}
-
 // SetSourceStatusWithFeedSub sets a source's status (it must exist) and upserts
 // its registry row; sub carries the new status. A non-nil label is set in the
 // same transaction. A missing source returns
@@ -210,7 +160,8 @@ func (r *CustomerUpdateRepository) HealSourceFeedSub(ctx context.Context, userID
 }
 
 // DeleteSourceWithFeedSub removes a source and its registry row in one
-// transaction. It does not require either row to exist.
+// transaction without counting it (RemoveSource is the counted path). It does
+// not require either row to exist.
 func (r *CustomerUpdateRepository) DeleteSourceWithFeedSub(ctx context.Context, userID, sourceID, feedHash string) error {
 	items, err := deleteSourceWithFeedSubItems(r.tableName, userID, sourceID, feedHash)
 	if err != nil {
