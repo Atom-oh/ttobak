@@ -28087,21 +28087,34 @@ var init_stdio2 = __esm({
 });
 
 // src/intake/mcp-client.ts
+function jsonAfterNotice(text5) {
+  for (const match of text5.matchAll(/\n(?=[[{])/g)) {
+    if (match.index > MAX_NOTICE_CHARS) break;
+    try {
+      return JSON.parse(text5.slice(match.index + 1));
+    } catch {
+    }
+  }
+  return void 0;
+}
 function resultJson(result, tool) {
   if (result.structuredContent !== void 0) return result.structuredContent;
   const texts2 = (result.content ?? []).filter((item2) => item2.type === "text").map((item2) => item2.text);
   for (const text5 of texts2) {
     const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text5);
     const candidate = (wrapped ? wrapped[1] : text5).trim();
-    if (!candidate.startsWith("[") && !candidate.startsWith("{")) continue;
-    try {
-      return JSON.parse(candidate);
-    } catch {
+    if (candidate.startsWith("[") || candidate.startsWith("{")) {
+      try {
+        return JSON.parse(candidate);
+      } catch {
+      }
     }
+    const afterNotice = jsonAfterNotice(candidate);
+    if (afterNotice !== void 0) return afterNotice;
   }
   throw new IntakeError("PARSE_FAILED", `${tool} did not return JSON`);
 }
-var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, ToolResultError, McpSession;
+var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, ToolResultError, McpSession, MAX_NOTICE_CHARS;
 var init_mcp_client = __esm({
   "src/intake/mcp-client.ts"() {
     "use strict";
@@ -28205,6 +28218,7 @@ var init_mcp_client = __esm({
         });
       }
     };
+    MAX_NOTICE_CHARS = 8192;
   }
 });
 

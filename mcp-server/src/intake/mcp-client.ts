@@ -111,6 +111,21 @@ export class McpSession {
 }
 
 /** Returns the JSON payload of a tool result: structured content first, then a JSON text block. */
+const MAX_NOTICE_CHARS = 8192;
+
+/**
+ * Some servers (the Slack MCP server) put a plain-text notice before the JSON,
+ * and the notice itself may start with `[`. The JSON then starts at a line
+ * start and runs to the end of the text; the notice is never returned.
+ */
+function jsonAfterNotice(text: string): unknown {
+  for (const match of text.matchAll(/\n(?=[[{])/g)) {
+    if (match.index > MAX_NOTICE_CHARS) break;
+    try { return JSON.parse(text.slice(match.index + 1)); } catch { /* try the next line start */ }
+  }
+  return undefined;
+}
+
 export function resultJson(result: CallToolResult, tool: string): unknown {
   if (result.structuredContent !== undefined) return result.structuredContent;
   const texts = (result.content ?? []).filter(item => item.type === 'text').map(item => item.text);
@@ -118,8 +133,11 @@ export function resultJson(result: CallToolResult, tool: string): unknown {
     // Some hosts and servers wrap untrusted data in boundary tags.
     const wrapped = /<untrusted_content_[A-Za-z0-9]+>\s*([\s\S]*?)\s*<\/untrusted_content_[A-Za-z0-9]+>/.exec(text);
     const candidate = (wrapped ? wrapped[1] : text).trim();
-    if (!candidate.startsWith('[') && !candidate.startsWith('{')) continue;
-    try { return JSON.parse(candidate); } catch { /* try the next block */ }
+    if (candidate.startsWith('[') || candidate.startsWith('{')) {
+      try { return JSON.parse(candidate); } catch { /* may be a notice before the JSON */ }
+    }
+    const afterNotice = jsonAfterNotice(candidate);
+    if (afterNotice !== undefined) return afterNotice;
   }
   throw new IntakeError('PARSE_FAILED', `${tool} did not return JSON`);
 }
