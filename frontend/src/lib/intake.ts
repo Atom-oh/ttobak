@@ -57,6 +57,12 @@ export const INTAKE_CONNECTORS: { connector: IntakeConnector; label: string }[] 
   { connector: 'links', label: 'Slack 링크' },
 ];
 
+/** Connectors `intake setup --skip` accepts from every adapter and app build. `links`
+ * is left out: adapters and app builds older than it reject the value. */
+export type SetupSkipConnector = Exclude<IntakeConnector, 'links'>;
+export const SETUP_SKIP_CONNECTORS = INTAKE_CONNECTORS.filter(
+  (item): item is { connector: SetupSkipConnector; label: string } => item.connector !== 'links');
+
 export interface IntakeSelectionEntry {
   connector: string;
   server: string;
@@ -166,6 +172,11 @@ export interface IntakeStateView {
   options?: IntakeSyncOptions;
   launchAgentInstalled: boolean;
   progress: string[];
+}
+
+/** Background commands that hold the run slot without a progress log or cancel. */
+export function isQuietRun(running: IntakeStateView['running'] | undefined): boolean {
+  return running === 'scheduleOff' || running === 'options' || running === 'links';
 }
 
 export interface IntakeSourceRow {

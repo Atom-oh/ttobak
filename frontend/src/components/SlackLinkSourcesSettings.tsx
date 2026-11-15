@@ -40,7 +40,10 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The stored selection read on mount must not replace what the user already edited.
+  // Load and Save wait for the stored selection read on mount (success or failure), so a
+  // save cannot clear channels that were never shown.
+  const [ready, setReady] = useState(false);
+  // The stored selection read on mount must not replace what the user already edited or saved.
   const edited = useRef(false);
 
   useEffect(() => {
@@ -50,7 +53,10 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
       .then(state => {
         if (active && state && !edited.current) setChosen(linkChannelsOf(state.selection));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (active) setReady(true);
+      });
     return () => {
       active = false;
     };
@@ -81,6 +87,7 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
   };
 
   const save = async () => {
+    edited.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -152,7 +159,7 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
         <button
           type="button"
           onClick={load}
-          disabled={busy}
+          disabled={busy || !ready}
           className="px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
         >
           {COPY['mac.links.load']}
@@ -160,7 +167,7 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
         <button
           type="button"
           onClick={save}
-          disabled={busy || problem !== null}
+          disabled={busy || !ready || problem !== null}
           className="px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
           {COPY['mac.links.save']}
@@ -176,6 +183,7 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
             aria-label={COPY['mac.links.search']}
             value={query}
             onChange={event => setQuery(event.target.value)}
+            disabled={busy}
             className={INPUT_CLASS}
           />
           <ul className="max-h-64 overflow-y-auto space-y-1">

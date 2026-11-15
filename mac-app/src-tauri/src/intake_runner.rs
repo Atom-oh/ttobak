@@ -1704,10 +1704,19 @@ fn supports_links(adapter: &[u8]) -> bool {
         .any(|w| w == LINKS_MARKER)
 }
 
+/// The `intake://finished` payload of a links call releasing the run slot:
+/// the kind only (not kept as `lastResult`), so listeners reload the state
+/// without treating it as a sync result. Channel data never goes in it.
+fn links_released_payload() -> Value {
+    json!({ "action": RunKind::Links })
+}
+
 /// Runs a links action in the exclusive run slot (`RUN_IN_PROGRESS` while a
 /// run holds it) and returns the CLI's JSON result or its code. Progress
 /// lines are dropped and nothing is logged or kept: channel IDs, names and
-/// labels travel only from the CLI's stdout to the WebView.
+/// labels travel only from the CLI's stdout to the WebView. Releasing the
+/// slot emits `links_released_payload`, so views that saw `running: links`
+/// (e.g. after a `RUN_IN_PROGRESS`) refresh.
 async fn run_links(app: &AppHandle, action: &IntakeAction) -> Result<Value, String> {
     let state = app.state::<IntakeState>();
     state.available()?;
@@ -1718,6 +1727,7 @@ async fn run_links(app: &AppHandle, action: &IntakeAction) -> Result<Value, Stri
     let cancel = state.try_begin(RunKind::Links)?;
     let outcome = execute(app, action, LINKS_TIMEOUT, Some(cancel), false).await;
     state.finish_run();
+    let _ = app.emit_to("main", FINISHED_EVENT, links_released_payload());
     match outcome.code {
         None => outcome.result.ok_or_else(|| "EXIT_FAILED".to_string()),
         Some(code) => Err(code),
@@ -2169,6 +2179,12 @@ mod tests {
             Some("RUN_IN_PROGRESS")
         );
         assert_eq!(serde_json::to_string(&RunKind::Links).unwrap(), "\"links\"");
+    }
+
+    #[test]
+    fn a_released_links_slot_reports_only_its_kind() {
+        // No exit code, result or code: never shown as a sync result, never channel data.
+        assert_eq!(links_released_payload(), json!({"action": "links"}));
     }
 
     #[test]

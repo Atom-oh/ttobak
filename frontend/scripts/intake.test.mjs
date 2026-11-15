@@ -261,6 +261,19 @@ test('links is an intake connector labelled from the contract', () => {
   assert.deepEqual(plain(links), { connector: 'links', label: 'Slack 링크' });
 });
 
+test('setup skip toggles leave out links; labels and setup rows still know it', () => {
+  // An adapter older than the links connector rejects `--skip links`.
+  assert.deepEqual(plain(intake.SETUP_SKIP_CONNECTORS.map(item => item.connector)),
+    ['calendar', 'sfdc', 'meetings', 'specreq', 'slack']);
+  const rows = intake.setupConnectorRows({ action: 'setup', result: { connectors: { links: { status: 'selected', server: 'slack', host: 'claude' } } } });
+  assert.deepEqual(plain(rows.map(row => [row.connector, row.label])), [['links', 'Slack 링크']]);
+});
+
+test('links, options and schedule-off runs are quiet (no progress log or cancel)', () => {
+  for (const kind of ['links', 'options', 'scheduleOff']) assert.equal(intake.isQuietRun(kind), true, kind);
+  for (const kind of ['run', 'setup', 'login', 'oneClickSetup', null]) assert.equal(intake.isQuietRun(kind), false, String(kind));
+});
+
 test('linkChannelsOf reads the links entry and drops malformed channels', () => {
   const selection = [
     { connector: 'slack', server: 'slack-mcp', host: 'claude', disabled: false },

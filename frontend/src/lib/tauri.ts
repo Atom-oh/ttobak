@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from 'react';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, LinkChannelChoice, SetupFinished, SetupStep } from './intake';
+import type { IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, LinkChannelChoice, SetupFinished, SetupSkipConnector, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 import type { TeamSyncFinished, TeamSyncStateView } from './teamSync';
 
@@ -773,7 +773,7 @@ export function runIntakeNow(): Promise<void> {
   return invoke<void>('intake_run_now');
 }
 
-export function runIntakeSetup(acceptPrivateCalendar: boolean, skip: IntakeConnector[]): Promise<void> {
+export function runIntakeSetup(acceptPrivateCalendar: boolean, skip: SetupSkipConnector[]): Promise<void> {
   return invoke<void>('intake_setup', { acceptPrivateCalendar, skip });
 }
 
@@ -832,6 +832,7 @@ export function onIntakeProgress(handler: (line: string) => void): () => void {
   );
 }
 
+/** Also fires with only `{action: 'links'}` when a Slack links call releases the run slot. */
 export function onIntakeFinished(handler: (finished: IntakeFinished) => void): () => void {
   return subscribeTauriEvent<IntakeFinished, IntakeFinished>('intake://finished', (raw) => raw, handler);
 }
