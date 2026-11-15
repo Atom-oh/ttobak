@@ -51,6 +51,8 @@
     "allow-setup-start",
     "allow-setup-get-state",
     "allow-intake-set-options",
+    "allow-intake-links-channels",
+    "allow-intake-links-select",
     "allow-report-generate",
     "allow-report-cancel",
     "allow-report-get-state",

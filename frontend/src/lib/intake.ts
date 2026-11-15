@@ -46,13 +46,15 @@ export interface IntakeSchedule {
   times: string[];
 }
 
-export type IntakeConnector = 'calendar' | 'sfdc' | 'meetings' | 'specreq' | 'slack';
+export type IntakeConnector = 'calendar' | 'sfdc' | 'meetings' | 'specreq' | 'slack' | 'links';
 export const INTAKE_CONNECTORS: { connector: IntakeConnector; label: string }[] = [
   { connector: 'calendar', label: '캘린더' },
   { connector: 'sfdc', label: 'SFDC' },
   { connector: 'meetings', label: '회의' },
   { connector: 'specreq', label: 'SpecReq' },
   { connector: 'slack', label: 'Slack' },
+  // `mac.links.setupLabel` of contracts/customer-updates/ui-copy-ko-v1.json.
+  { connector: 'links', label: 'Slack 링크' },
 ];
 
 export interface IntakeSelectionEntry {
@@ -60,6 +62,87 @@ export interface IntakeSelectionEntry {
   server: string;
   host: string;
   disabled: boolean;
+  /** Links only: the chosen channels. */
+  channels?: LinkChannelChoice[];
+}
+
+// ---------------------------------------------------------------- Slack link channels
+// `intake_links_channels` / `intake_links_select` (mac-app intake_runner.rs). Channel
+// ids, names and labels stay in component state and these calls only.
+
+export interface LinkChannel { id: string; name: string }
+export interface LinkChannelChoice { id: string; label: string }
+
+export const MAX_LINK_CHANNELS = 20;
+const MAX_LINK_LABEL_CHARS = 100;
+const CHANNEL_ID_PATTERN = /^[A-Z0-9]{6,20}$/;
+
+function validChoice(value: unknown): LinkChannelChoice | null {
+  const item = record(value);
+  if (!item || typeof item.id !== 'string' || typeof item.label !== 'string') return null;
+  return CHANNEL_ID_PATTERN.test(item.id) && !labelProblem(item.label) ? { id: item.id, label: item.label } : null;
+}
+
+function labelProblem(label: string): boolean {
+  const trimmed = label.trim();
+  const length = Array.from(trimmed).length;
+  return length < 1 || length > MAX_LINK_LABEL_CHARS || trimmed.includes('=') || /[\u0000-\u001f\u007f-\u009f]/.test(trimmed);
+}
+
+/** The stored link channels of the `links` selection entry; malformed ones are dropped. */
+export function linkChannelsOf(selection: unknown): LinkChannelChoice[] {
+  const entry = (Array.isArray(selection) ? selection : []).map(record).find(item => item?.connector === 'links');
+  const channels = Array.isArray(entry?.channels) ? entry.channels as unknown[] : [];
+  return channels.flatMap(channel => {
+    const choice = validChoice(channel);
+    return choice ? [choice] : [];
+  });
+}
+
+/** What blocks saving, mirroring the CLI: too many channels, a bad or repeated id, or a bad label. */
+export function linkSelectionProblem(chosen: LinkChannelChoice[]): 'tooMany' | 'channel' | 'label' | null {
+  if (chosen.length > MAX_LINK_CHANNELS) return 'tooMany';
+  const seen = new Set<string>();
+  for (const { id } of chosen) {
+    if (!CHANNEL_ID_PATTERN.test(id) || seen.has(id)) return 'channel';
+    seen.add(id);
+  }
+  return chosen.some(({ label }) => labelProblem(label)) ? 'label' : null;
+}
+
+/** Channel rows rendered at most in the picker list. */
+export const MAX_SHOWN_LINK_CHANNELS = 100;
+
+/** The channels whose name matches `query` (case-insensitive), at most 100; `more` when others matched too. */
+export function visibleLinkChannels(channels: LinkChannel[] | null, query: string): { rows: LinkChannel[]; more: boolean } {
+  const needle = query.trim().toLowerCase();
+  const matching = (channels ?? []).filter(channel => !needle || channel.name.toLowerCase().includes(needle));
+  return { rows: matching.slice(0, MAX_SHOWN_LINK_CHANNELS), more: matching.length > MAX_SHOWN_LINK_CHANNELS };
+}
+
+/**
+ * Which text a rejected links command shows: `updateApp` (the app lacks the
+ * command), `adapterOutdated` (the adapter lacks it: use [Update]),
+ * `needSetup` (Slack is not connected), `capReached` (a save hit the source
+ * cap), `busy`, else `code` (the intake code label or a generic line).
+ */
+export type LinkFailure = 'updateApp' | 'adapterOutdated' | 'needSetup' | 'capReached' | 'busy' | 'code';
+export function linkFailure(code: string, commandNotFound: boolean, saving: boolean): LinkFailure {
+  if (commandNotFound) return 'updateApp';
+  if (code === 'ADAPTER_OUTDATED') return 'adapterOutdated';
+  if (code === 'NOT_SELECTED') return 'needSetup';
+  if (code === 'RUN_IN_PROGRESS') return 'busy';
+  if (saving && code === 'TTOBAK_CONFLICT') return 'capReached';
+  return 'code';
+}
+
+/** The channels as `{id, name}` of an `intake_links_channels` result; malformed rows are dropped. */
+export function linkChannelList(result: unknown): LinkChannel[] {
+  return (Array.isArray(result) ? result : []).flatMap(value => {
+    const item = record(value);
+    return item && typeof item.id === 'string' && typeof item.name === 'string' && CHANNEL_ID_PATTERN.test(item.id)
+      ? [{ id: item.id, name: item.name }] : [];
+  });
 }
 
 export type IntakeAction = 'run' | 'setup' | 'login';
@@ -75,7 +158,7 @@ export interface IntakeStateView {
   nodePath: string | null;
   nodeMissing: boolean;
   schedule: IntakeSchedule;
-  running: IntakeAction | 'scheduleOff' | 'options' | 'oneClickSetup' | null;
+  running: IntakeAction | 'scheduleOff' | 'options' | 'oneClickSetup' | 'links' | null;
   lastResult: IntakeFinished | null;
   status: unknown;
   selection: IntakeSelectionEntry[];
@@ -86,7 +169,7 @@ export interface IntakeStateView {
 }
 
 export interface IntakeSourceRow {
-  source: 'calendar' | 'sfdc' | 'sfdcContacts' | 'tasks';
+  source: 'calendar' | 'sfdc' | 'sfdcContacts' | 'tasks' | 'links';
   label: string;
   lastRunAt: string | null;
   lastSuccessAt: string | null;
@@ -197,6 +280,7 @@ function countsText(source: IntakeSourceRow['source'], raw: unknown): string | n
       ...nonZero('불완전', counts.incomplete), ...nonZero('다음 실행으로 미룸', counts.deferredIncomplete),
       ...nonZero('계정 불일치', counts.accountMismatch), ...nonZero('시간 초과로 미룬 계정', counts.deferred)]);
   }
+  if (source === 'links') return summary([['채널', counts.channels], ['링크', counts.links], ['업로드', counts.uploaded]]);
   return summary([['할 일', counts.tasks], ['생성', counts.created]]);
 }
 
@@ -205,6 +289,8 @@ const SOURCES: { source: IntakeSourceRow['source']; label: string }[] = [
   { source: 'sfdc', label: 'SFDC' },
   { source: 'sfdcContacts', label: 'SFDC 연락처' },
   { source: 'tasks', label: '할 일' },
+  // `mac.links.setupLabel`; status.json `links` holds counts only.
+  { source: 'links', label: 'Slack 링크' },
 ];
 
 /** One row per sync source that ran or is selected. `status` is the local
@@ -224,8 +310,9 @@ export function sourceRows(status: unknown, selection: unknown): IntakeSourceRow
       lastRunAt: timestamp(entry?.lastRunAt),
       lastSuccessAt: timestamp(entry?.lastSuccessAt),
       result,
-      // A failed contacts step still records what it did for the other Accounts (partial result).
-      counts: result === 'ok' || (source === 'sfdcContacts' && result !== null && result !== 'disabled')
+      // A failed contacts step still records what it did for the other Accounts, and a links
+      // run whose channels failed keeps its counts (partial result).
+      counts: result === 'ok' || ((source === 'sfdcContacts' || source === 'links') && result !== null && result !== 'disabled')
         ? countsText(source, entry?.counts) : null,
     }];
   });

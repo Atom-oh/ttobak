@@ -187,6 +187,7 @@ async fn run_team_sync(
         state.track(),
         TEAM_SYNC_TIMEOUT,
         intake_runner::KILL_GRACE,
+        intake_runner::MAX_STDOUT_LINE_BYTES,
         Some(cancel),
         on_line,
     )

@@ -1791,7 +1791,9 @@ and deleting it write the source row and the registry row in one transaction;
 a status change also creates the registry row of a source that predates it.
 Slack sources have no registry row. Creating and deleting a source also change
 the user's source counter in that transaction; at 30 sources a create returns
-409 `CONFLICT`. Concurrent creates and deletes are retried up to five times,
+409 `CONFLICT`. A create also returns 409 `CONFLICT` when its source ID is
+already taken; both causes share the code (IDs are server-generated UUIDs, so
+the Mac adapter reads a 409 on create as the cap). Concurrent creates and deletes are retried up to five times,
 then return 503 `SOURCES_BUSY` with nothing applied. `GET .../sources` may write: it heals a
 source created before the feed registry existed by adding its registry row.
 Status changes and deletes resolve the source with a strongly consistent keyed

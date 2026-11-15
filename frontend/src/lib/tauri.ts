@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from 'react';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
+import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, LinkChannelChoice, SetupFinished, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 import type { TeamSyncFinished, TeamSyncStateView } from './teamSync';
 
@@ -795,6 +795,16 @@ export function setIntakeOptions(options: IntakeSyncOptions): Promise<unknown> {
   return invoke<unknown>('intake_set_options', {
     calendarResponses: options.calendarResponses, sfdcContacts: options.sfdcContacts,
   });
+}
+
+/** The user's Slack channels (`intake links channels`); rejects with a string code. */
+export function listLinkChannels(): Promise<unknown> {
+  return invoke<unknown>('intake_links_channels');
+}
+
+/** Stores the chosen channels (none clears them) and resolves to the stored `{id, label}` list. */
+export function selectLinkChannels(channels: LinkChannelChoice[]): Promise<unknown> {
+  return invoke<unknown>('intake_links_select', { channels });
 }
 
 export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {

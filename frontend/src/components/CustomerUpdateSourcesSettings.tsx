@@ -12,6 +12,7 @@ import {
   type UpdateSource,
   type UpdateSourceKind,
 } from '@/lib/customerUpdates';
+import { SlackLinkSourcesSettings } from './SlackLinkSourcesSettings';
 
 type AddableKind = Exclude<UpdateSourceKind, 'slack'>;
 const ADDABLE_KINDS: AddableKind[] = ['rss', 'site', 'youtube'];
@@ -151,8 +152,10 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
                     <p className="text-xs text-slate-400 dark:text-text-muted mt-1">{COPY['settings.sources.slackHint']}</p>
                   )}
                 </div>
-                {!isSlack && (
-                  <div className="flex shrink-0 items-center gap-1">
+                {/* A Slack source cannot be paused here, but it can be deleted (for example one
+                    left by another Mac); the Mac registers a still-selected channel again on save. */}
+                <div className="flex shrink-0 items-center gap-1">
+                  {!isSlack && (
                     <button
                       type="button"
                       onClick={() => handleToggle(source)}
@@ -161,16 +164,16 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
                     >
                       {active ? COPY['settings.sources.pause'] : COPY['settings.sources.resume']}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(source)}
-                      disabled={busy}
-                      className="px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40"
-                    >
-                      {COPY['settings.sources.delete']}
-                    </button>
-                  </div>
-                )}
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(source)}
+                    disabled={busy}
+                    className="px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    {COPY['settings.sources.delete']}
+                  </button>
+                </div>
               </li>
             );
           })}
@@ -228,6 +231,8 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
           {adding ? COPY['settings.sources.adding'] : COPY['settings.sources.add']}
         </button>
       </form>
+
+      <SlackLinkSourcesSettings onSaved={load} />
     </div>
   );
 }

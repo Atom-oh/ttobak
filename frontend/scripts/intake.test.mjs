@@ -255,3 +255,67 @@ test('a login-required setup step offers the TTOBAK login', () => {
   assert.equal(intake.setupNeedsLogin([{ id: 'intake', status: 'skipped', code: 'TTOBAK_LOGIN_REQUIRED' }]), true);
   assert.equal(intake.setupNeedsLogin([{ id: 'packages', status: 'ok' }]), false);
 });
+
+test('links is an intake connector labelled from the contract', () => {
+  const links = intake.INTAKE_CONNECTORS.find(item => item.connector === 'links');
+  assert.deepEqual(plain(links), { connector: 'links', label: 'Slack 링크' });
+});
+
+test('linkChannelsOf reads the links entry and drops malformed channels', () => {
+  const selection = [
+    { connector: 'slack', server: 'slack-mcp', host: 'claude', disabled: false },
+    { connector: 'links', server: 'slack-mcp', host: 'claude', disabled: false,
+      channels: [{ id: 'C0123ABCD', label: 'aws-korea' }, { id: 'bad', label: 'x' }, { id: 'C0123ABCE' }, null] },
+  ];
+  assert.deepEqual(plain(intake.linkChannelsOf(selection)), [{ id: 'C0123ABCD', label: 'aws-korea' }]);
+  assert.deepEqual(plain(intake.linkChannelsOf([{ connector: 'links', server: 's', host: 'h', disabled: false }])), []);
+  assert.deepEqual(plain(intake.linkChannelsOf(undefined)), []);
+});
+
+test('linkSelectionProblem mirrors the CLI validation', () => {
+  const ok = n => Array.from({ length: n }, (_, i) => ({ id: `C${String(i).padStart(8, '0')}`, label: `채널 ${i}` }));
+  assert.equal(intake.linkSelectionProblem(ok(20)), null);
+  assert.equal(intake.linkSelectionProblem([]), null);
+  assert.equal(intake.linkSelectionProblem(ok(21)), 'tooMany');
+  assert.equal(intake.linkSelectionProblem([{ id: 'C0123ABCD', label: '   ' }]), 'label');
+  assert.equal(intake.linkSelectionProblem([{ id: 'C0123ABCD', label: 'a=b' }]), 'label');
+  assert.equal(intake.linkSelectionProblem([{ id: 'C0123ABCD', label: 'a\nb' }]), 'label');
+  assert.equal(intake.linkSelectionProblem([{ id: 'C0123ABCD', label: 'x'.repeat(101) }]), 'label');
+  assert.equal(intake.linkSelectionProblem([{ id: 'C0123ABCD', label: 'x'.repeat(100) }]), null);
+  assert.equal(intake.linkSelectionProblem([{ id: 'C0123ABCD', label: 'a' }, { id: 'C0123ABCD', label: 'b' }]), 'channel');
+  assert.equal(intake.linkSelectionProblem([{ id: 'bad', label: 'a' }]), 'channel');
+});
+
+test('the links status row shows counts only, also for a partial run', () => {
+  const status = { links: { lastRunAt: '2026-11-10T00:00:00Z', lastSuccessAt: '2026-11-09T00:00:00Z', result: 'ok', dryRun: false,
+    scope: 'a'.repeat(32), counts: { channels: 2, links: 7, uploaded: 5 } } };
+  assert.deepEqual(plain(intake.sourceRows(status, [])), [{ source: 'links', label: 'Slack 링크',
+    lastRunAt: '2026-11-10T00:00:00Z', lastSuccessAt: '2026-11-09T00:00:00Z', result: 'ok', counts: '채널 2 · 링크 7 · 업로드 5' }]);
+  const partial = plain(intake.sourceRows({ links: { result: 'PARTIAL_FAILURE', counts: { channels: 2, links: 1, uploaded: 1 } } }, []));
+  assert.equal(partial[0].counts, '채널 2 · 링크 1 · 업로드 1');
+  const failed = plain(intake.sourceRows({ links: { result: 'TTOBAK_LOGIN_REQUIRED' } }, []));
+  assert.deepEqual([failed[0].result, failed[0].counts], ['TTOBAK_LOGIN_REQUIRED', null]);
+  const selected = plain(intake.sourceRows({}, [{ connector: 'links', server: 's', host: 'h', disabled: false, channels: [] }]));
+  assert.deepEqual(selected.map(row => [row.source, row.result]), [['links', null]]);
+});
+
+test('picker failures map to their own copy', () => {
+  assert.equal(intake.linkFailure('anything', true, false), 'updateApp');
+  assert.equal(intake.linkFailure('ADAPTER_OUTDATED', false, false), 'adapterOutdated');
+  assert.equal(intake.linkFailure('NOT_SELECTED', false, false), 'needSetup');
+  assert.equal(intake.linkFailure('RUN_IN_PROGRESS', false, true), 'busy');
+  assert.equal(intake.linkFailure('TTOBAK_CONFLICT', false, true), 'capReached');
+  assert.equal(intake.linkFailure('TTOBAK_CONFLICT', false, false), 'code');
+  assert.equal(intake.linkFailure('TIMEOUT', false, true), 'code');
+});
+
+test('the picker renders at most 100 matching channels', () => {
+  const channels = Array.from({ length: 150 }, (_, i) => ({ id: `C${String(i).padStart(8, '0')}`, name: i < 120 ? `aws-${i}` : `team-${i}` }));
+  const all = intake.visibleLinkChannels(channels, '');
+  assert.equal(all.rows.length, 100);
+  assert.equal(all.more, true);
+  const narrowed = intake.visibleLinkChannels(channels, ' TEAM ');
+  assert.equal(narrowed.rows.length, 30);
+  assert.equal(narrowed.more, false);
+  assert.deepEqual(plain(intake.visibleLinkChannels(null, 'x')), { rows: [], more: false });
+});

@@ -43,6 +43,8 @@ const COMMANDS: &[&str] = &[
     "setup_start",
     "setup_get_state",
     "intake_set_options",
+    "intake_links_channels",
+    "intake_links_select",
     "report_generate",
     "report_cancel",
     "report_get_state",

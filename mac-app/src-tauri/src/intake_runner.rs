@@ -23,7 +23,9 @@ use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{oneshot, Notify};
 
-use crate::intake_plan::{self, CalendarResponse, Connector, IntakeAction, Schedule, SlotState};
+use crate::intake_plan::{
+    self, CalendarResponse, ChannelChoice, Connector, IntakeAction, Schedule, SlotState,
+};
 use crate::report_runner::ReportSettings;
 
 /// The only adapter source: the app's own origin, exact path, no redirects.
@@ -42,8 +44,19 @@ const MAX_PROGRESS_CHARS: usize = 300;
 const MAX_PROGRESS_LINES: usize = 200;
 /// Raw stderr bytes read per line before the rest of the line is dropped.
 const MAX_STDERR_LINE_BYTES: usize = 4096;
-/// Largest final stdout line kept.
-const MAX_STDOUT_LINE_BYTES: usize = 256 * 1024;
+/// Largest final stdout line kept for every CLI action but the channel list.
+pub(crate) const MAX_STDOUT_LINE_BYTES: usize = 256 * 1024;
+/// `intake links channels` lists up to 5,000 channels with names of up to
+/// 200 characters on one line, so only that action gets this larger cap.
+const MAX_CHANNELS_STDOUT_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+/// The final stdout line cap of one intake action.
+fn stdout_cap(action: &IntakeAction) -> usize {
+    match action {
+        IntakeAction::LinksChannels => MAX_CHANNELS_STDOUT_LINE_BYTES,
+        _ => MAX_STDOUT_LINE_BYTES,
+    }
+}
 
 const MAX_STATUS_BYTES: u64 = 256 * 1024;
 const MAX_SELECTION_BYTES: u64 = 256 * 1024;
@@ -146,34 +159,36 @@ impl LineSplitter {
     }
 }
 
-/// Keeps only the last non-blank stdout line.
-#[derive(Default)]
+/// Keeps only the last non-blank stdout line, each line capped at `cap` bytes.
 struct LastLine {
     last: Vec<u8>,
-    splitter: Option<LineSplitter>,
+    splitter: LineSplitter,
 }
 
 impl LastLine {
+    fn new(cap: usize) -> Self {
+        Self {
+            last: Vec::new(),
+            splitter: LineSplitter::new(cap),
+        }
+    }
+
     fn feed(&mut self, bytes: &[u8]) {
         let Self { last, splitter } = self;
-        splitter
-            .get_or_insert_with(|| LineSplitter::new(MAX_STDOUT_LINE_BYTES))
-            .feed(bytes, &mut |l| {
-                if !l.trim_ascii().is_empty() {
-                    *last = l.to_vec();
-                }
-            });
+        splitter.feed(bytes, &mut |l| {
+            if !l.trim_ascii().is_empty() {
+                *last = l.to_vec();
+            }
+        });
     }
 
     fn finish(&mut self) -> &[u8] {
         let Self { last, splitter } = self;
-        if let Some(s) = splitter {
-            s.finish(&mut |l| {
-                if !l.trim_ascii().is_empty() {
-                    *last = l.to_vec();
-                }
-            });
-        }
+        splitter.finish(&mut |l| {
+            if !l.trim_ascii().is_empty() {
+                *last = l.to_vec();
+            }
+        });
         &self.last
     }
 }
@@ -254,11 +269,34 @@ pub struct SelectionEntry {
     server: String,
     host: String,
     disabled: bool,
+    /// Links only: the chosen channels as `{id, label}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channels: Option<Vec<ChannelChoice>>,
+}
+
+/// The stored link channels as `{id, label}`: valid entries only, no source
+/// IDs or pending cleanup, at most `MAX_LINK_CHANNELS`.
+fn link_channels(links: &Value) -> Vec<ChannelChoice> {
+    links
+        .get("channels")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let choice = ChannelChoice {
+                id: c.get("id")?.as_str()?.to_string(),
+                label: c.get("label")?.as_str()?.to_string(),
+            };
+            choice.validate().is_ok().then_some(choice)
+        })
+        .take(intake_plan::MAX_LINK_CHANNELS)
+        .collect()
 }
 
 /// Selection entries from `selection.json`, dropping everything but the
 /// connector, server, host and disabled flag (no pathDirs, env, commands or
-/// the `ttobak` block).
+/// the `ttobak` block). Links reuse the `slack` entry's server and host and
+/// add their channels; they are disabled with either entry.
 fn selection_view(selection: &Value) -> Vec<SelectionEntry> {
     let name = |e: &Value, k: &str| {
         e.get(k)
@@ -266,18 +304,76 @@ fn selection_view(selection: &Value) -> Vec<SelectionEntry> {
             .filter(|s| !s.is_empty() && s.len() <= MAX_NAME_BYTES)
             .map(str::to_string)
     };
+    let disabled = |e: &Value| e.get("disabled").and_then(Value::as_bool).unwrap_or(false);
     Connector::ALL
         .iter()
         .filter_map(|&connector| {
-            let e = selection.get(connector.as_str())?;
+            let (e, links) = match connector {
+                Connector::Links => (
+                    selection.get("slack")?,
+                    Some(selection.get("links").filter(|l| l.is_object())?),
+                ),
+                _ => (selection.get(connector.as_str())?, None),
+            };
             Some(SelectionEntry {
                 connector,
                 server: name(e, "server")?,
                 host: name(e, "host")?,
-                disabled: e.get("disabled").and_then(Value::as_bool).unwrap_or(false),
+                disabled: disabled(e) || links.is_some_and(disabled),
+                channels: links.map(link_channels),
             })
         })
         .collect()
+}
+
+/// One Slack channel the user can choose (`intake links channels`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelView {
+    id: String,
+    name: String,
+}
+
+/// The CLI's `{ok: true, channels: [...]}`; `EXIT_FAILED` otherwise.
+fn ok_channels(result: &Value) -> Result<&Vec<Value>, String> {
+    result
+        .get("channels")
+        .and_then(Value::as_array)
+        .filter(|_| result.get("ok").and_then(Value::as_bool) == Some(true))
+        .ok_or_else(|| "EXIT_FAILED".to_string())
+}
+
+/// Listed channels with a valid ID and a name (at most 200 characters, as
+/// the CLI caps them); nothing else of the CLI's output.
+fn channel_views(result: &Value) -> Result<Vec<ChannelView>, String> {
+    Ok(ok_channels(result)?
+        .iter()
+        .filter_map(|c| {
+            let id = c
+                .get("id")?
+                .as_str()
+                .filter(|i| intake_plan::is_channel_id(i))?;
+            let name = c.get("name")?.as_str()?;
+            Some(ChannelView {
+                id: id.to_string(),
+                name: name.chars().take(200).collect(),
+            })
+        })
+        .collect())
+}
+
+/// The stored selection the CLI reports, as `{id, label}`. `relabelFailed` (a count)
+/// is dropped: it is neither logged nor stored.
+fn chosen_channels(result: &Value) -> Result<Vec<ChannelChoice>, String> {
+    Ok(ok_channels(result)?
+        .iter()
+        .filter_map(|c| {
+            let choice = ChannelChoice {
+                id: c.get("id")?.as_str()?.to_string(),
+                label: c.get("label")?.as_str()?.to_string(),
+            };
+            choice.validate().is_ok().then_some(choice)
+        })
+        .collect())
 }
 
 /// The sync options stored in `selection.json`, as names only.
@@ -600,6 +696,9 @@ pub enum RunKind {
     Options,
     /// `setup_start`: the adapter's `setup apply`, then `intake setup`.
     OneClickSetup,
+    /// `intake_links_channels` / `intake_links_select`: tracked and
+    /// exclusive, but not a run.
+    Links,
 }
 
 /// What a finished run is recorded against.
@@ -714,7 +813,10 @@ impl IntakeState {
         let (tx, rx) = oneshot::channel();
         *self.cancel.lock() = Some(tx);
         self.run_gen.fetch_add(1, Ordering::SeqCst);
-        if !matches!(kind, RunKind::ScheduleOff | RunKind::Options) {
+        if !matches!(
+            kind,
+            RunKind::ScheduleOff | RunKind::Options | RunKind::Links
+        ) {
             self.progress.lock().lines.clear();
         }
         Ok(rx)
@@ -1049,12 +1151,13 @@ pub(crate) fn node_command(launch: &NodeLaunch, args: Vec<OsString>) -> tokio::p
 /// app-exit cleanup) and waits for it, the timeout or a cancel. A forced end
 /// SIGTERMs the group, SIGKILLs it after `kill_grace`, and always SIGKILLs
 /// the group once more. Each capped stderr line goes to `on_line`; the last
-/// stdout line is parsed as the result.
+/// stdout line (at most `stdout_cap` bytes) is parsed as the result.
 pub(crate) async fn run_child(
     mut cmd: tokio::process::Command,
     track: ProcTrack<'_>,
     timeout: Duration,
     kill_grace: Duration,
+    stdout_cap: usize,
     cancel: Option<oneshot::Receiver<()>>,
     mut on_line: impl FnMut(String) + Send + 'static,
 ) -> Outcome {
@@ -1080,7 +1183,7 @@ pub(crate) async fn run_child(
 
     let stdout = child.stdout.take();
     let mut out_task = tokio::spawn(async move {
-        let mut last = LastLine::default();
+        let mut last = LastLine::new(stdout_cap);
         if let Some(mut s) = stdout {
             let mut buf = vec![0u8; 8192];
             while let Ok(n) = s.read(&mut buf).await {
@@ -1205,7 +1308,16 @@ pub(crate) async fn execute(
         pgid: &state.pgid,
         shutting_down: &state.shutting_down,
     };
-    run_child(cmd, track, timeout, KILL_GRACE, cancel, on_line).await
+    run_child(
+        cmd,
+        track,
+        timeout,
+        KILL_GRACE,
+        stdout_cap(action),
+        cancel,
+        on_line,
+    )
+    .await
 }
 
 /// Starts a tracked run in the background; finishes with `intake://finished`.
@@ -1580,6 +1692,57 @@ pub async fn intake_set_options(
     }
 }
 
+/// Bytes of the installed adapter's usage text for the links commands.
+const LINKS_MARKER: &[u8] = b"intake links select";
+/// `intake links channels` starts the Slack MCP server; `select` also signs
+/// in and registers up to 20 sources.
+const LINKS_TIMEOUT: Duration = Duration::from_secs(3 * 60);
+
+fn supports_links(adapter: &[u8]) -> bool {
+    adapter
+        .windows(LINKS_MARKER.len())
+        .any(|w| w == LINKS_MARKER)
+}
+
+/// Runs a links action in the exclusive run slot (`RUN_IN_PROGRESS` while a
+/// run holds it) and returns the CLI's JSON result or its code. Progress
+/// lines are dropped and nothing is logged or kept: channel IDs, names and
+/// labels travel only from the CLI's stdout to the WebView.
+async fn run_links(app: &AppHandle, action: &IntakeAction) -> Result<Value, String> {
+    let state = app.state::<IntakeState>();
+    state.available()?;
+    let home = home_dir().ok_or("HOME_MISSING")?;
+    if !local_adapter(&home).is_some_and(|b| supports_links(&b)) {
+        return Err("ADAPTER_OUTDATED".into());
+    }
+    let cancel = state.try_begin(RunKind::Links)?;
+    let outcome = execute(app, action, LINKS_TIMEOUT, Some(cancel), false).await;
+    state.finish_run();
+    match outcome.code {
+        None => outcome.result.ok_or_else(|| "EXIT_FAILED".to_string()),
+        Some(code) => Err(code),
+    }
+}
+
+/// The user's Slack channels through their own Slack MCP server
+/// (`intake links channels`), as `{id, name}`.
+#[tauri::command]
+pub async fn intake_links_channels(app: AppHandle) -> Result<Vec<ChannelView>, String> {
+    channel_views(&run_links(&app, &IntakeAction::LinksChannels).await?)
+}
+
+/// Stores the chosen channels (`intake links select`; none clears them) and
+/// returns the stored selection. Checked before any spawn: at most 20
+/// channels, no repeated ID, valid IDs and labels (`INVALID_ARGUMENT`).
+#[tauri::command]
+pub async fn intake_links_select(
+    app: AppHandle,
+    channels: Vec<ChannelChoice>,
+) -> Result<Vec<ChannelChoice>, String> {
+    let channels = intake_plan::validate_channels(&channels).map_err(str::to_string)?;
+    chosen_channels(&run_links(&app, &IntakeAction::LinksSelect { channels }).await?)
+}
+
 #[tauri::command]
 pub async fn intake_run_now(app: AppHandle) -> Result<(), String> {
     let settings = app.state::<IntakeState>().snapshot();
@@ -1775,22 +1938,50 @@ mod tests {
 
     #[test]
     fn stdout_json_is_last_line() {
-        let mut lines = LastLine::default();
+        let mut lines = LastLine::new(MAX_STDOUT_LINE_BYTES);
         lines.feed(b"noise\n{\"ok\":false,\"code\":\"X\"}\n");
         lines.feed(b"{\"ok\":true,");
         lines.feed(b"\"email\":\"a@b\"}\n\n  \n");
         let v = final_json(lines.finish()).expect("json");
         assert_eq!(v, json!({"ok": true, "email": "a@b"}));
 
-        let mut no_newline = LastLine::default();
+        let mut no_newline = LastLine::new(MAX_STDOUT_LINE_BYTES);
         no_newline.feed(b"{\"ok\":true}");
         assert_eq!(final_json(no_newline.finish()), Some(json!({"ok": true})));
 
-        let mut trailing_noise = LastLine::default();
+        let mut trailing_noise = LastLine::new(MAX_STDOUT_LINE_BYTES);
         trailing_noise.feed(b"{\"ok\":true}\nnot json\n");
         assert_eq!(final_json(trailing_noise.finish()), None);
         assert_eq!(final_json(b"[1,2]"), None, "only an object counts");
         assert_eq!(final_json(b""), None);
+    }
+
+    #[test]
+    fn stdout_cap_is_large_only_for_the_channel_list() {
+        assert_eq!(MAX_STDOUT_LINE_BYTES, 256 * 1024);
+        assert_eq!(stdout_cap(&IntakeAction::LinksChannels), 8 * 1024 * 1024);
+        for action in [
+            IntakeAction::Run,
+            IntakeAction::Login,
+            IntakeAction::Status,
+            IntakeAction::ScheduleOff,
+            IntakeAction::LinksSelect { channels: vec![] },
+        ] {
+            assert_eq!(stdout_cap(&action), MAX_STDOUT_LINE_BYTES);
+        }
+    }
+
+    #[test]
+    fn last_line_keeps_at_most_its_cap() {
+        let line = format!("{{\"ok\":true,\"pad\":\"{}\"}}\n", "x".repeat(300 * 1024));
+        let mut small = LastLine::new(MAX_STDOUT_LINE_BYTES);
+        small.feed(line.as_bytes());
+        let kept = small.finish().to_vec();
+        assert_eq!(kept.len(), MAX_STDOUT_LINE_BYTES);
+        assert_eq!(final_json(&kept), None, "a cut line is not a result");
+        let mut large = LastLine::new(stdout_cap(&IntakeAction::LinksChannels));
+        large.feed(line.as_bytes());
+        assert!(final_json(large.finish()).is_some());
     }
 
     #[test]
@@ -1824,12 +2015,14 @@ mod tests {
                     server: "aws-outlook-mcp".into(),
                     host: "claude".into(),
                     disabled: true,
+                    channels: None,
                 },
                 SelectionEntry {
                     connector: Connector::Sfdc,
                     server: "aws-sentral-mcp".into(),
                     host: "kiro".into(),
                     disabled: false,
+                    channels: None,
                 },
             ]
         );
@@ -1840,6 +2033,148 @@ mod tests {
             assert!(!text.contains(leaked), "{leaked} leaked");
         }
         assert!(selection_view(&json!(null)).is_empty());
+    }
+
+    fn choice(id: &str, label: &str) -> ChannelChoice {
+        ChannelChoice {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+
+    #[test]
+    fn selection_view_lists_link_channels_as_id_and_label() {
+        let selection = json!({
+            "version": 1,
+            "slack": {"host": "claude", "server": "slack-mcp", "pathDirs": ["/secret/bin"],
+                "selectedAt": "t"},
+            "links": {
+                "channels": [
+                    {"id": "C0123456", "label": "whats-new", "sourceId": "src-1"},
+                    {"id": "bad", "label": "x", "sourceId": "src-2"},
+                    {"id": "G98765AB", "label": "요약", "sourceId": "src-3"},
+                    {"id": "C7654321", "label": "a=b", "sourceId": "src-4"}
+                ],
+                "pendingCleanup": [{"id": "C1111111", "sourceId": "src-5"}],
+                "disabled": true
+            }
+        });
+        let view = selection_view(&selection);
+        assert_eq!(
+            view,
+            vec![
+                SelectionEntry {
+                    connector: Connector::Slack,
+                    server: "slack-mcp".into(),
+                    host: "claude".into(),
+                    disabled: false,
+                    channels: None,
+                },
+                SelectionEntry {
+                    connector: Connector::Links,
+                    server: "slack-mcp".into(),
+                    host: "claude".into(),
+                    disabled: true,
+                    channels: Some(vec![
+                        choice("C0123456", "whats-new"),
+                        choice("G98765AB", "요약")
+                    ]),
+                },
+            ]
+        );
+        let text = serde_json::to_string(&view).expect("json");
+        for leaked in ["sourceId", "src-", "pendingCleanup", "C1111111", "pathDirs"] {
+            assert!(!text.contains(leaked), "{leaked} leaked");
+        }
+        // Only the links entry carries `channels`.
+        assert_eq!(text.matches("\"channels\"").count(), 1);
+
+        // A disabled Slack server disables links; no `links` entry, no row.
+        let off = json!({
+            "slack": {"host": "claude", "server": "slack-mcp", "disabled": true},
+            "links": {"channels": []}
+        });
+        let links = selection_view(&off)
+            .into_iter()
+            .find(|e| e.connector == Connector::Links)
+            .expect("links");
+        assert!(links.disabled);
+        assert_eq!(links.channels, Some(vec![]));
+        let none = json!({"slack": {"host": "claude", "server": "slack-mcp"}});
+        assert!(selection_view(&none)
+            .iter()
+            .all(|e| e.connector != Connector::Links));
+    }
+
+    #[test]
+    fn link_channel_results_keep_only_ids_names_and_labels() {
+        let listed = json!({"ok": true, "channels": [
+            {"id": "C0123456", "name": "aws-whats-new", "extra": "x"},
+            {"id": "lower1234", "name": "bad"},
+            {"id": "C7654321"},
+            "junk"
+        ]});
+        assert_eq!(
+            channel_views(&listed),
+            Ok(vec![ChannelView {
+                id: "C0123456".into(),
+                name: "aws-whats-new".into()
+            }])
+        );
+        assert_eq!(
+            serde_json::to_string(&channel_views(&listed).unwrap()).unwrap(),
+            r#"[{"id":"C0123456","name":"aws-whats-new"}]"#
+        );
+        assert_eq!(
+            channel_views(&json!({"ok": true})),
+            Err("EXIT_FAILED".to_string())
+        );
+
+        let selected = json!({"ok": true, "channels": [
+            {"id": "C0123456", "label": "whats-new"},
+            {"id": "G98765AB", "label": "요약"}
+        ], "relabelFailed": 1});
+        let chosen = chosen_channels(&selected).expect("chosen");
+        assert_eq!(
+            chosen,
+            vec![choice("C0123456", "whats-new"), choice("G98765AB", "요약")]
+        );
+        assert!(!serde_json::to_string(&chosen)
+            .unwrap()
+            .contains("relabelFailed"));
+        assert_eq!(
+            chosen_channels(&json!({"ok": true, "channels": []})),
+            Ok(vec![])
+        );
+        assert_eq!(
+            chosen_channels(&json!({"ok": false, "channels": []})),
+            Err("EXIT_FAILED".to_string())
+        );
+    }
+
+    #[test]
+    fn links_commands_share_the_run_slot_and_keep_progress() {
+        let state = IntakeState::new(Some(PathBuf::from("/nonexistent/intake.json")));
+        let _rx = state.try_begin(RunKind::Run).expect("run");
+        state.progress.lock().push("line".into());
+        assert_eq!(
+            state.try_begin(RunKind::Links).err().as_deref(),
+            Some("RUN_IN_PROGRESS")
+        );
+        state.end();
+        let _rx = state.try_begin(RunKind::Links).expect("links");
+        assert_eq!(state.progress.lock().to_vec(), ["line"]);
+        assert_eq!(
+            state.try_begin(RunKind::Run).err().as_deref(),
+            Some("RUN_IN_PROGRESS")
+        );
+        assert_eq!(serde_json::to_string(&RunKind::Links).unwrap(), "\"links\"");
+    }
+
+    #[test]
+    fn links_need_an_adapter_with_the_links_commands() {
+        assert!(supports_links(b"usage: intake links select [--channel"));
+        assert!(!supports_links(b"usage: intake setup"));
     }
 
     #[test]
