@@ -118,35 +118,6 @@ func ttlOrDefault(expiresAt int64, now time.Time, ttl time.Duration) int64 {
 	return now.Add(ttl).Unix()
 }
 
-// PutSourceIfAbsent creates a source; an existing sourceId returns ErrConditionFailed.
-func (r *CustomerUpdateRepository) PutSourceIfAbsent(ctx context.Context, userID string, s *model.UpdateSource) error {
-	av, err := attributevalue.MarshalMap(updateSourceRow{
-		customerUpdateKeys: customerUpdateKeys{
-			PK: model.PrefixUser + userID, SK: model.UpdateSourceSK(s.SourceID), EntityType: "UPDATE_SOURCE",
-		},
-		UpdateSource: *s,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal update source: %w", err)
-	}
-	cond, err := absentCondition()
-	if err != nil {
-		return fmt.Errorf("build create-source condition: %w", err)
-	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName), Item: av,
-		ConditionExpression:      cond.Condition(),
-		ExpressionAttributeNames: cond.Names(),
-	})
-	if err != nil {
-		if isConditionFailed(err) {
-			return fmt.Errorf("%w: update source already exists", ErrConditionFailed)
-		}
-		return fmt.Errorf("failed to create update source: %w", err)
-	}
-	return nil
-}
-
 // ListSources returns at most limit sources in key order.
 func (r *CustomerUpdateRepository) ListSources(ctx context.Context, userID string, limit int) ([]model.UpdateSource, error) {
 	if limit < 1 {
@@ -244,7 +215,8 @@ func (r *CustomerUpdateRepository) UpdateSource(ctx context.Context, userID, sou
 	return nil
 }
 
-// DeleteSource removes a source row.
+// DeleteSource removes a source row without counting it; RemoveSource is the
+// counted path.
 func (r *CustomerUpdateRepository) DeleteSource(ctx context.Context, userID, sourceID string) error {
 	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName), Key: updateUserKey(userID, model.UpdateSourceSK(sourceID)),

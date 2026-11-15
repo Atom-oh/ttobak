@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,17 +54,129 @@ type mockUpdateRepo struct {
 	healErr      error
 	stateReads   int
 	listHidesAll bool // ListSources returns nothing (eventual consistency)
+
+	// The source counter row: nil is absent (a legacy user).
+	count      *int
+	countReads int
+	seeds      []int // SeedSourceCount values that were written
+	// seedRace makes SeedSourceCount lose to a concurrent seed of this value.
+	seedRace *int
+	// staleCount, when set, is what GetSourceCount reports while the real
+	// counter enforces the cap (a concurrent add landed after the read).
+	staleCount *int
+	dupOnce    bool // the next CreateSource finds its source id taken
+	removeErr  error
+	uncounted  int // DeleteSource/DeleteSourceWithFeedSub fallback calls
+	// conflicts / seedConflicts: the next N CreateSource or RemoveSource
+	// (SeedSourceCount) calls collide with a concurrent transaction and apply
+	// nothing; a negative value collides forever.
+	conflicts     int
+	seedConflicts int
+	txCalls       int // CreateSource and RemoveSource calls
+}
+
+func sourceConflict() error {
+	return fmt.Errorf("%w: cancelled", repository.ErrUpdateSourceConflict)
+}
+
+func takeConflict(n *int) bool {
+	if *n == 0 {
+		return false
+	}
+	if *n > 0 {
+		*n--
+	}
+	return true
 }
 
 func newMockUpdateRepo() *mockUpdateRepo {
 	return &mockUpdateRepo{items: map[string]bool{}, drafts: map[string]*model.UpdateDraft{}, opt: map[string]bool{}}
 }
 
-func (m *mockUpdateRepo) PutSourceIfAbsent(_ context.Context, _ string, s *model.UpdateSource) error {
+func (m *mockUpdateRepo) GetSourceCount(context.Context, string) (int, bool, error) {
+	m.countReads++
+	if m.staleCount != nil {
+		return *m.staleCount, true, nil
+	}
+	if m.count == nil {
+		return 0, false, nil
+	}
+	return *m.count, true, nil
+}
+func (m *mockUpdateRepo) CountSources(context.Context, string) (int, error) {
+	return len(m.sources), nil
+}
+func (m *mockUpdateRepo) SeedSourceCount(_ context.Context, _ string, n int) error {
+	if takeConflict(&m.seedConflicts) {
+		return sourceConflict()
+	}
+	if m.seedRace != nil {
+		m.count = intp(*m.seedRace)
+		m.seedRace = nil
+	}
+	if m.count != nil {
+		return fmt.Errorf("%w: seeded", repository.ErrConditionFailed)
+	}
+	m.seeds = append(m.seeds, n)
+	m.count = intp(n)
+	return nil
+}
+
+// CreateSource mirrors the repository transaction: the source id must be new
+// and the counter must exist below max; either failure writes nothing.
+func (m *mockUpdateRepo) CreateSource(_ context.Context, _ string, s *model.UpdateSource, sub *model.UpdateFeedSub, max int) error {
+	m.txCalls++
+	if takeConflict(&m.conflicts) {
+		return sourceConflict()
+	}
 	if m.putSourceErr != nil {
 		return m.putSourceErr
 	}
+	if m.dupOnce {
+		m.dupOnce = false
+		return fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrUpdateSourceExists)
+	}
+	if m.count == nil || *m.count >= max {
+		return fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrUpdateSourceCapReached)
+	}
+	*m.count++
 	m.sources = append(m.sources, *s)
+	if sub != nil {
+		m.subPuts = append(m.subPuts, *sub)
+	}
+	return nil
+}
+
+// RemoveSource mirrors the repository transaction: the source must exist and
+// the counter must be positive. Removals with a registry row are recorded in
+// deletedFeeds, others in plainDeletes.
+func (m *mockUpdateRepo) RemoveSource(_ context.Context, _, sourceID, feedHash string) error {
+	m.txCalls++
+	if takeConflict(&m.conflicts) {
+		return sourceConflict()
+	}
+	if m.removeErr != nil {
+		return m.removeErr
+	}
+	idx := -1
+	for i := range m.sources {
+		if m.sources[i].SourceID == sourceID {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrUpdateSourceMissing)
+	}
+	if m.count == nil || *m.count <= 0 {
+		return fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrUpdateSourceCountFloor)
+	}
+	*m.count--
+	m.sources = append(m.sources[:idx], m.sources[idx+1:]...)
+	if feedHash != "" {
+		m.deletedFeeds = append(m.deletedFeeds, feedHash)
+	} else {
+		m.plainDeletes++
+	}
 	return nil
 }
 func (m *mockUpdateRepo) ListSources(_ context.Context, _ string, _ int) ([]model.UpdateSource, error) {
@@ -89,15 +203,7 @@ func (m *mockUpdateRepo) UpdateSource(_ context.Context, _, _ string, label *str
 	return m.updateSrcErr
 }
 func (m *mockUpdateRepo) DeleteSource(context.Context, string, string) error {
-	m.plainDeletes++
-	return nil
-}
-func (m *mockUpdateRepo) PutSourceWithFeedSub(_ context.Context, _ string, s *model.UpdateSource, sub *model.UpdateFeedSub) error {
-	if m.putSourceErr != nil {
-		return m.putSourceErr
-	}
-	m.sources = append(m.sources, *s)
-	m.subPuts = append(m.subPuts, *sub)
+	m.uncounted++
 	return nil
 }
 func (m *mockUpdateRepo) SetSourceStatusWithFeedSub(_ context.Context, _, _ string, sub *model.UpdateFeedSub, label *string) error {
@@ -108,8 +214,8 @@ func (m *mockUpdateRepo) SetSourceStatusWithFeedSub(_ context.Context, _, _ stri
 	m.statusLabels = append(m.statusLabels, label)
 	return nil
 }
-func (m *mockUpdateRepo) DeleteSourceWithFeedSub(_ context.Context, _, _, feedHash string) error {
-	m.deletedFeeds = append(m.deletedFeeds, feedHash)
+func (m *mockUpdateRepo) DeleteSourceWithFeedSub(context.Context, string, string, string) error {
+	m.uncounted++
 	return nil
 }
 func (m *mockUpdateRepo) HealSourceFeedSub(_ context.Context, _, _ string, sub *model.UpdateFeedSub) error {
@@ -221,7 +327,9 @@ func (m *mockMembers) RequireDirectMember(_ context.Context, _, accountID string
 var updateTestNow = time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
 
 func newUpdateSvc(repo *mockUpdateRepo, members *mockMembers) *CustomerUpdateService {
-	return NewCustomerUpdateService(repo, members, func() time.Time { return updateTestNow })
+	svc := NewCustomerUpdateService(repo, members, func() time.Time { return updateTestNow })
+	svc.sleep = func(context.Context, time.Duration) error { return nil }
+	return svc
 }
 
 func TestCustomerUpdateAddSource(t *testing.T) {
@@ -1032,8 +1140,9 @@ func TestCustomerUpdateDeleteSourceRemovesRegistryRow(t *testing.T) {
 	if err := svc.DeleteSource(context.Background(), "u1", "absent"); err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.deletedFeeds) != 1 || repo.plainDeletes != 2 {
-		t.Fatalf("deleted=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
+	// The absent source writes nothing.
+	if len(repo.deletedFeeds) != 1 || repo.plainDeletes != 1 || repo.uncounted != 0 {
+		t.Fatalf("deleted=%v plain=%d uncounted=%d", repo.deletedFeeds, repo.plainDeletes, repo.uncounted)
 	}
 }
 
@@ -1149,12 +1258,234 @@ func TestCustomerUpdateSourceWritesIgnoreStaleList(t *testing.T) {
 		t.Fatalf("delete: feeds=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
 	}
 
-	// An absent source keeps the plain, idempotent paths.
+	// Deleting an absent source succeeds without a write.
 	repo = newRepo()
 	if err := newUpdateSvc(repo, &mockMembers{}).DeleteSource(context.Background(), "u1", "absent"); err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.deletedFeeds) != 0 || repo.plainDeletes != 1 {
+	if len(repo.deletedFeeds) != 0 || repo.plainDeletes != 0 || repo.count != nil {
 		t.Fatalf("absent delete: feeds=%v plain=%d", repo.deletedFeeds, repo.plainDeletes)
+	}
+}
+
+func sourcesN(n int) []model.UpdateSource {
+	out := make([]model.UpdateSource, n)
+	for i := range out {
+		out[i] = model.UpdateSource{SourceID: fmt.Sprintf("s%d", i), Kind: model.UpdateSourceKindSlack, LocalSourceID: "l"}
+	}
+	return out
+}
+
+var capTestReq = model.AddUpdateSourceRequest{Kind: "rss", Label: "B", URL: "https://example.com/f"}
+
+func TestCustomerUpdateSourceCap(t *testing.T) {
+	max := model.MaxUpdateSources
+	tests := []struct {
+		name      string
+		rows      int
+		count     *int // nil: legacy user without a counter row
+		seedRace  *int
+		stale     *int
+		dup       bool
+		wantErr   error
+		wantCount int
+		wantRows  int
+		wantSeeds []int
+	}{
+		{"cap-1 succeeds", max - 1, intp(max - 1), nil, nil, false, nil, max, max, nil},
+		{"at cap fails", max, intp(max), nil, nil, false, ErrConflict, max, max, nil},
+		{"stale read still capped", max, intp(max), nil, intp(max - 1), false, ErrConflict, max, max, nil},
+		{"duplicate source consumes no slot", 3, intp(3), nil, nil, true, ErrConflict, 3, 3, nil},
+		{"new user seeds zero", 0, nil, nil, nil, false, nil, 1, 1, []int{0}},
+		{"legacy below cap seeds then adds", 5, nil, nil, nil, false, nil, 6, 6, []int{5}},
+		{"legacy at cap seeds then fails", max, nil, nil, nil, false, ErrConflict, max, max, []int{max}},
+		{"legacy over cap seeds real rows", max + 2, nil, nil, nil, false, ErrConflict, max + 2, max + 2, []int{max + 2}},
+		{"lost seed race re-reads", 3, nil, intp(3), nil, false, nil, 4, 4, nil},
+		{"lost seed race at cap", max, nil, intp(max), nil, false, ErrConflict, max, max, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockUpdateRepo()
+			repo.sources = sourcesN(tt.rows)
+			repo.count, repo.seedRace, repo.staleCount, repo.dupOnce = tt.count, tt.seedRace, tt.stale, tt.dup
+			req := capTestReq
+			got, err := newUpdateSvc(repo, &mockMembers{}).AddSource(context.Background(), "u1", &req)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr == nil && got == nil {
+				t.Fatal("no source returned")
+			}
+			if repo.count == nil || *repo.count != tt.wantCount || len(repo.sources) != tt.wantRows {
+				t.Fatalf("count=%v rows=%d, want %d/%d", repo.count, len(repo.sources), tt.wantCount, tt.wantRows)
+			}
+			if len(repo.seeds) != len(tt.wantSeeds) || (len(tt.wantSeeds) > 0 && repo.seeds[0] != tt.wantSeeds[0]) {
+				t.Fatalf("seeds = %v, want %v", repo.seeds, tt.wantSeeds)
+			}
+		})
+	}
+}
+
+func TestCustomerUpdateSourceCapFreedByDelete(t *testing.T) {
+	repo := newMockUpdateRepo()
+	repo.sources = sourcesN(model.MaxUpdateSources)
+	svc := newUpdateSvc(repo, &mockMembers{})
+	req := capTestReq
+	if _, err := svc.AddSource(context.Background(), "u1", &req); !errors.Is(err, ErrConflict) {
+		t.Fatalf("at cap: err = %v", err)
+	}
+	if err := svc.DeleteSource(context.Background(), "u1", "s0"); err != nil {
+		t.Fatal(err)
+	}
+	if *repo.count != model.MaxUpdateSources-1 {
+		t.Fatalf("count after delete = %d", *repo.count)
+	}
+	if _, err := svc.AddSource(context.Background(), "u1", &req); err != nil {
+		t.Fatalf("a freed slot must admit one add: %v", err)
+	}
+	if _, err := svc.AddSource(context.Background(), "u1", &req); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cap again: err = %v", err)
+	}
+}
+
+func TestCustomerUpdateDeleteSourceCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		rows      int
+		count     *int
+		sourceID  string
+		removeErr error
+		wantErr   bool
+		wantCount *int
+		wantRows  int
+		uncounted int
+	}{
+		{"delete decrements", 3, intp(3), "s1", nil, false, intp(2), 2, 0},
+		{"legacy delete seeds then decrements", 3, nil, "s1", nil, false, intp(2), 2, 0},
+		{"missing source does not decrement", 3, intp(3), "absent", nil, false, intp(3), 3, 0},
+		{"missing source on a legacy user writes nothing", 3, nil, "absent", nil, false, nil, 3, 0},
+		{"concurrent delete is success", 3, intp(3), "s1",
+			fmt.Errorf("%w: %w", repository.ErrConditionFailed, repository.ErrUpdateSourceMissing), false, intp(3), 3, 0},
+		{"floor falls back to an uncounted delete", 3, intp(0), "s1", nil, false, intp(0), 3, 1},
+		{"other errors surface", 3, intp(3), "s1", errors.New("throttled"), true, intp(3), 3, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockUpdateRepo()
+			repo.sources = sourcesN(tt.rows)
+			repo.count, repo.removeErr = tt.count, tt.removeErr
+			err := newUpdateSvc(repo, &mockMembers{}).DeleteSource(context.Background(), "u1", tt.sourceID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if (repo.count == nil) != (tt.wantCount == nil) || (repo.count != nil && *repo.count != *tt.wantCount) {
+				t.Fatalf("count = %v, want %v", repo.count, tt.wantCount)
+			}
+			if len(repo.sources) != tt.wantRows || repo.uncounted != tt.uncounted {
+				t.Fatalf("rows=%d uncounted=%d", len(repo.sources), repo.uncounted)
+			}
+		})
+	}
+}
+
+func TestCustomerUpdateSourceWritesRetryConflicts(t *testing.T) {
+	max := model.MaxUpdateSources
+	tests := []struct {
+		name          string
+		del           bool
+		rows          int
+		count         *int
+		conflicts     int
+		seedConflicts int
+		dup           bool
+		staleFirst    bool  // the first count read reports rows-1
+		wantErr       error // nil: success
+		wantCount     *int
+		wantTx        int
+		wantSleeps    int
+	}{
+		{"add succeeds after conflicts", false, 3, intp(3), 4, 0, false, false, nil, intp(4), 5, 4},
+		{"add gives up after the bound", false, 3, intp(3), -1, 0, false, false, ErrSourcesBusy, intp(3), sourceWriteAttempts, sourceWriteAttempts - 1},
+		// The first read is stale, so the add reaches the transaction; the
+		// retry re-reads the real count and stops before writing.
+		{"add re-evaluates the cap after a conflict", false, max, intp(max), 1, 0, false, true, ErrConflict, intp(max), 1, 1},
+		{"add duplicate after a conflict consumes no slot", false, 3, intp(3), 1, 0, true, false, ErrConflict, intp(3), 2, 1},
+		{"seed conflict is retried", false, 3, nil, 0, 2, false, false, nil, intp(4), 1, 2},
+		{"seed gives up after the bound", false, 3, nil, 0, -1, false, false, ErrSourcesBusy, nil, 0, sourceWriteAttempts - 1},
+		{"delete succeeds after conflicts", true, 3, intp(3), 2, 0, false, false, nil, intp(2), 3, 2},
+		{"delete gives up after the bound", true, 3, intp(3), -1, 0, false, false, ErrSourcesBusy, intp(3), sourceWriteAttempts, sourceWriteAttempts - 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockUpdateRepo()
+			repo.sources = sourcesN(tt.rows)
+			repo.count, repo.conflicts, repo.seedConflicts, repo.dupOnce = tt.count, tt.conflicts, tt.seedConflicts, tt.dup
+			if tt.staleFirst {
+				repo.staleCount = intp(tt.rows - 1)
+			}
+			svc := newUpdateSvc(repo, &mockMembers{})
+			var sleeps []time.Duration
+			svc.sleep = func(_ context.Context, d time.Duration) error {
+				sleeps = append(sleeps, d)
+				repo.staleCount = nil // later reads see the real count
+				return nil
+			}
+			var err error
+			if tt.del {
+				err = svc.DeleteSource(context.Background(), "u1", "s1")
+			} else {
+				req := capTestReq
+				_, err = svc.AddSource(context.Background(), "u1", &req)
+			}
+			if tt.wantErr == nil && err != nil || tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if (repo.count == nil) != (tt.wantCount == nil) || (repo.count != nil && *repo.count != *tt.wantCount) {
+				t.Fatalf("count = %v, want %v", repo.count, tt.wantCount)
+			}
+			if repo.txCalls != tt.wantTx {
+				t.Fatalf("transactions = %d, want %d", repo.txCalls, tt.wantTx)
+			}
+			if len(sleeps) != tt.wantSleeps {
+				t.Fatalf("sleeps = %d, want %d", len(sleeps), tt.wantSleeps)
+			}
+			for _, d := range sleeps {
+				if d < sourceWriteBackoff || d > sourceWriteBackoff*time.Duration(sourceWriteAttempts+1) {
+					t.Fatalf("backoff %v out of range", d)
+				}
+			}
+		})
+	}
+}
+
+func TestCustomerUpdateDeleteSourceFloorLogsUserHash(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	repo := newMockUpdateRepo()
+	repo.sources = sourcesN(2)
+	repo.count = intp(0)
+	if err := newUpdateSvc(repo, &mockMembers{}).DeleteSource(context.Background(), "user-1", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "user="+userHashPrefix("user-1")) || strings.Contains(out, "user-1") || strings.Contains(out, "s1") {
+		t.Fatalf("floor log must carry only the user hash prefix: %q", out)
+	}
+}
+
+func TestCustomerUpdateSourceRetryStopsOnContext(t *testing.T) {
+	repo := newMockUpdateRepo()
+	repo.count, repo.conflicts = intp(0), -1
+	svc := newUpdateSvc(repo, &mockMembers{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.sleep = sleepCtx
+	req := capTestReq
+	if _, err := svc.AddSource(ctx, "u1", &req); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if repo.txCalls != 1 {
+		t.Fatalf("transactions = %d, want 1", repo.txCalls)
 	}
 }

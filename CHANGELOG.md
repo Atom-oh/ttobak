@@ -49,6 +49,7 @@ manifests.
 
 ### Fixed
 
+- Customer update sources: concurrent adds can no longer exceed the 30-source cap; the cap is enforced atomically with each add and delete, and colliding concurrent writes are retried before returning 503 `SOURCES_BUSY` (#PR).
 - Mac interpretation: reloading or leaving the page stops the capture instead of
   leaving the app listening, and a failed live-caption configuration load is retried
   by the next start instead of disabling the screen until a reload. A failed

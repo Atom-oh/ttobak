@@ -28,6 +28,10 @@ const (
 	// pending partition (attribute lastUserId). "#" sorts before any user id
 	// and is never a pending mark.
 	SKUpdatePendingCursor = "#CURSOR"
+	// SKUpdateSourceCount is the user's followed-source counter row
+	// (USER#{userId}, attribute sourceCount). It must not start with
+	// PrefixUpdateSource, so source queries never return it.
+	SKUpdateSourceCount = "CUSRCCOUNT"
 
 	// SKUpdateURLMeta: the shared URL cache row is PK = CUURL#{urlHash}, SK = META,
 	// shared across users (a Python runtime will read and write the same key).
