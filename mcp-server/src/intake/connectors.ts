@@ -4,9 +4,9 @@
 
 import type { ToolExpectation } from './mcp-client.js';
 
-export type ConnectorId = 'calendar' | 'sfdc' | 'meetings' | 'specreq' | 'slack';
-/** Calendar and SFDC are sync connectors with their own run commands, not task-runner providers. */
-export type TaskConnectorId = Exclude<ConnectorId, 'calendar' | 'sfdc'>;
+export type ConnectorId = 'calendar' | 'sfdc' | 'meetings' | 'specreq' | 'slack' | 'links';
+/** Calendar, SFDC and links are sync connectors with their own run commands, not task-runner providers. */
+export type TaskConnectorId = Exclude<ConnectorId, 'calendar' | 'sfdc' | 'links'>;
 
 export const TASK_CONNECTORS: readonly TaskConnectorId[] = ['meetings', 'specreq', 'slack'];
 
@@ -29,6 +29,15 @@ export const CONNECTOR_TOOLS: Record<TaskConnectorId, ToolExpectation[]> = {
     { name: 'post_draft', properties: ['channel', 'text'] },
   ],
 };
+
+/**
+ * Read tools of the `links` sync connector, which reuses the Slack server
+ * selection with its own session. No write or search tool is ever allowed.
+ */
+export const LINKS_TOOLS: ToolExpectation[] = [
+  { name: 'list_my_channels', properties: [] },
+  { name: 'get_messages', properties: ['channel', 'since', 'until', 'limit', 'cursor', 'includeThreadReplies'] },
+];
 
 export function isTaskConnector(value: unknown): value is TaskConnectorId {
   return typeof value === 'string' && (TASK_CONNECTORS as readonly string[]).includes(value);

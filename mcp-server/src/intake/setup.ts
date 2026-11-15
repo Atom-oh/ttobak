@@ -13,19 +13,24 @@ import { runConnectors, selectConnector, SYNC_CONNECTORS, type IntakeEnvironment
 import { installSchedule, parseSchedule, type Schedule } from './schedule.js';
 import type { IntakeStore } from './store.js';
 
-const ORDER: readonly ConnectorId[] = ['calendar', 'sfdc', 'meetings', 'specreq', 'slack'];
+type SetupConnectorId = ConnectorId;
+
+/** `links` follows `slack`: it reuses that selection and only verifies its own two read tools. */
+const ORDER: readonly SetupConnectorId[] = ['calendar', 'sfdc', 'meetings', 'specreq', 'slack', 'links'];
 
 /** The only server name probed per connector (ADR-003, local intake); unrelated servers never start. */
-export const DEFAULT_SERVERS: Record<ConnectorId, string> = {
+export const DEFAULT_SERVERS: Record<SetupConnectorId, string> = {
   calendar: 'aws-outlook-mcp',
   sfdc: 'aws-sentral-mcp',
   meetings: 'amazon-meetings-mcp',
   specreq: 'spec-req-mcp',
   slack: 'slack-mcp',
+  links: 'slack-mcp',
 };
 
-const LABELS: Record<ConnectorId, string> = {
-  calendar: '캘린더', sfdc: 'SFDC', meetings: '회의', specreq: 'SpecReq', slack: 'Slack',
+const LABELS: Record<SetupConnectorId, string> = {
+  // `links` is the contract's `mac.links.setupLabel` (test: intake-links-cli.test.mjs).
+  calendar: '캘린더', sfdc: 'SFDC', meetings: '회의', specreq: 'SpecReq', slack: 'Slack', links: 'Slack 링크',
 };
 
 type ConnectorStatus = { status: 'selected'; server: string; host: HostId; autoAck?: false; consentReused?: true }
@@ -36,7 +41,7 @@ interface SetupOptions {
   /** Never prompts and never opens the TTOBAK login (implies --yes defaults). */
   noninteractive: boolean;
   acceptUnknownSensitivity: boolean;
-  skip: Set<ConnectorId>;
+  skip: Set<SetupConnectorId>;
   schedule?: Schedule;
 }
 
@@ -56,7 +61,7 @@ function parseArgs(args: string[]): SetupOptions {
       if (name === '--schedule') options.schedule = parseSchedule(value);
       else {
         if (!(ORDER as readonly string[]).includes(value)) throw new IntakeError('INVALID_ARGUMENT', '--skip takes a connector name');
-        options.skip.add(value as ConnectorId);
+        options.skip.add(value as SetupConnectorId);
       }
     } else throw new IntakeError('INVALID_ARGUMENT', `unexpected argument ${JSON.stringify(name.slice(0, 40))}`);
   }
@@ -78,6 +83,11 @@ function countsLine(results: RunOutput['results']): string {
     const counts = sfdc.counts as { assignments?: { upserts?: number }; tasks?: { upserts?: number } } | undefined;
     parts.push(sfdc.result === 'ok' ? `SFDC 담당 계정 ${counts?.assignments?.upserts ?? 0}건, 활동 ${counts?.tasks?.upserts ?? 0}건`
       : `SFDC 실패(${sfdc.result})`);
+  }
+  const links = results.links;
+  if (links && (links.result !== 'ok' || Number(links.channels) > 0)) {
+    parts.push(links.result === 'ok' ? `Slack 링크 채널 ${links.channels}개, 링크 ${links.links}건`
+      : `Slack 링크 실패(${links.result})`);
   }
   return parts.join(', ');
 }
@@ -117,6 +127,29 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
     if (options.skip.has(connector)) {
       connectors[connector] = { status: 'skipped', code: 'SKIPPED_BY_USER' };
       say(`${label}: 건너뜀 (--skip)`);
+      continue;
+    }
+    if (connector === 'links') {
+      // No channel is ever chosen here: only the two read tools of the Slack server selected above are checked.
+      const slack = connectors.slack;
+      if (slack?.status !== 'selected') {
+        connectors[connector] = { status: 'skipped', code: slack?.code ?? 'SERVER_NOT_CONFIGURED' };
+        say(`${label}: Slack 선택이 없어 건너뜁니다.`);
+        continue;
+      }
+      try {
+        await selectConnector('links', { host: slack.host, server: slack.server }, environment, store);
+        connectors[connector] = { status: 'selected', server: slack.server, host: slack.host };
+        say(`${label}: ${slack.host}의 ${slack.server} 확인 완료 (채널은 앱에서 선택)`);
+      } catch (error) {
+        const code = intakeCode(error);
+        if (code === 'AUTH_EXPIRED_MIDWAY') {
+          restore();
+          return stop(code, `${slack.server} reported an authentication failure`);
+        }
+        connectors[connector] = { status: 'skipped', code };
+        say(`${label}: ${slack.server} 확인 실패(${code}), 건너뜁니다.`);
+      }
       continue;
     }
     const candidates = HOSTS.filter(host => reports.find(report => report.host === host)?.servers
@@ -178,7 +211,12 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
     for (const connector of ORDER) {
       const entry = connectors[connector];
       const stored = next[connector];
-      if (entry?.status === 'skipped' && stored) {
+      if (entry?.status === 'skipped' && stored && connector === 'links') {
+        // Channels and cloud source IDs stay; a later successful setup clears the flag.
+        next.links = { ...next.links!, disabled: true };
+        connectors[connector] = { ...entry, disabled: true };
+        say(`${LABELS[connector]}: 이전 선택을 비활성화했습니다 (채널과 원본 ID는 유지).`);
+      } else if (entry?.status === 'skipped' && stored) {
         (next as unknown as Record<string, unknown>)[connector] = { ...stored, disabled: true };
         connectors[connector] = { ...entry, disabled: true };
         say(`${LABELS[connector]}: 이전 선택을 비활성화했습니다 (원본 ID와 기록은 유지).`);

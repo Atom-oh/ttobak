@@ -175,7 +175,7 @@ Each command prints one JSON line and exits 0, or 2 with `{ok:false, code}`.
 ```text
 intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
-intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+intake run [--dry-run] [--noninteractive] [--only calendar,sfdc,links]
 intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
 intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
 intake login
@@ -186,6 +186,10 @@ intake login
 1. Lists the host servers (as `intake hosts` does) and probes only the known
    name per connector: calendar `aws-outlook-mcp`, sfdc `aws-sentral-mcp`,
    meetings `amazon-meetings-mcp`, specreq `spec-req-mcp`, slack `slack-mcp`.
+   `links` (Slack links) reuses the Slack server selected in the same run: it
+   only checks the `list_my_channels` and `get_messages` schemas and never
+   chooses channels; it is skipped with the code of a skipped or failed Slack
+   selection.
    When one name exists in several hosts, Claude wins over Codex, then Kiro;
    interactive mode asks only then. `--yes` takes the default.
 2. Verifies each candidate exactly as `intake select` does and stores it. No
@@ -220,8 +224,14 @@ dry run or first sync exits 2 with the run's code and `synced: false`; the
 selections stay saved and no schedule is installed.
 
 `intake run` runs the selected connectors in order, calendar (with its task
-step) then SFDC, with one shared TTOBAK sign-in. The JSON line is
-`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts, sfdcContacts?}}}`.
+step), SFDC, then Slack links, with one shared TTOBAK sign-in. The JSON line is
+`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts, sfdcContacts?},
+links: {result, channels, links, uploaded}}}`. Links run by default only when
+Slack is selected and at least one channel is chosen; `--only links` with no
+channel succeeds without opening a Slack session. When some channels fail,
+`links.result` is their shared code if every channel failed alike, else
+`PARTIAL_FAILURE`, and the run exits 2 with `PARTIAL_FAILURE`; counts only, never
+channel names or labels.
 It exits 0 only when every attempted connector and the SFDC contacts step
 succeeded. Otherwise it exits 2
 with `PARTIAL_FAILURE`; `AUTH_EXPIRED_MIDWAY` anywhere, including the
@@ -243,6 +253,8 @@ never opens a browser; the LaunchAgent uses it.
 | `intake login` | Interactive Cognito sign-in (a browser may open; use it only from an explicit user action). Prints `{ok:true,email}`; exits 2 with `{ok:false,code}` on failure. It does not take the run lock. |
 | `intake status` | Shows the selection (names only) and the last calendar and task results and counts. |
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
+| `intake links channels` | Lists the user's non-archived Slack channels through the selected Slack server (`list_my_channels` only) as `{ok:true, channels:[{id,name}]}`. It prints IDs and names to stdout for the local Mac app and nowhere else. `NOT_SELECTED` without a Slack selection. It does not take the run lock. |
+| `intake links select [--channel <id>=<label>]... [--noninteractive]` | Makes the selection equal the given channels (at most 20; label 1-100 characters, split at the first `=`, so a label containing `=` is `INVALID_ARGUMENT`). Registers one TTOBAK source per new channel (label only), deletes the sources of removed channels, and prints `{ok:true, channels:[{id,label}], relabelFailed?}`, where `relabelFailed` is the number of channels that kept their old label (never their IDs). No `--channel` clears the selection. A removed channel loses its cursor, so selecting it again is a first run. A `links.disabled` flag set by `intake setup` is kept. It needs a TTOBAK sign-in (none when nothing is stored or chosen) and holds the run lock. |
 | `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
 
 `run`, `setup`, `select`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
@@ -755,6 +767,54 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
 - **Privacy.** SFDC and TTOBAK emails are compared in memory only and cleared
   before the request is built. No email or phone is written to a request body,
   stdout, stderr, the status file or a ledger.
+
+## Slack links connector
+
+Reads new messages of up to 20 user-selected Slack channels through the user's
+own Slack MCP server and uploads only the public links in them (copy key
+`mac.links.setupLabel` is its setup label). Choose channels with
+`intake links channels` and `intake links select`; the Mac app does the same.
+`intake setup` and `intake select slack` never choose channels.
+
+- **Allowed tools.** `list_my_channels` and `get_messages` only; the session
+  refuses any other tool name before sending it.
+- **What stays on the Mac.** Message text, authors, threads, permalinks and
+  Slack channel IDs never leave the Mac. Only `{url, seenAt}` pairs and the
+  channel label (the name the user chose) are sent to TTOBAK, under a random
+  local source ID. The run status file, the JSON printed by `intake run` and the
+  logs carry counts only (`channels`, `links`, `uploaded`). Channel IDs and
+  labels are stored locally in `selection.json` and the per-channel cursor
+  ledger; `links channels` and `links select` print them to stdout for the
+  local Mac app only. Links that are not public https URLs (credentials in the
+  address, internal or IP hosts) are dropped on the Mac.
+- **First run of a channel.** Reads the last 3 days (at most 5 pages) and keeps
+  the 50 newest links of what was read, uploaded oldest first; the cursor moves
+  to the newest message read, so the backfill never exceeds 50 links and nothing
+  older is revisited. Deselecting a channel drops its cursor in every account
+  scope, so a channel selected again later starts with a new first run.
+- **Later runs.** At most 200 links per channel per run. A long gap is read in
+  narrowed windows (`until`) so that no unread message is skipped. The cursor
+  advances only after every upload of the channel succeeded.
+- **Failures** are per channel; the next channel still runs. After a channel
+  fails with `SOURCE_ERROR` or `SOURCE_TIMEOUT`, the remaining channels get a
+  fresh Slack session; if it cannot be opened they report that code.
+- **Known limit.** A single `get_messages` reply above 4 MiB fails that channel
+  on each run; the other channels continue.
+
+| Code | Meaning |
+|---|---|
+| `SOURCE_TOO_LARGE` | The channel has too many new messages to read in one run even after narrowing. Nothing was uploaded and the cursor is unchanged. |
+| `SOURCE_ERROR` | The channel could not be read (for example, it was left or archived). |
+| `SCHEMA_CHANGED` | The Slack server lacks `list_my_channels` or `get_messages` or returned an unexpected shape. |
+| `AUTH_EXPIRED_MIDWAY` | Stops the whole run; run `mwinit -o`. |
+| `TTOBAK_CONFLICT` / `TTOBAK_REJECTED` | The channel's TTOBAK source is gone (for example deleted on the web settings page) or refused the batch. The channel fails on every run until the channels are saved again (`intake links select` or the Mac app's save), which registers a missing source again; a re-registered channel starts a new first collection. No UI pauses a Slack source. |
+| `TTOBAK_UNAVAILABLE` | A temporary upload failure; the cursor stays and the next run retries. |
+| `PARTIAL_FAILURE` | Some channels failed with different codes (or some succeeded). |
+
+`intake run --dry-run --only links` reads Slack and prints counts without
+uploading or moving a cursor. `intake status` lists `links` in its `selection`
+as `{enabled, channels}` (a count, never IDs or labels) when Slack or a links
+selection is stored.
 
 ## SA report
 

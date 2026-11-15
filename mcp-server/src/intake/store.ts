@@ -2,8 +2,8 @@
 // It holds the selection (references to host entries, never their values),
 // per-source calendar ledgers and pending batches, run status and a lock.
 
-import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync,
-  renameSync, unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync,
+  readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { IntakeError } from './errors.js';
@@ -123,6 +123,30 @@ export class IntakeStore {
     } finally {
       closeSync(descriptor);
     }
+  }
+
+  /**
+   * Names of the subdirectories of a state directory that are valid path
+   * segments ([] when absent). Symlinks and entries of another owner are skipped.
+   */
+  directories(...relative: string[]): string[] {
+    const path = relative.length ? this.path(relative) : this.directory;
+    let names: string[];
+    try {
+      if (!lstatSync(path).isDirectory()) return [];
+      names = readdirSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw new IntakeError('STORE_INVALID', 'state directory unreadable');
+    }
+    const uid = process.getuid?.();
+    return names.filter(name => {
+      if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name) || name === '.' || name === '..') return false;
+      try {
+        const stat = lstatSync(join(path, name));
+        return stat.isDirectory() && !stat.isSymbolicLink() && (uid === undefined || stat.uid === uid);
+      } catch { return false; }
+    }).sort();
   }
 
   /** Size in bytes of a state file, or 0 when absent. */

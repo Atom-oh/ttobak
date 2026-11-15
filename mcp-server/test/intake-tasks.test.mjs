@@ -63,7 +63,9 @@ test('select specreq stores autoAck default on and off', async t => {
   assert.equal(await runIntake(['status'], env), 0);
   const status = JSON.parse(lines.at(-1));
   assert.deepEqual(status.selection.slack, { host: 'claude', server: 'work' });
-  assert.deepEqual(Object.keys(status.selection).sort(), ['meetings', 'slack', 'specreq']);
+  // A selected Slack server also lists the links connector (enabled, no channels yet).
+  assert.deepEqual(Object.keys(status.selection).sort(), ['links', 'meetings', 'slack', 'specreq']);
+  assert.deepEqual(status.selection.links, { enabled: true, channels: 0 });
 });
 
 test('select slack fails with SCHEMA_CHANGED when post_draft lacks text', async t => {
