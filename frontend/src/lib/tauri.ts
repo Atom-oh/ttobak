@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from 'react';
 
-import type { IntakeConnector, IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, SetupFinished, SetupStep } from './intake';
+import type { IntakeFinished, IntakeSchedule, IntakeStateView, IntakeSyncOptions, LinkChannelChoice, SetupFinished, SetupSkipConnector, SetupStep } from './intake';
 import type { ReportFinished, ReportGenerateInput, ReportSettingsView, ReportStateView, SlackChannelCandidates } from './performanceReport';
 import type { TeamSyncFinished, TeamSyncStateView } from './teamSync';
 
@@ -773,7 +773,7 @@ export function runIntakeNow(): Promise<void> {
   return invoke<void>('intake_run_now');
 }
 
-export function runIntakeSetup(acceptPrivateCalendar: boolean, skip: IntakeConnector[]): Promise<void> {
+export function runIntakeSetup(acceptPrivateCalendar: boolean, skip: SetupSkipConnector[]): Promise<void> {
   return invoke<void>('intake_setup', { acceptPrivateCalendar, skip });
 }
 
@@ -795,6 +795,16 @@ export function setIntakeOptions(options: IntakeSyncOptions): Promise<unknown> {
   return invoke<unknown>('intake_set_options', {
     calendarResponses: options.calendarResponses, sfdcContacts: options.sfdcContacts,
   });
+}
+
+/** The user's Slack channels (`intake links channels`); rejects with a string code. */
+export function listLinkChannels(): Promise<unknown> {
+  return invoke<unknown>('intake_links_channels');
+}
+
+/** Stores the chosen channels (none clears them) and resolves to the stored `{id, label}` list. */
+export function selectLinkChannels(channels: LinkChannelChoice[]): Promise<unknown> {
+  return invoke<unknown>('intake_links_select', { channels });
 }
 
 export function checkIntakeAdapter(): Promise<IntakeStateView['adapter']> {
@@ -822,6 +832,7 @@ export function onIntakeProgress(handler: (line: string) => void): () => void {
   );
 }
 
+/** Also fires with only `{action: 'links'}` when a Slack links call releases the run slot. */
 export function onIntakeFinished(handler: (finished: IntakeFinished) => void): () => void {
   return subscribeTauriEvent<IntakeFinished, IntakeFinished>('intake://finished', (raw) => raw, handler);
 }

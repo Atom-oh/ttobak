@@ -228,15 +228,18 @@ pub enum Connector {
     Meetings,
     Specreq,
     Slack,
+    /// Public links of chosen Slack channels; reuses the `slack` server.
+    Links,
 }
 
 impl Connector {
-    pub const ALL: [Connector; 5] = [
+    pub const ALL: [Connector; 6] = [
         Connector::Calendar,
         Connector::Sfdc,
         Connector::Meetings,
         Connector::Specreq,
         Connector::Slack,
+        Connector::Links,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -246,6 +249,7 @@ impl Connector {
             Connector::Meetings => "meetings",
             Connector::Specreq => "specreq",
             Connector::Slack => "slack",
+            Connector::Links => "links",
         }
     }
 }
@@ -279,6 +283,67 @@ impl CalendarResponse {
     }
 }
 
+/// Most Slack channels the links connector may follow (the CLI's limit).
+pub const MAX_LINK_CHANNELS: usize = 20;
+/// Longest channel label, in Unicode scalar values (the CLI counts code points).
+const MAX_LINK_LABEL_CHARS: usize = 100;
+
+/// A Slack channel ID as the CLI accepts it: `^[A-Z0-9]{6,20}$`.
+pub fn is_channel_id(id: &str) -> bool {
+    (6..=20).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+/// One chosen Slack channel and the label its TTOBAK source shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelChoice {
+    pub id: String,
+    pub label: String,
+}
+
+impl ChannelChoice {
+    /// The ID matches [`is_channel_id`]; the trimmed label has 1-100
+    /// characters, no control characters and no `=` (the CLI splits
+    /// `<id>=<label>` on the first `=`).
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let label = self.label.trim();
+        let len = label.chars().count();
+        if !is_channel_id(&self.id)
+            || !(1..=MAX_LINK_LABEL_CHARS).contains(&len)
+            || label.chars().any(|c| c.is_control() || c == '=')
+        {
+            return Err("INVALID_ARGUMENT");
+        }
+        Ok(())
+    }
+}
+
+/// Validates a whole selection before any spawn: at most
+/// [`MAX_LINK_CHANNELS`], no repeated ID, each choice valid. Returns the
+/// choices with trimmed labels.
+pub fn validate_channels(channels: &[ChannelChoice]) -> Result<Vec<ChannelChoice>, &'static str> {
+    if channels.len() > MAX_LINK_CHANNELS {
+        return Err("INVALID_ARGUMENT");
+    }
+    let mut seen = BTreeSet::new();
+    channels
+        .iter()
+        .map(|c| {
+            c.validate()?;
+            if !seen.insert(c.id.as_str()) {
+                return Err("INVALID_ARGUMENT");
+            }
+            Ok(ChannelChoice {
+                id: c.id.clone(),
+                label: c.label.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
 /// One `intake` CLI invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntakeAction {
@@ -297,6 +362,13 @@ pub enum IntakeAction {
     Options {
         calendar_responses: BTreeSet<CalendarResponse>,
         sfdc_contacts: bool,
+    },
+    /// `intake links channels`: the user's Slack channels (stdout only).
+    LinksChannels,
+    /// `intake links select`: stores the chosen channels (none clears them).
+    /// Callers pass choices checked by [`validate_channels`].
+    LinksSelect {
+        channels: Vec<ChannelChoice>,
     },
 }
 
@@ -337,6 +409,15 @@ pub fn argv(action: &IntakeAction, server_mjs: &Path) -> Vec<OsString> {
                 "--sfdc-contacts".into(),
                 if *sfdc_contacts { "on" } else { "off" }.into(),
             ]);
+        }
+        IntakeAction::LinksChannels => v.extend(["links".into(), "channels".into()]),
+        IntakeAction::LinksSelect { channels } => {
+            v.extend(["links".into(), "select".into()]);
+            for c in channels {
+                v.extend(["--channel".into(), format!("{}={}", c.id, c.label).into()]);
+            }
+            // As `Run`: the app never waits on an interactive sign-in.
+            v.push("--noninteractive".into());
         }
     }
     v
@@ -658,6 +739,112 @@ mod tests {
             serde_json::from_str::<CalendarResponse>("\"tentative\"").unwrap(),
             CalendarResponse::Tentative
         );
+    }
+
+    fn choice(id: &str, label: &str) -> ChannelChoice {
+        ChannelChoice {
+            id: id.to_string(),
+            label: label.to_string(),
+        }
+    }
+
+    #[test]
+    fn links_connector_is_listed() {
+        assert_eq!(Connector::Links.as_str(), "links");
+        assert!(Connector::ALL.contains(&Connector::Links));
+        assert_eq!(
+            serde_json::from_str::<Connector>("\"links\"").unwrap(),
+            Connector::Links
+        );
+    }
+
+    #[test]
+    fn argv_links_actions() {
+        assert_eq!(
+            argv_strs(&IntakeAction::LinksChannels),
+            ["/x/server.mjs", "intake", "links", "channels"]
+        );
+        let select = IntakeAction::LinksSelect {
+            channels: vec![
+                choice("C0123456", "whats-new"),
+                choice("G98765AB", "요약 채널"),
+            ],
+        };
+        assert_eq!(
+            argv_strs(&select),
+            [
+                "/x/server.mjs",
+                "intake",
+                "links",
+                "select",
+                "--channel",
+                "C0123456=whats-new",
+                "--channel",
+                "G98765AB=요약 채널",
+                "--noninteractive"
+            ]
+        );
+        // No channels clears the selection.
+        assert_eq!(
+            argv_strs(&IntakeAction::LinksSelect { channels: vec![] }),
+            [
+                "/x/server.mjs",
+                "intake",
+                "links",
+                "select",
+                "--noninteractive"
+            ]
+        );
+    }
+
+    #[test]
+    fn channel_choice_validation() {
+        assert_eq!(choice("C0123456", "whats-new").validate(), Ok(()));
+        assert_eq!(choice("C0123456", &"가".repeat(100)).validate(), Ok(()));
+        for (id, label) in [
+            ("c0123", "x"),
+            ("c0123456", "x"),
+            ("C0123", "x"),
+            ("C012345678901234567890", "x"),
+            ("C01234-6", "x"),
+            ("C0123456", ""),
+            ("C0123456", "   "),
+            ("C0123456", "a=b"),
+            ("C0123456", "line\nbreak"),
+            ("C0123456", "tab\there"),
+            ("C0123456", "\u{7f}"),
+        ] {
+            assert_eq!(
+                choice(id, label).validate(),
+                Err("INVALID_ARGUMENT"),
+                "{id:?} {label:?}"
+            );
+        }
+        assert_eq!(
+            choice("C0123456", &"가".repeat(101)).validate(),
+            Err("INVALID_ARGUMENT")
+        );
+    }
+
+    #[test]
+    fn channel_list_validation() {
+        let many: Vec<ChannelChoice> = (0..21).map(|i| choice(&format!("C{i:07}"), "x")).collect();
+        assert_eq!(validate_channels(&many), Err("INVALID_ARGUMENT"));
+        assert_eq!(validate_channels(&many[..20]).map(|v| v.len()), Ok(20));
+        assert_eq!(validate_channels(&[]), Ok(vec![]));
+        let repeated = [choice("C0123456", "a"), choice("C0123456", "b")];
+        assert_eq!(validate_channels(&repeated), Err("INVALID_ARGUMENT"));
+        let bad = [choice("C0123456", "a"), choice("c0123", "b")];
+        assert_eq!(validate_channels(&bad), Err("INVALID_ARGUMENT"));
+        // Labels are trimmed, as the CLI does.
+        assert_eq!(
+            validate_channels(&[choice("C0123456", "  whats-new ")]),
+            Ok(vec![choice("C0123456", "whats-new")])
+        );
+        assert!(serde_json::from_str::<ChannelChoice>(
+            r#"{"id":"C0123456","label":"x","sourceId":"s"}"#
+        )
+        .is_err());
     }
 
     #[test]

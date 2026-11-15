@@ -17,7 +17,11 @@ linked, not restated:
 
 - **Sources.** Followed RSS, site and YouTube sources and uploaded links feed
   the user's inbox. Slack message bodies stay on the Mac; only filtered public
-  URLs are uploaded (planned: the Mac side ships in a later plan).
+  URLs are uploaded. Slack sources are fed by the Mac `links` connector (ADR-003);
+  nothing is posted to Slack. A Slack source can be deleted on the web (it
+  cannot be paused there); the Mac registers it again when that channel is
+  saved again, and the re-registered channel starts a new first collection.
+  Deselecting a channel on the Mac clears its local cursor.
   The 30-source cap is a conditional counter (`USER#{userId}` / `CUSRCCOUNT`)
   changed in the same transaction as the source row; a missing counter is
   seeded from a consistent row count before any counted write.

@@ -428,6 +428,7 @@ async fn run_cli(
         track,
         CLI_TIMEOUT,
         intake::KILL_GRACE,
+        intake::MAX_STDOUT_LINE_BYTES,
         Some(cancel),
         on_line,
     )
