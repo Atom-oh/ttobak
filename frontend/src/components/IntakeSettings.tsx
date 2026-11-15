@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { useIntake } from '@/hooks/useIntake';
 import { OneClickSetup } from '@/components/OneClickSetup';
 import {
-  adapterUpdateMessage, errorCode, finishedMessage, normalizeAdapterUpdate, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, needsTtobakLogin, SCHEDULE_OPTIONS,
-  optionsSaveErrorText, savedOptions, scheduleFromForm, scheduleLabel, setupConnectorRows, showLaunchAgentWarning, sourceRows,
-  SYNC_OPTIONS_COPY, syncOptionsValue, syncOptionsView, type IntakeConnector, type IntakeFinished, type IntakeScheduleKind, type SyncOptionsView,
+  adapterUpdateMessage, errorCode, finishedMessage, normalizeAdapterUpdate, loadErrorText, INTAKE_CONNECTORS, INTAKE_COPY, intakeCodeLabel, isQuietRun, needsTtobakLogin, SCHEDULE_OPTIONS,
+  optionsSaveErrorText, savedOptions, scheduleFromForm, scheduleLabel, SETUP_SKIP_CONNECTORS, setupConnectorRows, showLaunchAgentWarning, sourceRows,
+  SYNC_OPTIONS_COPY, syncOptionsValue, syncOptionsView, type IntakeFinished, type IntakeScheduleKind, type SetupSkipConnector, type SyncOptionsView,
 } from '@/lib/intake';
 import {
   cancelIntake, checkIntakeAdapter, isTauri, runIntakeLogin, runIntakeNow, runIntakeSetup, setIntakeNodePath,
@@ -29,7 +29,10 @@ function formatTime(iso: string | null): string {
 export function IntakeSettings() {
   const [message, setMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const onFinished = useCallback((finished: IntakeFinished) => setMessage(finishedMessage(finished) || null), []);
+  // A Slack links call reports only that it released the run slot; it is not a run result.
+  const onFinished = useCallback((finished: IntakeFinished) => {
+    if (finished.action !== 'links') setMessage(finishedMessage(finished) || null);
+  }, []);
   const { state, setState, progress, loadError, refresh, markStarted } = useIntake(onFinished);
   const refreshAfterSetup = useCallback(() => { void refresh(); }, [refresh]);
   const [busy, setBusy] = useState(false);
@@ -37,7 +40,7 @@ export function IntakeSettings() {
   const [form, setForm] = useState<{ kind: IntakeScheduleKind; first: string; second: string } | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [acceptPrivate, setAcceptPrivate] = useState(false);
-  const [skip, setSkip] = useState<IntakeConnector[]>([]);
+  const [skip, setSkip] = useState<SetupSkipConnector[]>([]);
   const [optionsForm, setOptionsForm] = useState<SyncOptionsView | null>(null);
 
   // Best effort, once the state is loaded: offline leaves updateAvailable null.
@@ -68,7 +71,7 @@ export function IntakeSettings() {
   const rows = sourceRows(state.status, state.selection);
   const setupRows = running ? [] : setupConnectorRows(state.lastResult);
   // Background commands without a progress log or cancel.
-  const quiet = state.running === 'scheduleOff' || state.running === 'options';
+  const quiet = isQuietRun(state.running);
   const syncOptions = optionsForm ?? syncOptionsView(state.options);
 
   const act = async (work: () => Promise<unknown>, after?: (value: unknown) => void, errorText = intakeCodeLabel) => {
@@ -254,7 +257,7 @@ export function IntakeSettings() {
               <span>비공개 일정도 포함해 캘린더를 연결합니다.</span>
             </label>
             <div className="flex flex-wrap gap-2">
-              {INTAKE_CONNECTORS.map(({ connector, label }) => {
+              {SETUP_SKIP_CONNECTORS.map(({ connector, label }) => {
                 const skipped = skip.includes(connector);
                 return (
                   <button key={connector} type="button" aria-pressed={!skipped} className={buttonClass}

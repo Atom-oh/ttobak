@@ -656,6 +656,7 @@ async fn run_report(
         report.track(),
         REPORT_TIMEOUT,
         REPORT_KILL_GRACE,
+        intake_runner::MAX_STDOUT_LINE_BYTES,
         Some(cancel),
         on_line,
     )
@@ -857,6 +858,7 @@ pub async fn report_slack_channels_refresh(app: AppHandle) -> Result<Value, Stri
                 report.channels_track(),
                 SLACK_CHANNELS_TIMEOUT,
                 intake_runner::KILL_GRACE,
+                intake_runner::MAX_STDOUT_LINE_BYTES,
                 None,
                 |_| {},
             )

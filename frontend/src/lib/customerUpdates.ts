@@ -129,6 +129,10 @@ export const COPY = {
   'mac.links.note': 'Slack 글 본문은 Mac 밖으로 나가지 않고, 글에 포함된 공개 링크만 올라갑니다. 처음에는 최근 3일치만 가져옵니다.',
   'mac.links.updateApp': 'Mac 앱을 업데이트하면 Slack 채널을 선택할 수 있어요.',
   'mac.links.tooMany': '채널은 20개까지 선택할 수 있습니다.',
+  'mac.links.needSetup': '먼저 연동 설정에서 Slack을 연결해 주세요.',
+  'mac.links.capReached': '소스는 최대 30개까지 등록할 수 있어요. 저장된 채널만 표시합니다.',
+  'mac.links.narrowSearch': '검색어를 입력해 범위를 좁혀 주세요.',
+  'mac.links.search': '채널 검색',
   'intake.runNow': '지금 수집',
 } as const;
 

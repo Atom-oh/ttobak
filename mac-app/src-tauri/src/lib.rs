@@ -1039,6 +1039,8 @@ pub fn run() {
             setup_runner::setup_start,
             setup_runner::setup_get_state,
             intake_runner::intake_set_options,
+            intake_runner::intake_links_channels,
+            intake_runner::intake_links_select,
             report_runner::report_generate,
             report_runner::report_cancel,
             report_runner::report_get_state,
