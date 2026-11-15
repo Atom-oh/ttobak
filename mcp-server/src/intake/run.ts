@@ -11,9 +11,11 @@ import { CognitoAuth } from '../auth.js';
 import { AttendeeFacts, type MeetingsReader } from './attendees.js';
 import { CALENDAR_RESPONSES, CALENDAR_TOOL, DEFAULT_CALENDAR_RESPONSES, SCOPE_PATTERN, runCalendar, syncWindow, type CalendarCounts,
   type CalendarResponse } from './calendar.js';
-import { CONNECTOR_TOOLS, allowedToolNames, isTaskConnector, type ConnectorId, type TaskConnectorId } from './connectors.js';
+import { CONNECTOR_TOOLS, LINKS_TOOLS, allowedToolNames, isTaskConnector, type ConnectorId, type TaskConnectorId } from './connectors.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import { HOSTS, hostTtobakEndpoints, listHosts, parsePathList, resolveServer, type HostId } from './hosts.js';
+import { LINK_CHANNEL_ID, MAX_LABEL_CODE_POINTS, MAX_LINK_CHANNELS, collectLinks, dropCursors, listChannels,
+  readLinksSelection, selectChannels, type LinksSelection } from './links.js';
 import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
 import { SFDC_CONTACTS_TOOL, SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
@@ -41,6 +43,12 @@ export interface Selection {
     ownDomains?: string[] };
   /** The SA performance connector keeps its own source and ledger, like calendar. */
   sfdc?: ConnectorSelection & { sourceId: string };
+  /**
+   * The Slack links connector reuses the `slack` entry's host, server and PATH;
+   * this entry holds the chosen channels (`links.ts`). `disabled` is set by
+   * `intake setup` and cleared by selecting links again.
+   */
+  links?: LinksSelection & { disabled?: boolean };
   /**
    * Sync options (`intake options`), kept apart from the connector entries so a
    * choice made before a connector is selected is not lost. Absent fields (legacy)
@@ -72,6 +80,15 @@ export interface RunStatus {
     revisions?: Record<string, number | null>;
     scope?: string;
   };
+  /** Counts only: no channel, label or link ever enters the status file. */
+  links?: {
+    lastRunAt: string;
+    lastSuccessAt?: string;
+    result: 'ok' | IntakeCode;
+    dryRun: boolean;
+    counts?: LinksCounts;
+    scope?: string;
+  };
   /** The `sfdc-contacts` step; never any contact data. */
   sfdcContacts?: {
     lastRunAt: string;
@@ -81,6 +98,8 @@ export interface RunStatus {
     counts?: SfdcContactCounts;
   };
 }
+
+export interface LinksCounts { channels: number; links: number; uploaded: number }
 
 export interface IntakeEnvironment {
   home: string;
@@ -146,7 +165,9 @@ const USAGE = `Usage:
   ttobak-mcp intake sfdc [--dry-run] [--noninteractive] [--reconcile]
   ttobak-mcp intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <connector>]...
     [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
-  ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc]
+  ttobak-mcp intake run [--dry-run] [--noninteractive] [--only calendar,sfdc,links]
+  ttobak-mcp intake links channels
+  ttobak-mcp intake links select [--channel <id>=<label>]... [--noninteractive]
   ttobak-mcp intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake login
@@ -286,6 +307,17 @@ export async function selectConnector(connector: ConnectorId, request: SelectReq
   // The approved PATH is the one of the terminal running this command; it is
   // stored because background runs get a minimal environment.
   const pathDirs = parsePathList(environment.env.PATH);
+  if (connector === 'links') {
+    // Only verifies the two read tools. The channels are chosen by `intake links select`, never here.
+    const session = await openSession(environment, host, server, pathDirs, LINKS_TOOLS);
+    await session.close();
+    const stored = store.read<Selection>('selection.json');
+    if (stored?.links?.disabled) {
+      const { disabled: _disabled, ...links } = stored.links;
+      store.write({ ...stored, links }, 'selection.json');
+    }
+    return { ok: true, connector, host, server, pathDirectories: pathDirs.length };
+  }
   const session = await openSession(environment, host, server, pathDirs,
     connector === 'calendar' ? [CALENDAR_TOOL] : SFDC_TOOLS);
   await session.close();
@@ -607,7 +639,119 @@ async function sfdcContactsStep(store: IntakeStore, source: SfdcSource, api: Tto
   return step;
 }
 
-export const SYNC_CONNECTORS = ['calendar', 'sfdc'] as const;
+/** Links are collected only through an enabled Slack selection that setup has not disabled for links. */
+function linksEnabled(selection: Selection | null | undefined): boolean {
+  return enabled(selection?.slack) !== undefined && selection?.links?.disabled !== true;
+}
+
+function hasLinkChannels(selection: Selection | null | undefined): boolean {
+  return Array.isArray(selection?.links?.channels) && selection!.links!.channels.length > 0;
+}
+
+/**
+ * One links run; returns the result object it would print: counts only, never
+ * a channel ID, label or link. With no selected channel it opens no session and
+ * never signs in. When channels fail, `result` is their shared code if every
+ * channel failed alike, else `PARTIAL_FAILURE`; per-channel codes stay in memory.
+ */
+export async function linksRun(options: ConnectorRunOptions, environment: IntakeEnvironment, store: IntakeStore,
+  signedIn?: SignInOnce) {
+  const { dryRun } = options;
+  const selection = store.read<Selection>('selection.json');
+  if (!hasLinkChannels(selection)) {
+    return { ok: true, connector: 'links', dryRun, result: 'ok' as 'ok' | IntakeCode, channels: 0, links: 0, uploaded: 0 };
+  }
+  const slack = enabled(selection!.slack);
+  if (!slack || !linksEnabled(selection)) throw new IntakeError('NOT_SELECTED', 'run "intake setup" first');
+  const release = store.lock('links');
+  const startedAt = environment.now();
+  let session: McpSession | undefined;
+  // Re-read right before each write: another connector may have updated its own entry meanwhile.
+  const writeStatus = (entry: NonNullable<RunStatus['links']>) => {
+    const status = store.read<RunStatus>('status.json') ?? {};
+    store.write({ ...status, links: entry }, 'status.json');
+  };
+  let previous: RunStatus['links'];
+  try {
+    previous = store.read<RunStatus>('status.json')?.links;
+    let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
+    if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
+    session = await openSession(environment, slack.host, slack.server, slack.pathDirs, LINKS_TOOLS);
+    // A failed channel may have closed the session (for example a reply over the
+    // client's size limit): the next channel gets a fresh one.
+    const reopen = async () => {
+      const old = session;
+      session = undefined;
+      await old?.close();
+      session = await openSession(environment, slack.host, slack.server, slack.pathDirs, LINKS_TOOLS);
+      return session;
+    };
+    const collected = await collectLinks({ store, session, now: startedAt, dryRun, reopen, ...(api ? { api } : {}),
+      ...(scope ? { scope } : {}) });
+    const counts: LinksCounts = { channels: collected.channels.length,
+      links: collected.channels.reduce((sum, channel) => sum + channel.links, 0),
+      uploaded: collected.channels.reduce((sum, channel) => sum + channel.uploaded, 0) };
+    const failures = [...new Set(collected.channels.filter(channel => channel.result !== 'ok').map(channel => channel.result))];
+    const failedAll = failures.length > 0 && collected.channels.every(channel => channel.result !== 'ok');
+    const result: 'ok' | IntakeCode = failures.length === 0 ? 'ok'
+      : failedAll && failures.length === 1 ? failures[0] as IntakeCode : 'PARTIAL_FAILURE';
+    const lastSuccessAt = result === 'ok' && !dryRun ? startedAt.toISOString() : previous?.lastSuccessAt;
+    writeStatus({ lastRunAt: startedAt.toISOString(), result, dryRun, counts, ...(scope ? { scope } : {}),
+      ...(lastSuccessAt ? { lastSuccessAt } : {}) });
+    return { ok: true, connector: 'links', dryRun, result, ...counts };
+  } catch (error) {
+    const entry: NonNullable<RunStatus['links']> = { ...(previous ?? {}), lastRunAt: startedAt.toISOString(),
+      result: intakeCode(error), dryRun };
+    delete entry.counts;
+    try { writeStatus(entry); } catch { /* the original error matters more */ }
+    throw error;
+  } finally {
+    await session?.close();
+    release();
+  }
+}
+
+/** `--channel <id>=<label>`: split on the first `=`; a label with another `=` is rejected, as the Mac app does. */
+function parseChannelChoice(value: string): { id: string; label: string } {
+  const at = value.indexOf('=');
+  const id = at < 0 ? '' : value.slice(0, at);
+  const label = at < 0 ? '' : value.slice(at + 1).trim();
+  if (!LINK_CHANNEL_ID.test(id) || label === '' || label.includes('=') || [...label].length > MAX_LABEL_CODE_POINTS) {
+    throw new IntakeError('INVALID_ARGUMENT',
+      `--channel takes <id>=<label> with a label of 1-${MAX_LABEL_CODE_POINTS} characters and no "="`);
+  }
+  return { id, label };
+}
+
+/** `intake links channels|select`: the local interface of the Mac app; channel IDs go to stdout only. */
+async function linksCommand(args: string[], environment: IntakeEnvironment, store: IntakeStore) {
+  const [sub, ...rest] = args;
+  if (sub === 'channels') {
+    flags(rest, {});
+    const slack = enabled(store.read<Selection>('selection.json')?.slack);
+    if (!slack) throw new IntakeError('NOT_SELECTED', 'run "intake setup" first');
+    const session = await openSession(environment, slack.host, slack.server, slack.pathDirs, LINKS_TOOLS);
+    try { return { ok: true, channels: await listChannels(session) }; } finally { await session.close(); }
+  }
+  if (sub !== 'select') throw new IntakeError('INVALID_ARGUMENT', 'links takes channels or select');
+  const given = flags(rest, { '--channel': 'list', '--noninteractive': 'flag' });
+  const choices = ((given['--channel'] as string[] | undefined) ?? []).map(parseChannelChoice);
+  if (choices.length > MAX_LINK_CHANNELS) throw new IntakeError('INVALID_ARGUMENT', `at most ${MAX_LINK_CHANNELS} channels can be selected`);
+  if (new Set(choices.map(choice => choice.id)).size !== choices.length) throw new IntakeError('INVALID_ARGUMENT', 'a channel is repeated');
+  const current = readLinksSelection(store);
+  if (!choices.length && !current.channels.length && !current.pendingCleanup.length) {
+    // Nothing to change in TTOBAK, but a cursor left by an earlier selection still goes.
+    dropCursors(store, new Set());
+    return { ok: true, channels: [] };
+  }
+  const { api } = await signIn(store.read<Selection>('selection.json'), environment, false, given['--noninteractive'] === true);
+  const result = await selectChannels(store, api!, choices, environment.now());
+  // A count only: which channels kept their old label stays local.
+  return { ok: true, channels: result.channels.map(channel => ({ id: channel.id, label: channel.label })),
+    ...(result.relabelFailed.length ? { relabelFailed: result.relabelFailed.length } : {}) };
+}
+
+export const SYNC_CONNECTORS = ['calendar', 'sfdc', 'links'] as const;
 export type SyncConnectorId = typeof SYNC_CONNECTORS[number];
 export interface RunOutput {
   ok: boolean;
@@ -624,18 +768,25 @@ export interface RunOutput {
 export async function runConnectors(options: { dryRun: boolean; noninteractive: boolean; only?: readonly SyncConnectorId[] },
   environment: IntakeEnvironment, store: IntakeStore): Promise<RunOutput> {
   const selection = store.read<Selection>('selection.json');
-  const wanted = options.only ?? SYNC_CONNECTORS.filter(id => enabled(selection?.[id]));
-  const missing = wanted.find(id => !enabled(selection?.[id]));
-  if (!wanted.length || missing) throw new IntakeError('NOT_SELECTED', `run "intake select ${missing ?? 'calendar'}" or "intake setup" first`);
+  // Links need Slack plus at least one channel; an explicit `--only links` without channels succeeds with nothing to do.
+  const selectedNow = (id: SyncConnectorId) => id === 'links' ? linksEnabled(selection) && hasLinkChannels(selection)
+    : enabled(selection?.[id]) !== undefined;
+  const wanted = options.only ?? SYNC_CONNECTORS.filter(selectedNow);
+  const missing = wanted.find(id => id === 'links' ? hasLinkChannels(selection) && !linksEnabled(selection) : !selectedNow(id));
+  if (!wanted.length || missing) throw new IntakeError('NOT_SELECTED', missing === 'links' ? 'run "intake setup" first'
+    : `run "intake select ${missing ?? 'calendar'}" or "intake setup" first`);
   let pending: Promise<SignedIn> | undefined;
   const signedIn = () => (pending ??= signIn(selection, environment, options.dryRun, options.noninteractive));
   const results: RunOutput['results'] = {};
   let code: IntakeCode | undefined;
   for (const id of SYNC_CONNECTORS.filter(item => wanted.includes(item))) {
     try {
-      const run = id === 'calendar' ? calendarRun(options, environment, store, signedIn) : sfdcRun(options, environment, store, signedIn);
+      const run = id === 'calendar' ? calendarRun(options, environment, store, signedIn)
+        : id === 'sfdc' ? sfdcRun(options, environment, store, signedIn) : linksRun(options, environment, store, signedIn);
       const { ok: _ok, connector: _connector, dryRun: _dryRun, ...rest } = await run;
       results[id] = { result: 'ok', ...rest };
+      // A links run reports channel failures in its result instead of throwing, so its counts survive.
+      if (id === 'links' && results[id]!.result !== 'ok') code ??= 'PARTIAL_FAILURE';
       // The task step shares Midway: its expiry stops the run although the calendar itself succeeded.
       const tasks = 'tasks' in rest ? rest.tasks : undefined;
       if (tasks && (tasks.result === 'AUTH_EXPIRED_MIDWAY' || Object.values(tasks.failures ?? {}).includes('AUTH_EXPIRED_MIDWAY'))) {
@@ -662,7 +813,7 @@ async function run(args: string[], environment: IntakeEnvironment, store: Intake
   let only: SyncConnectorId[] | undefined;
   if (typeof options['--only'] === 'string') {
     only = [...new Set(options['--only'].split(','))] as SyncConnectorId[];
-    if (only.some(id => !SYNC_CONNECTORS.includes(id))) throw new IntakeError('INVALID_ARGUMENT', '--only takes calendar and/or sfdc');
+    if (only.some(id => !SYNC_CONNECTORS.includes(id))) throw new IntakeError('INVALID_ARGUMENT', '--only takes calendar, sfdc and/or links');
   }
   return runConnectors({ dryRun: options['--dry-run'] === true, noninteractive: options['--noninteractive'] === true,
     ...(only ? { only } : {}) }, environment, store);
@@ -719,6 +870,10 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
     } else if (command === 'select') output = await withRunLock(store, () => select(rest, environment, store));
     else if (command === 'calendar') output = await withRunLock(store, () => calendar(rest, environment, store));
     else if (command === 'sfdc') output = await withRunLock(store, () => sfdc(rest, environment, store));
+    else if (command === 'links') {
+      output = rest[0] === 'select' ? await withRunLock(store, () => linksCommand(rest, environment, store))
+        : await linksCommand(rest, environment, store);
+    }
     else if (command === 'options') output = await withRunLock(store, async () => options(rest, store));
     else if (command === 'login' && rest.length === 0) {
       const { email } = await login(environment, store);
@@ -739,7 +894,11 @@ export async function runIntake(args: string[], environment: IntakeEnvironment):
         const entry = selection?.[id];
         if (entry) listed[id] = { host: entry.host, server: entry.server, ...(entry.disabled ? { disabled: true } : {}) };
       }
-      output = { ok: true, selection: listed,
+      // Links: enabled or not and the channel count, never a channel ID or label.
+      const links = selection?.slack || selection?.links
+        ? { enabled: linksEnabled(selection), channels: Array.isArray(selection?.links?.channels) ? selection!.links!.channels.length : 0 }
+        : undefined;
+      output = { ok: true, selection: { ...listed, ...(links ? { links } : {}) },
         status: store.read<RunStatus>('status.json') ?? {} };
     } else {
       environment.stdout(USAGE);

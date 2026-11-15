@@ -18,6 +18,12 @@
 // get_meeting result JSON). Slack: FAKE_WORK_SLACK_USER, FAKE_WORK_SLACK_CHANNEL,
 // FAKE_WORK_DRAFTS (list_drafts `drafts`). FAKE_WORK_TAM_AUTH=1 makes
 // check_user_is_tam fail like an expired Midway session.
+//
+// Links knobs: FAKE_WORK_MODE=no-get-messages drops most get_messages arguments,
+// FAKE_WORK_CHANNELS (list_my_channels result JSON) and FAKE_WORK_MESSAGES
+// (channel ID -> get_messages result JSON, or the string "error" for a tool error, "auth" for an expired Midway session,
+// "crash" to exit mid-call). Results
+// follow the real shape: {channel, messages (newest first), hasMore, nextCursor}.
 import { appendFileSync, readFileSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -36,6 +42,8 @@ const schemas = {
   list_drafts: [],
   post_draft: mode === 'no-text' ? ['channel'] : ['channel', 'text'],
   post_message: ['channel', 'text'],
+  list_my_channels: ['excludeArchived', 'compactOutput'],
+  get_messages: mode === 'no-get-messages' ? ['channel', 'since'] : ['channel', 'since', 'until', 'limit', 'cursor', 'includeThreadReplies'],
 };
 const server = new Server({ name: 'fake-work', version: '1' }, { capabilities: { tools: {} } });
 
@@ -124,6 +132,25 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       return json({ ok: true });
     case 'acknowledge_request':
       return ack(args);
+    case 'list_my_channels':
+      return json(env('FAKE_WORK_CHANNELS', '{"sections":[]}'));
+    case 'get_messages': {
+      const result = env('FAKE_WORK_MESSAGES', '{}')[args.channel];
+      // Like a reply too large for the client: the session dies mid-call.
+      if (result === 'crash') process.exit(1);
+      if (result === 'auth') {
+        process.stderr.write('Midway cookie expired; run mwinit\n');
+        return { isError: true, content: [{ type: 'text', text: 'Authentication failed: run mwinit -o' }] };
+      }
+      if (result === undefined || result === 'error') {
+        return { isError: true, content: [{ type: 'text', text: 'channel_not_found' }] };
+      }
+      // Like the real server: every message `text` is datamarked (each whitespace
+      // becomes U+E000) and wrapped in a <slack-user-content> tag.
+      const messages = (result.messages ?? []).map(message => typeof message.text !== 'string' ? message : {
+        ...message, text: `<slack-user-content ts="1794619610.336109">\n${message.text.replace(/\s/g, '\uE000')}\n</slack-user-content>` });
+      return json({ channel: { id: args.channel, name: 'fixture' }, hasMore: false, nextCursor: '', ...result, messages });
+    }
     default:
       return { content: [{ type: 'text', text: '{}' }] };
   }

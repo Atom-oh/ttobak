@@ -313,6 +313,17 @@ export interface TeamSyncBody { items: { userId: string; team: string; expected:
 export interface TeamSyncResult {
   updated: string[]; unchanged: number; conflicts: string[]; rejected: { userId: string; code: string }[];
 }
+/** Customer update sources and Slack link uploads (local intake `links` connector). */
+export interface CustomerUpdateSourceBody { kind: 'slack'; label: string; localSourceId: string }
+export interface CustomerUpdateLinksBody { sourceId: string; links: { url: string; seenAt: string }[] }
+export interface CustomerUpdateLinksResult { accepted: number; duplicate: number; rejected: number }
+/** Backend `model.MaxUpdateLinksPerUpload`. */
+export const MAX_CUSTOMER_UPDATE_LINKS = 200;
+/** Backend `customerUpdateLinksMaxBytes`. */
+const MAX_CUSTOMER_UPDATE_LINKS_BODY_BYTES = 512 * 1024;
+/** At most 30 sources (`model.MaxUpdateSources`), each with a short label, URL and feed error. */
+const MAX_CUSTOMER_UPDATE_SOURCES_BYTES = 256 * 1024;
+const MAX_CUSTOMER_UPDATE_RESULT_BYTES = 16 * 1024;
 const MAX_TEAM_SYNC_ITEMS = 200;
 const MAX_TEAM_SYNC_BODY_BYTES = 64 * 1024;
 const MAX_TEAM_SYNC_RESPONSE_BYTES = 64 * 1024;
@@ -347,6 +358,35 @@ export class TtobakApi {
     if (body.items.length > MAX_TEAM_SYNC_ITEMS) throw new Error(`team sync is limited to ${MAX_TEAM_SYNC_ITEMS} items`);
     if (Buffer.byteLength(JSON.stringify(body)) > MAX_TEAM_SYNC_BODY_BYTES) throw new Error('team sync body exceeds 64 KiB');
     return await this.request('POST', '/api/settings/users/team-sync', body, MAX_TEAM_SYNC_RESPONSE_BYTES, false, true) as TeamSyncResult;
+  }
+
+  /** The caller's customer update sources: `{sources: [...]}`. */
+  async listCustomerUpdateSources() {
+    return this.request('GET', '/api/customer-updates/sources', undefined, MAX_CUSTOMER_UPDATE_SOURCES_BYTES, false, true);
+  }
+
+  /** Registers one Slack source; the cloud row holds only the label and the opaque local ID. */
+  async addCustomerUpdateSource(body: CustomerUpdateSourceBody) {
+    return this.request('POST', '/api/customer-updates/sources', body, MAX_CUSTOMER_UPDATE_RESULT_BYTES, false, true);
+  }
+
+  /** Changes a source's label (`PatchUpdateSourceRequest`); returns `{status: "updated"}`. */
+  async patchCustomerUpdateSource(sourceId: string, body: { label: string }) {
+    return this.request('PATCH', `/api/customer-updates/sources/${identifier(sourceId, 'sourceId')}`, { label: body.label },
+      MAX_CUSTOMER_UPDATE_RESULT_BYTES, false, true);
+  }
+
+  async deleteCustomerUpdateSource(sourceId: string) {
+    return this.request('DELETE', `/api/customer-updates/sources/${identifier(sourceId, 'sourceId')}`, undefined,
+      MAX_CUSTOMER_UPDATE_RESULT_BYTES, false, true);
+  }
+
+  /** Uploads at most 200 links of one Slack source; refused client-side above the server limits. */
+  async uploadCustomerUpdateLinks(body: CustomerUpdateLinksBody): Promise<CustomerUpdateLinksResult> {
+    if (body.links.length > MAX_CUSTOMER_UPDATE_LINKS) throw new Error(`link upload is limited to ${MAX_CUSTOMER_UPDATE_LINKS} links`);
+    if (Buffer.byteLength(JSON.stringify(body)) > MAX_CUSTOMER_UPDATE_LINKS_BODY_BYTES) throw new Error('link upload body exceeds 512 KiB');
+    return await this.request('POST', '/api/customer-updates/links', body, MAX_CUSTOMER_UPDATE_RESULT_BYTES, false, true) as
+      CustomerUpdateLinksResult;
   }
 
   /** The owner's per-source performance sync revisions. */
