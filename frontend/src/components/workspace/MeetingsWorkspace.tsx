@@ -214,6 +214,8 @@ function MeetingsContent({ userId }: { userId: string }) {
                 accountsError={accountList.error} onRetryAccounts={accountList.retry}
                 hasMore={Boolean(nextCursor)} error={error} onRetry={retry}
                 onDeleteMeeting={meetingId => setMeetings(previous => previous.filter(meeting => meeting.meetingId !== meetingId))}
+                onMeetingAccountLinked={(meetingId, accountId) => setMeetings(previous => previous.map(meeting => (
+                  meeting.meetingId === meetingId ? { ...meeting, accountId, meetingCategory: undefined } : meeting)))}
               />
             </Suspense>
             {nextCursor && !isFetching && (

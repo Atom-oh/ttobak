@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { AccountTreePicker } from '@/components/AccountTreePicker';
-import { MeetingRow } from '@/components/workspace/MeetingRow';
+import { MeetingRow, type AccountAssignOption, type MeetingRowAssign } from '@/components/workspace/MeetingRow';
+import { isEditableAccount } from '@/lib/accountAccess';
+import { buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
 import {
   groupMeetingRows, meetingDateBoundary, meetingPreview, meetingStatusLabels, selectMeetingRows,
   type MeetingViewOptions,
@@ -30,6 +32,14 @@ interface MeetingListProps {
   error: string | null;
   onRetry: () => void;
   onDeleteMeeting?: (meetingId: string) => void;
+  /** Called after an unassigned meeting is linked (without team sharing) to an account. */
+  onMeetingAccountLinked?: (meetingId: string, accountId: string) => void;
+}
+
+interface AssignContext {
+  options: AccountAssignOption[];
+  loading: boolean;
+  onLinked?: MeetingListProps['onMeetingAccountLinked'];
 }
 
 const tabs: { key: MeetingListFilter['tab']; label: string }[] = [
@@ -44,7 +54,7 @@ const actionClass = 'rounded px-2 py-1 text-xs font-medium text-primary focus-vi
 export function MeetingList({
   meetings, isLoading, activeTab, onTabChange, selectedAccountIds, onAccountChange,
   accounts, isLoadingAccounts, accountsError, onRetryAccounts, hasMore, error,
-  onRetry, onDeleteMeeting,
+  onRetry, onDeleteMeeting, onMeetingAccountLinked,
 }: MeetingListProps) {
   const pathname = usePathname();
   const urlQuery = useSearchParams().get('q') ?? '';
@@ -67,6 +77,11 @@ export function MeetingList({
 
   const loadedMeetings = useMemo(() => Array.from(new Map(meetings.map(meeting => [meeting.meetingId, meeting])).values()), [meetings]);
   const accountNames = useMemo(() => new Map(accounts.map(account => [account.accountId, account.name])), [accounts]);
+  // Only direct, writable memberships can classify a meeting; tree order and paths disambiguate same-named children.
+  const assignOptions = useMemo(() => flattenAccountTree(buildAccountTree(accounts))
+    .filter(row => isEditableAccount(row.node))
+    .map(row => ({ accountId: row.node.accountId, label: row.path })), [accounts]);
+  const assignContext: AssignContext = { options: assignOptions, loading: isLoadingAccounts && accounts.length === 0, onLinked: onMeetingAccountLinked };
   const allTags = useMemo(() => {
     const tagSet = new Set(selectedTags);
     loadedMeetings.forEach(meeting => meeting.tags?.forEach(tag => tagSet.add(tag)));
@@ -241,7 +256,7 @@ export function MeetingList({
       <div className="space-y-4">
         {customerGroups.map(group => (
           renderMeetingGroup({ key: group.accountId ?? 'unassigned', label: grouped ? accountName(group.accountId) : '전체 미팅',
-            icon: 'business', showHeader: grouped, meetings: group.meetings, meetingContext, onDeleteMeeting })
+            icon: 'business', showHeader: grouped, meetings: group.meetings, meetingContext, onDeleteMeeting, assignContext })
         ))}
         {internalGroups.length > 0 && (
           <section aria-label={INTERNAL_GROUP_LABEL} className="space-y-3 rounded-xl border border-border-subtle bg-surface p-3">
@@ -256,7 +271,7 @@ export function MeetingList({
               renderMeetingGroup({ key: group.category!, label: internalCategoryLabel(group.category!),
                 ariaLabel: `${INTERNAL_GROUP_LABEL} ${internalCategoryLabel(group.category!)}`,
                 icon: group.category === 'internal_1on1' ? 'person' : 'groups', showHeader: true,
-                meetings: group.meetings, meetingContext, onDeleteMeeting })
+                meetings: group.meetings, meetingContext, onDeleteMeeting, assignContext })
             ))}
           </section>
         )}
@@ -294,8 +309,14 @@ export function MeetingList({
   );
 }
 
+/** Own customer meetings with no account and no internal category may be assigned from the list. */
+export function canAssignMeetingAccount(meeting: Meeting, context: AssignContext): boolean {
+  return !!context.onLinked && !meeting.isShared && !meeting.accountId && !meetingInternalCategory(meeting)
+    && (context.loading || context.options.length > 0);
+}
+
 // A plain render helper (not a component) keeps rows in the list's element tree.
-function renderMeetingGroup({ key, label, ariaLabel, icon, showHeader, meetings, meetingContext, onDeleteMeeting }: {
+function renderMeetingGroup({ key, label, ariaLabel, icon, showHeader, meetings, meetingContext, onDeleteMeeting, assignContext }: {
   key: string;
   label: string;
   ariaLabel?: string;
@@ -304,7 +325,14 @@ function renderMeetingGroup({ key, label, ariaLabel, icon, showHeader, meetings,
   meetings: Meeting[];
   meetingContext: (meeting: Meeting) => string;
   onDeleteMeeting: MeetingListProps['onDeleteMeeting'];
+  assignContext: AssignContext;
 }) {
+  // Reserve the picker column for the whole group so headers and rows stay aligned.
+  const slot = meetings.some(meeting => canAssignMeetingAccount(meeting, assignContext));
+  const rowAssign = (meeting: Meeting): MeetingRowAssign | undefined => !slot ? undefined
+    : canAssignMeetingAccount(meeting, assignContext)
+      ? { slot, options: assignContext.options, loading: assignContext.loading, onLinked: assignContext.onLinked }
+      : { slot };
   return (
     <section key={key} aria-label={ariaLabel ?? label} className="overflow-hidden rounded-xl border border-border-subtle bg-surface-lowest">
       {showHeader && (
@@ -314,13 +342,13 @@ function renderMeetingGroup({ key, label, ariaLabel, icon, showHeader, meetings,
           <span className="shrink-0 text-[10px] text-text-secondary">{meetings.length}개 표시</span>
         </div>
       )}
-      <div aria-hidden="true" className="hidden grid-cols-[minmax(0,1fr)_7.5rem_5.5rem_3.5rem_2rem] gap-x-3 border-b border-border-subtle px-5 py-2 text-[10px] text-text-secondary md:grid">
-        <span>미팅 · 핵심 내용</span><span>미팅 일시</span><span>상태</span><span>녹음 시간</span><span />
+      <div aria-hidden="true" className={`hidden ${slot ? 'grid-cols-[minmax(0,1fr)_7.5rem_5.5rem_3.5rem_9rem_2rem]' : 'grid-cols-[minmax(0,1fr)_7.5rem_5.5rem_3.5rem_2rem]'} gap-x-3 border-b border-border-subtle px-5 py-2 text-[10px] text-text-secondary md:grid`}>
+        <span>미팅 · 핵심 내용</span><span>미팅 일시</span><span>상태</span><span>녹음 시간</span>{slot && <span>고객 지정</span>}<span />
       </div>
       <ul>
         {meetings.map(meeting => (
           <MeetingRow key={meeting.meetingId} meeting={meeting} accountName={meetingContext(meeting)}
-            preview={meetingPreview(meeting.summary ?? '')} onDelete={onDeleteMeeting} />
+            preview={meetingPreview(meeting.summary ?? '')} onDelete={onDeleteMeeting} assign={rowAssign(meeting)} />
         ))}
       </ul>
     </section>

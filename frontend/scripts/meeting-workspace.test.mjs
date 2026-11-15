@@ -26,7 +26,13 @@ function loadWorkspace(query = '', hooks = {}, environment = {}) {
       usePathname: () => currentUrl.pathname,
       ...environment.navigation,
     },
-    '@/lib/api': { meetingsApi: { delete: async () => {} } },
+    '@/lib/api': {
+      ApiError: class ApiError extends Error {
+        constructor(status, code, message) { super(message); this.status = status; this.code = code; }
+      },
+      meetingAccountApi: { link: async () => ({}) },
+      meetingsApi: { delete: async () => {} },
+    },
   };
   function load(path) {
     if (path in dependencies) return dependencies[path];
@@ -529,6 +535,50 @@ test('rows render previews as text, keep one detail link, and restrict shared de
   const shared = renderRow({ isShared: true, ownerUserId: 'someone-else' });
   assert.doesNotMatch(shared, /미팅 삭제/);
   assert.match(shared, /공유/);
+});
+
+const assignAccounts = [
+  { accountId: 'parent', name: '모회사', role: 'owner' },
+  { accountId: 'child', name: '자회사', role: 'member', parentAccountId: 'parent' },
+  { accountId: 'readonly', name: '읽기전용', role: 'member', accessPermission: 'read' },
+  { accountId: 'inherited', name: '상속', role: 'member', inheritedFromAccountId: 'parent' },
+];
+
+test('unassigned own meetings show a customer picker limited to writable direct accounts', () => {
+  const html = renderList({
+    accounts: assignAccounts, onMeetingAccountLinked() {},
+    meetings: [meeting('own'), meeting('shared', undefined, { isShared: true, ownerUserId: 'other' }),
+      meeting('linked', undefined, { accountId: 'parent' }), meeting('internal', undefined, { meetingCategory: 'internal_team' })],
+  });
+  assert.match(html, /aria-label="미팅 own 고객 지정"/);
+  assert.doesNotMatch(html, /미팅 shared 고객 지정|미팅 linked 고객 지정|미팅 internal 고객 지정/);
+  assert.match(html, /<option value="parent">모회사<\/option>/);
+  assert.match(html, /<option value="child">모회사 \/ 자회사<\/option>/);
+  assert.doesNotMatch(html, /value="readonly"|value="inherited"/);
+  // The unassigned group reserves the header column; the linked group does not.
+  assert.equal((html.match(/<span>고객 지정<\/span>/g) || []).length, 1);
+});
+
+test('the customer picker is absent without a link handler or writable accounts and waits while loading', () => {
+  const rows = [meeting('own')];
+  assert.doesNotMatch(renderList({ accounts: assignAccounts, meetings: rows }), /고객 지정/);
+  assert.doesNotMatch(renderList({ accounts: assignAccounts.slice(2), meetings: rows, onMeetingAccountLinked() {} }), /고객 지정/);
+  const loading = renderList({ accounts: [], isLoadingAccounts: true, meetings: rows, onMeetingAccountLinked() {} });
+  assert.match(loading, /<select[^>]*disabled=""[^>]*aria-label="미팅 own 고객 지정"/);
+  assert.match(loading, /고객 불러오는 중…/);
+});
+
+test('assigning a customer links without sharing and maps failures to row messages', async () => {
+  const load = loadWorkspace();
+  const { ApiError } = load('@/lib/api');
+  const { assignMeetingAccount } = load('@/components/workspace/MeetingRow');
+  const calls = [];
+  assert.equal(await assignMeetingAccount('m1', 'acct', async (...args) => { calls.push(args); }), null);
+  assert.deepEqual(calls, [['m1', 'acct']]);
+  const fail = error => assignMeetingAccount('m1', 'acct', async () => { throw error; });
+  assert.match(await fail(new ApiError(403, 'FORBIDDEN', 'no')), /권한이 없습니다/);
+  assert.match(await fail(new ApiError(409, 'CONFLICT', 'changed')), /새로고침/);
+  assert.match(await fail(new Error('network')), /고객 연결에 실패했습니다/);
 });
 
 test('loaded-result scope includes deduplicated count and remains visible on empty matches', () => {

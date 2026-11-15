@@ -2,21 +2,60 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { meetingsApi } from '@/lib/api';
+import { ApiError, meetingAccountApi, meetingsApi } from '@/lib/api';
 import { confirmDialog } from '@/lib/dialog';
 import { meetingStatusLabels } from '@/lib/meetingWorkspace';
 import type { Meeting } from '@/types/meeting';
+
+export interface AccountAssignOption {
+  accountId: string;
+  label: string;
+}
+
+/** Customer picker state for one row; `slot` reserves the column even when this row cannot assign. */
+export interface MeetingRowAssign {
+  slot: boolean;
+  options?: AccountAssignOption[];
+  loading?: boolean;
+  onLinked?: (meetingId: string, accountId: string) => void;
+}
 
 export interface MeetingRowProps {
   meeting: Meeting;
   accountName: string;
   preview: string;
   onDelete?: (meetingId: string) => void;
+  assign?: MeetingRowAssign;
 }
 
-export function MeetingRow({ meeting, accountName, preview, onDelete }: MeetingRowProps) {
+export function accountLinkFailureMessage(failure: unknown): string {
+  if (failure instanceof ApiError) {
+    if (failure.status === 403) return '이 고객에 미팅을 연결할 권한이 없습니다.';
+    if (failure.status === 404) return '미팅을 찾을 수 없습니다. 목록을 새로고침해 주세요.';
+    if (failure.status === 409) return '미팅 또는 고객 정보가 변경되었습니다. 새로고침 후 다시 시도해 주세요.';
+  }
+  return '고객 연결에 실패했습니다. 다시 시도해 주세요.';
+}
+
+/** Links (classifies) the meeting under an account without team sharing; returns a failure message or null. */
+export async function assignMeetingAccount(
+  meetingId: string, accountId: string,
+  link: (meetingId: string, accountId: string) => Promise<unknown> = meetingAccountApi.link,
+): Promise<string | null> {
+  try {
+    await link(meetingId, accountId);
+    return null;
+  } catch (failure) {
+    return accountLinkFailureMessage(failure);
+  }
+}
+
+export function MeetingRow({ meeting, accountName, preview, onDelete, assign }: MeetingRowProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isLinking, setIsLinking] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const assignOptions = assign?.options ?? [];
   const date = new Date(meeting.date);
   const hasDate = Number.isFinite(date.getTime());
   const duration = meeting.duration != null && Number.isFinite(meeting.duration) && meeting.duration > 0
@@ -43,8 +82,18 @@ export function MeetingRow({ meeting, accountName, preview, onDelete }: MeetingR
     }
   };
 
+  const handleAssign = async (accountId: string) => {
+    if (!accountId || isLinking || !assign?.onLinked) return;
+    setIsLinking(true);
+    setLinkError(null);
+    const failure = await assignMeetingAccount(meeting.meetingId, accountId);
+    setIsLinking(false);
+    if (failure) setLinkError(failure);
+    else assign.onLinked(meeting.meetingId, accountId);
+  };
+
   return (
-    <li className="border-b border-border-subtle last:border-0" aria-busy={isDeleting}>
+    <li className="border-b border-border-subtle last:border-0" aria-busy={isDeleting || isLinking}>
       <div className={`flex items-center gap-3 px-3 py-3 hover:bg-surface md:px-5 ${isDeleting ? 'opacity-50' : ''}`}>
         <Link
           href={`/meeting/${meeting.meetingId}`}
@@ -77,6 +126,19 @@ export function MeetingRow({ meeting, accountName, preview, onDelete }: MeetingR
             <span className="sr-only">녹음 시간 </span>{duration}
           </span>
         </Link>
+        {assign?.slot && (
+          <div className="w-28 shrink-0 md:w-36">
+            {assign.onLinked && (assign.loading || assignOptions.length > 0) && (
+              <select value="" disabled={assign.loading || isLinking || isDeleting}
+                onChange={event => void handleAssign(event.target.value)}
+                aria-label={`${meeting.title} 고객 지정`} title="고객을 지정합니다. 팀 공유는 미팅 상세에서 별도로 합니다."
+                className="w-full min-w-0 truncate rounded-lg border border-border-subtle bg-surface-lowest px-2 py-1.5 text-[11px] text-text-secondary focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-wait disabled:opacity-60">
+                <option value="">{assign.loading ? '고객 불러오는 중…' : isLinking ? '연결 중…' : '고객 선택…'}</option>
+                {assignOptions.map(option => <option key={option.accountId} value={option.accountId}>{option.label}</option>)}
+              </select>
+            )}
+          </div>
+        )}
         <div className="w-8 shrink-0">
           {!meeting.isShared && (
             <button type="button" onClick={handleDelete} disabled={isDeleting} aria-label={`${meeting.title} 미팅 삭제`}
@@ -87,6 +149,7 @@ export function MeetingRow({ meeting, accountName, preview, onDelete }: MeetingR
         </div>
       </div>
       {deleteError && <p role="alert" className="px-4 pb-3 text-xs text-error">{deleteError}</p>}
+      {linkError && <p role="alert" className="px-4 pb-3 text-xs text-error">{linkError}</p>}
     </li>
   );
 }
