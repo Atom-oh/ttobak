@@ -129,7 +129,17 @@ func TestLiveReplacements(t *testing.T) {
 			row("또박 노트", "또박-노트", true, 3),
 		}},
 		// A later layer cannot retarget a spoken form an earlier layer claimed.
-		{name: "common", rows: []model.DictTerm{row("Cloud Code", "Cloud-Code", true, 4, "클로드 코드", "클라우드 코드")}},
+		{name: "account:a1", rows: []model.DictTerm{row("Cloud Code", "Cloud-Code", true, 4, "클로드 코드", "클라우드 코드", "클라우드코드")}},
+		// Any signed-in user can edit a Common term: its spoken forms reach
+		// neither other users' captions nor their vocabulary (ADR-008 R17).
+		{name: model.DictLayerCommon, rows: []model.DictTerm{
+			row("Shared Term", "Shared-Term", true, 5, "셰어드 텀"),
+			row("Digits 9", "Digits-9", false, 6, "디지츠 나인"),
+		}},
+	}
+	if table, _ := RenderVocabularyTSV(layeredVocabularyEntries(layers, model.VocabLangKo)); strings.Contains(table, "셰어드") ||
+		strings.Contains(table, "디지츠") || !strings.Contains(table, "Shared-Term\t\t\tShared Term\n") || strings.Contains(table, "클라우드코드") {
+		t.Fatalf("Common spoken forms or a spacing-only duplicate reached the table:\n%s", table)
 	}
 	got := liveReplacements(layers)
 	want := []model.LiveReplacement{
