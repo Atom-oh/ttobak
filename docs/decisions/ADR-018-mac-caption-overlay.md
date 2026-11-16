@@ -45,10 +45,15 @@ target (`Any`) receives every emit. Each page therefore listens with a target sc
 to its own window (`{kind: 'WebviewWindow', label: 'caption-<lang>'}`), and both
 payloads carry `lang`; the page drops any payload for another language.
 
-**Speaker colours.** A push may carry a zero-based speaker number (the interpret
-screen's Transcribe Streaming label for a final segment, ADR-005). The window colours
-that line from a fixed six-colour set that repeats; the first voice keeps the colour
-chosen in the settings, so a single presenter looks as configured. Drafts and lines
+**Speaker colours.** A push may carry a zero-based speaker slot for a final segment.
+The window colours that line from a fixed six-colour set that repeats; slot 0 keeps
+the colour chosen in the settings. Transcribe Streaming numbers voices in the order
+it first hears them (ADR-005), so the page does not send its label as is: the speaker
+with the most remembered lines (`mainSpeaker`, kept until another leads by three
+lines) is sent as slot 0 and the speaker labelled 0 takes that speaker's number
+(`windowSpeakerSlot`), so the main speaker looks as configured. Lines already in a
+window keep the colour they were sent with when the main speaker changes; they are
+not re-sent. Drafts and lines
 with no number keep the chosen colour. Rust drops a number above 29 instead of
 rejecting the push, and a Mac app older than 0.2.2 ignores the field.
 

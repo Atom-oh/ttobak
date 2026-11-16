@@ -6,7 +6,7 @@ import {
   type TranslateResponse,
   type TranslationEntry,
 } from './liveTranslation';
-import { MAX_SPEAKER_ENTRIES, speakerNumber } from './interpretSpeakers';
+import { MAX_SPEAKER_ENTRIES, mainSpeaker, speakerNumber, windowSpeakerSlot } from './interpretSpeakers';
 
 // Bridge to the Mac app's floating caption windows. Nothing here runs unless
 // called, and caption text is never logged. Decision record: ADR-018 (Mac
@@ -239,6 +239,12 @@ export class CaptionOverlayController {
   private reported = new Set<string>();
   /** Speaker number by segment ID, in memory only; the oldest are dropped. */
   private speakers = new Map<string, number>();
+  /**
+   * The speaker with the most remembered lines; shown in the window's
+   * configured colour. Lines already in a window keep the colour they were
+   * sent with when this changes.
+   */
+  private main: number | undefined;
   private deps: ControllerDeps;
 
   constructor(deps: Partial<ControllerDeps> & Pick<ControllerDeps, 'onError'>) {
@@ -292,7 +298,9 @@ export class CaptionOverlayController {
     if (!entry.translated) return;
     // The window shows the end of a long sentence; the Mac app rejects longer text.
     const text = utf8Tail(entry.translated, MAX_PUSH_TEXT_BYTES);
-    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal, this.speakers.get(entry.id));
+    const speaker = this.speakers.get(entry.id);
+    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal,
+      speaker === undefined ? undefined : windowSpeakerSlot(speaker, this.main));
   }
 
   private send(
@@ -313,6 +321,9 @@ export class CaptionOverlayController {
       this.speakers.delete(id);
       this.speakers.set(id, number);
       if (this.speakers.size > MAX_SPEAKER_ENTRIES) this.speakers.delete(this.speakers.keys().next().value!);
+      const labels = Object.fromEntries([...this.speakers].map(([segment, label]) => [segment, String(label)]));
+      const main = mainSpeaker(labels, this.main === undefined ? undefined : String(this.main));
+      this.main = main === undefined ? undefined : Number(main);
     }
     for (const engine of this.engines.values()) engine.update(id, text, isFinal, detectedLanguage);
   }
@@ -334,5 +345,6 @@ export class CaptionOverlayController {
     for (const engine of this.engines.values()) engine.stop();
     this.engines.clear();
     this.speakers.clear();
+    this.main = undefined;
   }
 }

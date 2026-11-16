@@ -264,7 +264,8 @@ test('a final segment carries its speaker to the window; odd labels carry none',
   controller.setLanguages(['en']);
   controller.update('s1', '안녕하세요 여러분 반갑습니다', true, 'ko-KR', '1');
   await flush();
-  assert.equal(entryPushes(pushes, 'en').at(-1).speaker, 1);
+  // The only speaker so far is the main speaker: slot 0, the configured colour.
+  assert.equal(entryPushes(pushes, 'en').at(-1).speaker, 0);
   for (const [id, label] of [['s2', undefined], ['s3', 'spk_0'], ['s4', '30']]) {
     controller.update(id, '오늘 회의를 시작하겠습니다', true, 'ko-KR', label);
     await flush();
@@ -272,4 +273,24 @@ test('a final segment carries its speaker to the window; odd labels carry none',
     assert.equal(last.id, id);
     assert.equal('speaker' in last, false, String(label));
   }
+});
+
+test('the main speaker is pushed as slot 0 and trades slots with label 0', async () => {
+  const { controller, pushes } = fixture();
+  controller.setLanguages(['en']);
+  const say = async (id, label) => {
+    controller.update(id, '오늘 회의를 시작하겠습니다', true, 'ko-KR', label);
+    await flush();
+    return entryPushes(pushes, 'en').at(-1).speaker;
+  };
+  // Label 0 speaks first and is main; label 2 is a guest.
+  assert.equal(await say('a1', '0'), 0);
+  assert.equal(await say('b1', '2'), 2);
+  // Label 2 pulls ahead by the margin and becomes main: it takes slot 0 and
+  // label 0 takes label 2's slot. Lines already shown are not re-sent.
+  for (const id of ['b2', 'b3', 'b4']) await say(id, '2');
+  assert.equal(await say('b5', '2'), 0);
+  assert.equal(await say('a2', '0'), 2);
+  assert.equal(await say('c1', '4'), 4);
+  assert.equal(pushes.filter((push) => push.id === 'a1').length, 1, 'no re-send of earlier lines');
 });
