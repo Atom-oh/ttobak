@@ -405,6 +405,10 @@ export class SttManager {
       const segmentId = `${streamId}:${resultId ?? segmentIndex}`;
       // Spoken forms are Korean: other identified languages pass through.
       const text = replace && (!languageCode || languageCode.startsWith('ko')) ? replace(heard) : heard;
+      // Web Speech reports no language, and a rewritten caption may have no
+      // Hangul left: say it was Korean, or translation and the caption
+      // windows would infer English from the rewritten text.
+      if (text !== heard) languageCode ??= 'ko-KR';
       this.config.callbacks.onTranscript(text, isFinal);
       this.translation.update(segmentId, text, isFinal, languageCode);
       this.config.onSegment?.(segmentId, text, isFinal, languageCode, speaker);

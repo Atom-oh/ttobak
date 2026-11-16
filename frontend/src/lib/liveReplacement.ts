@@ -41,7 +41,8 @@ export function compileLiveReplacements(pairs: readonly LiveReplacement[] | unde
   }
   if (!byHeard.size) return undefined;
   const forms = [...new Set((pairs ?? []).map((pair) => pair.heard).filter((heard) => byHeard.has(heard.replace(/ /g, ''))))]
-    .sort((left, right) => right.length - left.length)
+    // Spaces are optional in the pattern, so they do not count toward length.
+    .sort((left, right) => right.replace(/ /g, '').length - left.replace(/ /g, '').length)
     .map((heard) => heard.split(' ').join('\\s*'));
   const pattern = new RegExp(`(^|[^\\uAC00-\\uD7A3A-Za-z0-9])(${forms.join('|')})`, 'g');
   return (text) => text.replace(pattern, (whole: string, before: string, heard: string) => {

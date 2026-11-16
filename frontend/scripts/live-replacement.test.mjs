@@ -66,3 +66,11 @@ test('a replacement text is inserted literally', () => {
   const replace = compileLiveReplacements([{ heard: '달러 사인', displayAs: '$& $1' }]);
   assert.equal(replace('달러 사인'), '$& $1');
 });
+
+test('length is counted without spaces when choosing the longest form', () => {
+  const replace = compileLiveReplacements([
+    { heard: '에 이 아 이', displayAs: 'AI' },
+    { heard: '에이아이옵스', displayAs: 'AIOps' },
+  ]);
+  assert.equal(replace('에이아이옵스 도입'), 'AIOps 도입');
+});
