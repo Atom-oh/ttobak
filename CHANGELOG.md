@@ -67,7 +67,8 @@ manifests.
 
 - Mac interpretation screen: the speaker who talks most is shown in the default
   text colour and the other speakers in colours, instead of colouring by the
-  order the recognizer first heard each voice.
+  order the recognizer first heard each voice. The floating caption windows
+  follow the same rule with their configured font colour.
 
 - Local intake: the Slack links connector failed with `PARSE_FAILED` against the real Slack MCP server, which puts a text notice before its JSON; tool results now skip a leading notice. Update the adapter (`~/.ttobak/server.mjs`) to use Slack link collection (#989).
 - Customer update sources: concurrent adds can no longer exceed the 30-source cap; the cap is enforced atomically with each add and delete, and colliding concurrent writes are retried before returning 503 `SOURCES_BUSY` (#983).

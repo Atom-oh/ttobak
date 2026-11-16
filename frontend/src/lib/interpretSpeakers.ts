@@ -78,6 +78,17 @@ export function speakerColorSlot(label: string | undefined, main: string | undef
 }
 
 /**
+ * Speaker number sent to a floating caption window, which gives slot 0 the
+ * colour chosen in its settings: the main speaker takes slot 0 and the
+ * speaker labelled 0 takes the main speaker's number, so both stay distinct.
+ */
+export function windowSpeakerSlot(number: number, main: number | undefined): number {
+  if (main === undefined || main === 0) return number;
+  if (number === main) return 0;
+  return number === 0 ? main : number;
+}
+
+/**
  * Records one segment's speaker, dropping the oldest entries past the cap.
  * Returns the same object when nothing changes.
  */

@@ -284,9 +284,10 @@
           });
         }
 
-        // One colour per speaker, bright enough for the outline and a dark
-        // backdrop. The first voice keeps the colour chosen in the settings,
-        // so a single presenter looks as configured; colours repeat after six.
+        // One colour per speaker slot, bright enough for the outline and a
+        // dark backdrop. Slot 0 keeps the colour chosen in the settings; the
+        // page sends the speaker who talks most as slot 0. Colours repeat
+        // after six.
         var SPEAKER_COLORS = ['', '#7ee2a8', '#ffd166', '#ff9aa2', '#7fdbff', '#e0a3ff'];
         function speakerColor(speaker) {
           if (typeof speaker !== 'number' || speaker < 0 || speaker % 1 !== 0) return '';

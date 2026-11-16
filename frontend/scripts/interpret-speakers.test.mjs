@@ -85,3 +85,12 @@ test('the main speaker and unlabelled lines use the default colour; others get a
   assert.equal(speakerColorSlot('7', '1'), 7 % SPEAKER_COLOR_COUNT);
   assert.equal(speakerColorSlot('0', undefined), 0);
 });
+
+test('window slots: the main speaker takes slot 0 and label 0 takes the main speaker\'s number', () => {
+  const { windowSpeakerSlot } = loaded.exports;
+  assert.equal(windowSpeakerSlot(3, 3), 0);
+  assert.equal(windowSpeakerSlot(0, 3), 3);
+  assert.equal(windowSpeakerSlot(1, 3), 1);
+  assert.equal(windowSpeakerSlot(0, 0), 0);
+  assert.equal(windowSpeakerSlot(2, undefined), 2);
+});
