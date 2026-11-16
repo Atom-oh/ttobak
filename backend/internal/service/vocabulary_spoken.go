@@ -77,11 +77,6 @@ func spokenFormEligible(row model.DictTerm) bool {
 	return latin
 }
 
-// spokenLayer reports whether a layer's terms take generated forms. Common
-// terms come from public sources nobody reviewed for this user; their
-// everyday loanwords would be rewritten in every caption.
-func spokenLayer(layer vocabLayer) bool { return layer.name != model.DictLayerCommon }
-
 // spokenFormCandidates lists, in table priority order, the terms that still
 // need an answer. A term with a hand-written Hangul spoken form needs none.
 func spokenFormCandidates(layers []vocabLayer, known map[string][]string) []model.DictTerm {
@@ -91,7 +86,7 @@ func spokenFormCandidates(layers []vocabLayer, known map[string][]string) []mode
 		if !spokenLayer(layer) {
 			continue
 		}
-		for _, row := range eligibleVocabularyRows(layer.rows, model.VocabLangKo) {
+		for _, row := range eligibleVocabularyRows(layer.rows, model.VocabLangKo, true) {
 			if _, done := known[row.TermKey]; done || seen[row.TermKey] || !spokenFormEligible(row) || len(userSpokenPhrases(row)) > 0 {
 				continue
 			}
