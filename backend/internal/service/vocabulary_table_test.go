@@ -142,7 +142,7 @@ func TestLiveReplacements(t *testing.T) {
 	for i := 0; i < LiveReplacementsMax+20; i++ {
 		// Distinct two-syllable spoken forms.
 		heard := string([]rune{rune(0xAC00 + i), rune(0xAC00 + i)})
-		many = append(many, row(fmt.Sprintf("Term%c%c", 'a'+i/26%26, 'a'+i%26)+strings.Repeat("x", i/676), "", false, i, heard))
+		many = append(many, row(fmt.Sprintf("Term%c%c", 'a'+i/26%26, 'a'+i%26)+strings.Repeat("x", i/676), "Digit-9", false, i, heard))
 	}
 	if n := len(liveReplacements([]vocabLayer{{rows: many}})); n != LiveReplacementsMax {
 		t.Fatalf("cap: %d", n)

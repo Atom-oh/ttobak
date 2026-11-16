@@ -2265,7 +2265,9 @@ never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at mos
 256 runes. Errors are 400 `field: reason` and never echo input. A Hangul-only
 `heardAs` on a manual or user-edited term with a non-empty `phrase` is also a
 ko-KR vocabulary row (ADR-008); a write that changes those rows rebuilds the
-vocabulary.
+vocabulary. With live vocabularies enabled the dictionary GET also returns
+`liveReplacements`, at most 500 `{heard, displayAs}` pairs of those spoken
+forms for live caption clients; it is omitted when empty.
 
 - `GET /api/settings/dictionary` migrates the legacy item best effort, runs
   `EnsureVocabularies` (see below), then returns legacy `terms`/`status`,

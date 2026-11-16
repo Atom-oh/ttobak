@@ -375,8 +375,20 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   language when given names; with one, a vocabulary BadRequest before the first
   event retries once without it and any vocabulary rejection drops it for the
   recording. Without names it adds no request fields and never retries.
-- Not covered: live-config, source meeting titles, account dictionaries, live
-  aliases, backfill.
+- **Live replacements.** With `LIVE_VOCABULARY_MODE=on` the dictionary GET also
+  lists `liveReplacements`: the ko-KR table's spoken-form rows as
+  `{heard, displayAs}` text pairs (`liveReplacements`, at most 500, table
+  order, taken from the listing the ko-KR ensure already made). The vocabulary
+  only raises the chance that Transcribe writes the term; `liveReplacement.ts`
+  rewrites a caption that still spells the spoken form in Hangul. A form
+  matches at a word start, with or without its spaces, may be followed by a
+  particle, and the longest wins; only captions identified as Korean (or with
+  no language) are rewritten, before translation and the caption windows. The
+  client validates each pair (Hangul words only, bounded display text). The
+  same accepted risk as spoken-form rows applies, here deterministically: a
+  spoken form that is an ordinary word is always rewritten.
+- Not covered: live-config, source meeting titles, account dictionaries,
+  backfill.
 
 Rollout checks (record each with a date):
 
