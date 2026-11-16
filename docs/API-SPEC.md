@@ -2263,8 +2263,9 @@ newlines anywhere, including the edges) and line separators rejected;
 `displayAs` 2-40 runes, at most 120 bytes; at most five 2-40 rune `heardAs`,
 never blocklisted (`terms_blocklist.txt`) or the term's own key; `phrase` at most
 256 runes. Errors are 400 `field: reason` and never echo input. A Hangul-only
-`heardAs` on a manual or user-edited term is also a ko-KR vocabulary row
-(ADR-008), so a write that changes `heardAs` rebuilds the vocabulary.
+`heardAs` on a manual or user-edited term with a non-empty `phrase` is also a
+ko-KR vocabulary row (ADR-008); a write that changes those rows rebuilds the
+vocabulary.
 
 - `GET /api/settings/dictionary` migrates the legacy item best effort, runs
   `EnsureVocabularies` (see below), then returns legacy `terms`/`status`,

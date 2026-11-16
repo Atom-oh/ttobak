@@ -132,7 +132,8 @@ const koSpokenMinSyllables = 2
 // phrase alone leaves ko-KR to guess the pronunciation. Only terms a person
 // added or edited qualify; a term nobody reviewed contributes its phrase only.
 func koSpokenPhrases(row model.DictTerm) []string {
-	if row.State != model.TermStateActive || (row.Origin != model.TermOriginManual && row.UserEditedAt == "") {
+	// An empty phrase is the term's vocabulary opt-out; it covers spoken forms too.
+	if row.State != model.TermStateActive || row.Phrase == "" || (row.Origin != model.TermOriginManual && row.UserEditedAt == "") {
 		return nil
 	}
 	var out []string

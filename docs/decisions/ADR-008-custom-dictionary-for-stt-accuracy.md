@@ -299,9 +299,11 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   to batch and live streams alike. Only manual or user-edited active terms
   qualify; an untouched automatic term contributes its phrase only. A term
   whose own phrase ko-KR rejects (digits, dotted acronyms) still contributes
-  its spoken forms. A spoken form never takes a phrase that is some term's own,
-  and the first term to claim one keeps it. An alias-only edit rebuilds the
-  vocabulary. `TermCount` counts table rows, not terms. Accepted risk: on a
+  its spoken forms; a term with an empty phrase (the vocabulary opt-out)
+  contributes none. A spoken form never takes a phrase that is some term's own,
+  and the first term to claim one keeps it. An edit that changes a term's
+  spoken forms (an alias edit, or the first edit of an automatic term) rebuilds
+  the vocabulary. `TermCount` counts table rows, not terms. Accepted risk: on a
   qualifying term, an automatic `heardAs` append (L3) also becomes a row, so a
   spoken form that is an ordinary word elsewhere is displayed as the term; the
   blocklist is the only guard and removing the alias is the fix. The file is deleted after READY, FAILED or quota.
