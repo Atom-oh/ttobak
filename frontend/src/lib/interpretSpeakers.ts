@@ -80,7 +80,9 @@ export function speakerColorSlot(label: string | undefined, main: string | undef
 /**
  * Speaker number sent to a floating caption window, which gives slot 0 the
  * colour chosen in its settings: the main speaker takes slot 0 and the
- * speaker labelled 0 takes the main speaker's number, so both stay distinct.
+ * speaker labelled 0 takes the main speaker's number. The window reduces the
+ * number modulo its six colours, so the two stay distinct unless the main
+ * speaker's number is a multiple of six (seven or more voices).
  */
 export function windowSpeakerSlot(number: number, main: number | undefined): number {
   if (main === undefined || main === 0) return number;
