@@ -286,6 +286,9 @@ function PersonalDictionary() {
               placeholder="예: 쿠버네티스, 쿠베"
               className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
             />
+            <p className="mt-1 text-xs text-slate-500 dark:text-text-muted">
+              한글로 적은 발음은 음성 인식에도 쓰여, 그렇게 말하면 위 표기로 나옵니다.
+            </p>
           </div>
         </div>
         <button

@@ -96,15 +96,58 @@ func vocabularyEntries(rows []model.DictTerm, lang string) []vocabEntry {
 	return layeredVocabularyEntries([]vocabLayer{{rows: rows}}, lang)
 }
 
+// koSpokenMinSyllables keeps one-syllable spoken forms out: they match
+// ordinary words too easily.
+const koSpokenMinSyllables = 2
+
+// koSpokenPhrases are the ko-KR phrases for a term's spoken forms: each
+// heardAs written only in Hangul becomes one more row that displays as the
+// term, so a Korean pronunciation of a foreign term ("클로드 코드") is
+// recognized and shown in the term's own spelling ("Claude Code"). A Latin
+// phrase alone leaves ko-KR to guess the pronunciation. Only terms a person
+// added or edited qualify; a term nobody reviewed contributes its phrase only.
+func koSpokenPhrases(row model.DictTerm) []string {
+	// An empty phrase is the term's vocabulary opt-out; it covers spoken forms too.
+	if row.State != model.TermStateActive || row.Phrase == "" || (row.Origin != model.TermOriginManual && row.UserEditedAt == "") {
+		return nil
+	}
+	var out []string
+	for _, alias := range row.HeardAs {
+		phrase := TranscribePhrase(alias)
+		syllables := 0
+		for _, r := range phrase {
+			if r >= 0xAC00 && r <= 0xD7A3 {
+				syllables++
+			} else if r != '-' {
+				syllables = -1
+				break
+			}
+		}
+		if syllables >= koSpokenMinSyllables && ValidTranscribePhrase(phrase, model.VocabLangKo) {
+			out = append(out, phrase)
+		}
+	}
+	return out
+}
+
+// hasVocabularyPhrase reports whether the row's own phrase is a candidate for lang.
+func hasVocabularyPhrase(row model.DictTerm, lang string) bool {
+	return row.State == model.TermStateActive && row.Phrase != "" &&
+		(row.TranscribeKo || (lang == model.VocabLangEn && row.TranscribeEn))
+}
+
+// contributesVocabulary reports whether the row can add a row to a vocabulary
+// table, so a write to it needs a rebuild.
+func contributesVocabulary(row model.DictTerm) bool {
+	return hasVocabularyPhrase(row, model.VocabLangKo) || hasVocabularyPhrase(row, model.VocabLangEn) || len(koSpokenPhrases(row)) > 0
+}
+
 // eligibleVocabularyRows keeps active rows with the language's recognition
-// flag, ordered manual first, then hits, then oldest.
+// flag or, for ko-KR, a spoken form, ordered manual first, then hits, then oldest.
 func eligibleVocabularyRows(rows []model.DictTerm, lang string) []model.DictTerm {
 	eligible := make([]model.DictTerm, 0, len(rows))
 	for _, row := range rows {
-		if row.State != model.TermStateActive || row.Phrase == "" {
-			continue
-		}
-		if row.TranscribeKo || (lang == model.VocabLangEn && row.TranscribeEn) {
+		if hasVocabularyPhrase(row, lang) || (lang == model.VocabLangKo && len(koSpokenPhrases(row)) > 0) {
 			eligible = append(eligible, row)
 		}
 	}
@@ -126,26 +169,49 @@ func eligibleVocabularyRows(rows []model.DictTerm, lang string) []model.DictTerm
 
 // layeredVocabularyEntries concatenates the layers' eligible rows in layer
 // order; an eligible termKey (then Phrase) already taken by an earlier layer
-// is skipped, so the first layer wins.
+// is skipped, so the first layer wins. For ko-KR each term's spoken forms
+// follow its own row; a spoken form never takes a phrase that is some term's
+// own, whatever the order.
 func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
+	eligible := make([][]model.DictTerm, len(layers))
+	own := map[string]bool{}
+	for i, layer := range layers {
+		eligible[i] = eligibleVocabularyRows(layer.rows, lang)
+		for _, row := range eligible[i] {
+			if hasVocabularyPhrase(row, lang) {
+				own[strings.ToLower(TranscribePhrase(row.Phrase))] = true
+			}
+		}
+	}
 	seenKey, seen := map[string]bool{}, map[string]bool{}
 	var out []vocabEntry
-	for _, layer := range layers {
-		for _, row := range eligibleVocabularyRows(layer.rows, lang) {
+	for i := range layers {
+		for _, row := range eligible[i] {
 			if row.TermKey != "" && seenKey[row.TermKey] {
 				continue
 			}
-			phrase := TranscribePhrase(row.Phrase)
 			display := strings.TrimSpace(row.DisplayAs)
-			key := strings.ToLower(phrase)
-			if seen[key] || !ValidTranscribePhrase(phrase, lang) || !validVocabDisplay(display) {
+			if !validVocabDisplay(display) {
 				continue
 			}
-			seen[key] = true
-			if row.TermKey != "" {
+			added := false
+			if phrase := TranscribePhrase(row.Phrase); hasVocabularyPhrase(row, lang) {
+				if key := strings.ToLower(phrase); !seen[key] && ValidTranscribePhrase(phrase, lang) {
+					seen[key], added = true, true
+					out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
+				}
+			}
+			if lang == model.VocabLangKo {
+				for _, phrase := range koSpokenPhrases(row) {
+					if key := strings.ToLower(phrase); !seen[key] && !own[key] {
+						seen[key], added = true, true
+						out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
+					}
+				}
+			}
+			if added && row.TermKey != "" {
 				seenKey[row.TermKey] = true
 			}
-			out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
 		}
 	}
 	return out

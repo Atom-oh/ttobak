@@ -45,6 +45,11 @@ manifests.
 
 ### Changed
 
+- Custom dictionary: a recognized form written in Hangul (how a Korean speaker
+  says `Claude Code`, for example) is now also a Transcribe vocabulary row that displays as the
+  term, for batch transcription and live captions. It applies to terms added or
+  edited by a person and takes effect after the vocabulary rebuilds.
+
 - Customer update drafts: the worker's run phases are switched on by setting the `ttobakCustomerUpdate` runtime ARN in `infra/cdk.json`; every 10 minutes it builds per-customer context (meeting-note excerpts included by default) and stores owner-private drafts. Nothing is sent automatically (#988).
 - Validate private asset paths before signing uploads or downloads, and bind meeting audio and attachments to their owner and meeting while preserving authorized sharing.
 - Enable the project REA Claude plugin and permit standard PR merges while denying `--admin` merges; retain the existing review-size and secret-scan hooks.

@@ -263,7 +263,10 @@ func (s *DictionaryService) updateTerm(ctx context.Context, userID string, t dic
 		// Committed, then removed concurrently: report the current state.
 		return nil, ErrNotFound
 	}
-	return s.targetResult(ctx, userID, t, updated, in.Phrase != nil || in.State != nil || in.DisplayAs != nil), nil
+	// Any edit sets userEditedAt, which can make an automatic term's spoken
+	// forms eligible (a keep or a type change included), so compare them too.
+	spokenChanged := strings.Join(koSpokenPhrases(*row), "\x00") != strings.Join(koSpokenPhrases(*updated), "\x00")
+	return s.targetResult(ctx, userID, t, updated, in.Phrase != nil || in.State != nil || in.DisplayAs != nil || spokenChanged), nil
 }
 
 func termChange(row model.DictTerm, in model.UpdateDictTermRequest) (repository.DictTermChange, error) {
@@ -359,7 +362,7 @@ func (s *DictionaryService) tombstoneTerm(ctx context.Context, userID string, t 
 	if !t.personal() {
 		return resp, nil // only personal writes rebuild the personal vocabulary here
 	}
-	views, warnings := s.ensureAfterWrite(ctx, userID, row.State == model.TermStateActive && row.TranscribeKo && row.Phrase != "")
+	views, warnings := s.ensureAfterWrite(ctx, userID, contributesVocabulary(*row))
 	resp.Status, resp.Vocabularies, resp.Warnings = s.currentVocabularyStatus(ctx, userID), views, append(resp.Warnings, warnings...)
 	return resp, nil
 }
