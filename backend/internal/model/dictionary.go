@@ -260,10 +260,13 @@ type DictTerm struct {
 	TranscribeKo         bool     `dynamodbav:"transcribeKo"`
 	TranscribeEn         bool     `dynamodbav:"transcribeEn"`
 	UserEditedAt         string   `dynamodbav:"userEditedAt,omitempty"`
-	AddedAt              string   `dynamodbav:"addedAt"`
-	UpdatedAt            string   `dynamodbav:"updatedAt"`
-	LastSeenAt           string   `dynamodbav:"lastSeenAt,omitempty"`
-	DeletedAt            string   `dynamodbav:"deletedAt,omitempty"`
+	// GeneratedSpoken are generated Hangul pronunciations attached for one
+	// vocabulary plan; never stored on the term (SpokenForm rows hold them).
+	GeneratedSpoken []string `dynamodbav:"-" json:"-"`
+	AddedAt         string   `dynamodbav:"addedAt"`
+	UpdatedAt       string   `dynamodbav:"updatedAt"`
+	LastSeenAt      string   `dynamodbav:"lastSeenAt,omitempty"`
+	DeletedAt       string   `dynamodbav:"deletedAt,omitempty"`
 	// Sources lists up to MaxDictSources evidence refs, newest first.
 	Sources    []DictSourceRef `dynamodbav:"sources,omitempty"`
 	CreatedBy  string          `dynamodbav:"createdBy,omitempty"`
@@ -436,6 +439,26 @@ type VocabularyViews struct {
 	Ko VocabularyView `json:"ko"`
 	En VocabularyView `json:"en"`
 }
+
+// SpokenForm caches the generated Hangul pronunciations of one term for one
+// user (PK USER#{userId}, SK SPOKENKO#{termKey}). Forms is empty when the
+// model gave no usable form, so the term is not asked again.
+type SpokenForm struct {
+	PK          string   `dynamodbav:"PK"`
+	SK          string   `dynamodbav:"SK"`
+	TermKey     string   `dynamodbav:"termKey"`
+	Forms       []string `dynamodbav:"forms"`
+	GeneratedAt string   `dynamodbav:"generatedAt"`
+	EntityType  string   `dynamodbav:"entityType"`
+}
+
+const (
+	PrefixSpokenForm     = "SPOKENKO#"
+	EntityTypeSpokenForm = "SPOKEN_FORM"
+)
+
+// SpokenFormSK is the sort key of a term's generated spoken forms.
+func SpokenFormSK(termKey string) string { return PrefixSpokenForm + termKey }
 
 // DictTimeLayout is the fixed-width UTC timestamp used by v2 dictionary rows
 // so that string order equals time order.

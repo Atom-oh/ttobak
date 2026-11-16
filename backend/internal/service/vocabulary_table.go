@@ -125,34 +125,61 @@ func vocabularyEntries(rows []model.DictTerm, lang string) []vocabEntry {
 // ordinary words too easily.
 const koSpokenMinSyllables = 2
 
-// koSpokenPhrases are the ko-KR phrases for a term's spoken forms: each
-// heardAs written only in Hangul becomes one more row that displays as the
-// term, so a Korean pronunciation of a foreign term ("클로드 코드") is
-// recognized and shown in the term's own spelling ("Claude Code"). A Latin
-// phrase alone leaves ko-KR to guess the pronunciation. Only terms a person
-// added or edited qualify; a term nobody reviewed contributes its phrase only.
+// koSpokenPhrases are the ko-KR phrases for a term's spoken forms: a Hangul
+// pronunciation becomes one more row that displays as the term, so a Korean
+// pronunciation of a foreign term ("클로드 코드") is recognized and shown in
+// the term's own spelling ("Claude Code"). A Latin phrase alone leaves ko-KR
+// to guess the pronunciation. Hand-written forms come first, then generated
+// ones (vocabulary_spoken.go).
 func koSpokenPhrases(row model.DictTerm) []string {
+	out := userSpokenPhrases(row)
+	// An empty phrase is the term's vocabulary opt-out; it covers spoken forms too.
+	if row.State != model.TermStateActive || row.Phrase == "" {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, phrase := range out {
+		seen[phrase] = true
+	}
+	for _, form := range row.GeneratedSpoken {
+		if phrase, ok := koSpokenPhrase(form); ok && !seen[phrase] {
+			seen[phrase] = true
+			out = append(out, phrase)
+		}
+	}
+	return out
+}
+
+// userSpokenPhrases are the phrases of the heardAs entries written only in
+// Hangul. Only terms a person added or edited qualify; a term nobody
+// reviewed contributes its phrase only.
+func userSpokenPhrases(row model.DictTerm) []string {
 	// An empty phrase is the term's vocabulary opt-out; it covers spoken forms too.
 	if row.State != model.TermStateActive || row.Phrase == "" || (row.Origin != model.TermOriginManual && row.UserEditedAt == "") {
 		return nil
 	}
 	var out []string
 	for _, alias := range row.HeardAs {
-		phrase := TranscribePhrase(alias)
-		syllables := 0
-		for _, r := range phrase {
-			if r >= 0xAC00 && r <= 0xD7A3 {
-				syllables++
-			} else if r != '-' {
-				syllables = -1
-				break
-			}
-		}
-		if syllables >= koSpokenMinSyllables && ValidTranscribePhrase(phrase, model.VocabLangKo) {
+		if phrase, ok := koSpokenPhrase(alias); ok {
 			out = append(out, phrase)
 		}
 	}
 	return out
+}
+
+// koSpokenPhrase is the table phrase of a spoken form, when it is Hangul only
+// with at least koSpokenMinSyllables syllables.
+func koSpokenPhrase(form string) (string, bool) {
+	phrase := TranscribePhrase(form)
+	syllables := 0
+	for _, r := range phrase {
+		if r >= 0xAC00 && r <= 0xD7A3 {
+			syllables++
+		} else if r != '-' {
+			return "", false
+		}
+	}
+	return phrase, syllables >= koSpokenMinSyllables && ValidTranscribePhrase(phrase, model.VocabLangKo)
 }
 
 // hasVocabularyPhrase reports whether the row's own phrase is a candidate for lang.
@@ -183,8 +210,22 @@ func eligibleVocabularyRows(rows []model.DictTerm, lang string, spoken bool) []m
 			eligible = append(eligible, row)
 		}
 	}
-	sort.SliceStable(eligible, func(i, j int) bool {
-		a, b := eligible[i], eligible[j]
+	sortVocabularyRows(eligible)
+	return eligible
+}
+
+// spacelessPhraseKey compares phrases without their word breaks: live
+// replacement matches a spoken form with or without its spaces, so a spoken
+// form must not shadow a term's own phrase that differs only in spacing.
+func spacelessPhraseKey(phrase string) string {
+	return strings.ToLower(strings.ReplaceAll(phrase, "-", ""))
+}
+
+// sortVocabularyRows orders rows by table priority: manual first, then hits,
+// then oldest.
+func sortVocabularyRows(rows []model.DictTerm) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
 		if (a.Origin == model.TermOriginManual) != (b.Origin == model.TermOriginManual) {
 			return a.Origin == model.TermOriginManual
 		}
@@ -196,14 +237,6 @@ func eligibleVocabularyRows(rows []model.DictTerm, lang string, spoken bool) []m
 		}
 		return a.SK < b.SK
 	})
-	return eligible
-}
-
-// spacelessPhraseKey compares phrases without their word breaks: live
-// replacement matches a spoken form with or without its spaces, so a spoken
-// form must not shadow a term's own phrase that differs only in spacing.
-func spacelessPhraseKey(phrase string) string {
-	return strings.ToLower(strings.ReplaceAll(phrase, "-", ""))
 }
 
 // layeredVocabularyEntries concatenates the layers' eligible rows in layer
