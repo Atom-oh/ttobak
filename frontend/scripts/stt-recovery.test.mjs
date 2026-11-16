@@ -29,6 +29,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const config = { region: 'test', identityPoolId: 'test', userPoolId: 'test' };
 const translationModule = loadModule('liveTranslation', {});
 const liveVocabularyModule = loadModule('liveVocabulary', {});
+const liveReplacementModule = loadModule('liveReplacement', {});
 
 function managerFixture({ withConfig = true, translationEnabled = false, targetLang = 'ko', vocabularies } = {}) {
   const window = new EventTarget();
@@ -68,6 +69,7 @@ function managerFixture({ withConfig = true, translationEnabled = false, targetL
     } } },
     './device': { hasMobileMicConflictRisk: () => mobile },
     './liveTranslation': translationModule,
+    './liveReplacement': liveReplacementModule,
   }, { window, document, navigator });
   const manager = new SttManager({
     callbacks: {

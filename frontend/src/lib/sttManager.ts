@@ -14,6 +14,7 @@ import { translateApi } from './api';
 import { hasMobileMicConflictRisk } from './device';
 import { LiveTranslation, liveLanguageOptions, type ExtraLiveLanguage, type LiveLanguage } from './liveTranslation';
 import type { LiveVocabularyNames } from './liveVocabulary';
+import { compileLiveReplacements, type LiveReplacement } from './liveReplacement';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
 
@@ -22,6 +23,8 @@ export interface TranscribeStreamingConfig {
   identityPoolId: string;
   userPoolId: string;
   vocabularies?: LiveVocabularyNames; // READY names only
+  /** Spoken forms rewritten to their dictionary term in Korean captions. */
+  replacements?: LiveReplacement[];
 }
 
 export interface SttManagerConfig {
@@ -397,8 +400,11 @@ export class SttManager {
   private transcriptHandler() {
     const streamId = ++this.nextStreamId;
     let segmentIndex = 0;
-    return (text: string, isFinal: boolean, languageCode?: string, resultId?: string, speaker?: string) => {
+    const replace = compileLiveReplacements(this.config.transcribeStreamingConfig?.replacements);
+    return (heard: string, isFinal: boolean, languageCode?: string, resultId?: string, speaker?: string) => {
       const segmentId = `${streamId}:${resultId ?? segmentIndex}`;
+      // Spoken forms are Korean: other identified languages pass through.
+      const text = replace && (!languageCode || languageCode.startsWith('ko')) ? replace(heard) : heard;
       this.config.callbacks.onTranscript(text, isFinal);
       this.translation.update(segmentId, text, isFinal, languageCode);
       this.config.onSegment?.(segmentId, text, isFinal, languageCode, speaker);

@@ -188,20 +188,25 @@ func (s *DictionaryService) viewsFrom(userID string, ko, en stateRead) *model.Vo
 // warnings. The dictionary GET runs it, including the one each recording start
 // makes, so a finished build flips without a settings-page visit.
 func (s *DictionaryService) EnsureVocabularies(ctx context.Context, userID, vocabContext string, manual bool) (*model.VocabularyViews, []string) {
-	warnings := s.advanceVocabularies(ctx, userID, vocabContext, manual)
+	warnings := s.advanceVocabularies(ctx, userID, vocabContext, manual, nil)
 	return s.vocabularyViews(ctx, userID), warnings
 }
 
 // advanceVocabularies is EnsureVocabularies without the final view read. One
 // membership memo serves the whole call and is dropped with it.
-func (s *DictionaryService) advanceVocabularies(ctx context.Context, userID, vocabContext string, manual bool) []string {
+// koLayers, when set, receives the ko-KR build's last term listing.
+func (s *DictionaryService) advanceVocabularies(ctx context.Context, userID, vocabContext string, manual bool, koLayers *[]vocabLayer) []string {
 	if vocabContext != model.VocabContextPersonal || s.builder == nil || s.transcribeClient == nil {
 		return nil
 	}
 	memo := s.newMembershipMemo(userID)
 	var warnings []string
 	for _, lang := range vocabBuildLanguages {
-		warnings = append(warnings, s.ensureVocabulary(ctx, userID, lang, manual, memo)...)
+		var listed *[]vocabLayer
+		if lang == model.VocabLangKo {
+			listed = koLayers
+		}
+		warnings = append(warnings, s.ensureVocabulary(ctx, userID, lang, manual, memo, listed)...)
 	}
 	return dedupeWarnings(warnings)
 }
@@ -234,7 +239,7 @@ type vocabStep struct {
 // rows are re-read on every step. The first state read runs alongside the
 // order read; the order error still wins. An order failure skips the whole
 // call (no claim, no plan) with a warning.
-func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool, memo *membershipMemo) []string {
+func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool, memo *membershipMemo, listed *[]vocabLayer) []string {
 	bypass := manual
 	var warnings []string
 	var (
@@ -268,6 +273,9 @@ func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang s
 		if err != nil {
 			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
+		}
+		if listed != nil {
+			*listed = layers
 		}
 		plan := planVocabularyLayers(layers, lang)
 		if st == nil {

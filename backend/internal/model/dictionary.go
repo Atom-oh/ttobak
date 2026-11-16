@@ -56,6 +56,15 @@ type DictionaryResponse struct {
 	// some legacy terms have no termId; a legacy PUT resolves it.
 	MigrationPending bool     `json:"migrationPending,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
+	// LiveReplacements are the spoken forms of the caller's vocabulary terms
+	// for live caption clients; empty unless live vocabularies are enabled.
+	LiveReplacements []LiveReplacement `json:"liveReplacements,omitempty"`
+}
+
+// LiveReplacement maps a Hangul spoken form to the term it displays as.
+type LiveReplacement struct {
+	Heard     string `json:"heard"`
+	DisplayAs string `json:"displayAs"`
 }
 
 // DictTermView is the API form of a v2 term row. Tombstones are never listed.

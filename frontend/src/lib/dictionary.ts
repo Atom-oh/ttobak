@@ -94,6 +94,8 @@ export interface DictionaryResponse {
   items?: DictTermItem[];
   migrationPending?: boolean;
   warnings?: string[];
+  /** Hangul spoken forms of vocabulary terms for live captions, when the server enables them. */
+  liveReplacements?: { heard: string; displayAs: string }[];
 }
 export interface DictTermMutationResponse {
   item?: DictTermItem;

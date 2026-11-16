@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -46,5 +47,23 @@ func TestViewsFromUsesLiveSetting(t *testing.T) {
 	svc.SetLiveVocabulary(true)
 	if got := svc.viewsFrom("u1", stateRead{state: ready}, stateRead{}).Ko.LiveName; got != "ttobak-vocab-0123456789abcdef" {
 		t.Fatalf("enabled service named %q", got)
+	}
+}
+
+func TestDictionaryGetServesLiveReplacementsOnlyWhenLive(t *testing.T) {
+	fx := newBuilderFixture(t, "a")
+	ctx := context.Background()
+	if _, err := fx.svc.CreateTerm(ctx, "u1", model.CreateDictTermRequest{DisplayAs: "Claude Code", HeardAs: []string{"클로드 코드"}}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := fx.svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || len(resp.LiveReplacements) != 0 {
+		t.Fatalf("live off must send none: %v %+v", err, resp)
+	}
+	fx.svc.SetLiveVocabulary(true)
+	resp, err = fx.svc.GetDictionaryWithTerms(ctx, "u1")
+	if err != nil || len(resp.LiveReplacements) != 1 ||
+		resp.LiveReplacements[0] != (model.LiveReplacement{Heard: "클로드 코드", DisplayAs: "Claude Code"}) {
+		t.Fatalf("live on: %v %+v", err, resp.LiveReplacements)
 	}
 }

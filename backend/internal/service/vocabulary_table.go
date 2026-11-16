@@ -74,7 +74,32 @@ func validVocabDisplay(s string) bool {
 	return checkTermRunes("displayAs", s) == nil && utf8.RuneCountInString(s) <= vocabDisplayMax
 }
 
-type vocabEntry struct{ Phrase, DisplayAs string }
+type vocabEntry struct {
+	Phrase, DisplayAs string
+	// spoken marks a row made from a term's Hangul spoken form.
+	spoken bool
+}
+
+// LiveReplacementsMax caps the spoken-form pairs sent to live caption clients.
+const LiveReplacementsMax = 500
+
+// liveReplacements lists the ko-KR table's spoken-form rows as text pairs,
+// in table order: a live caption that still spells the spoken form in Hangul
+// is rewritten to the term by the client. Same eligibility and precedence as
+// the vocabulary, so the two never disagree.
+func liveReplacements(layers []vocabLayer) []model.LiveReplacement {
+	var out []model.LiveReplacement
+	for _, e := range layeredVocabularyEntries(layers, model.VocabLangKo) {
+		if !e.spoken {
+			continue
+		}
+		if len(out) == LiveReplacementsMax {
+			break
+		}
+		out = append(out, model.LiveReplacement{Heard: strings.ReplaceAll(e.Phrase, "-", " "), DisplayAs: e.DisplayAs})
+	}
+	return out
+}
 
 // vocabPlan is the desired table for one language.
 type vocabPlan struct {
@@ -204,7 +229,7 @@ func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
 				for _, phrase := range koSpokenPhrases(row) {
 					if key := strings.ToLower(phrase); !seen[key] && !own[key] {
 						seen[key], added = true, true
-						out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
+						out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display, spoken: true})
 					}
 				}
 			}

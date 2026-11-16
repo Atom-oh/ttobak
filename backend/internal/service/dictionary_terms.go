@@ -116,10 +116,15 @@ func (s *DictionaryService) GetDictionaryWithTerms(ctx context.Context, userID s
 	if _, err := s.MigrateLegacyDictionary(ctx, userID); err != nil && !errors.Is(err, ErrLegacyDictionaryConflict) {
 		log.Printf("dictionary migration deferred for user %s: %v", userID, err)
 	}
-	warnings := s.advanceVocabularies(ctx, userID, model.VocabContextPersonal, false)
+	var koLayers []vocabLayer
+	warnings := s.advanceVocabularies(ctx, userID, model.VocabContextPersonal, false, &koLayers)
 	resp, dict, rows, states, err := s.readDictionary(ctx, userID, true)
 	if err != nil {
 		return nil, err
+	}
+	if s.liveVocabulary {
+		// Same switch as the live vocabulary name; nil when the listing failed.
+		resp.LiveReplacements = liveReplacements(koLayers)
 	}
 	resp.Items = termViews(dict, rows)
 	resp.Vocabularies, resp.Warnings = s.viewsFrom(userID, states[0], states[1]), warnings

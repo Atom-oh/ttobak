@@ -112,3 +112,37 @@ func TestVocabularyHeardAsRows(t *testing.T) {
 		t.Fatal("contributesVocabulary: an active term with a spoken form contributes; a suggestion or an empty term does not")
 	}
 }
+
+func TestLiveReplacements(t *testing.T) {
+	m, on := model.TermOriginManual, model.TermStateActive
+	row := func(display, phrase string, ko bool, added int, heard ...string) model.DictTerm {
+		return model.DictTerm{SK: "DICTTERM#" + display, TermKey: NormalizeTermKey(display), DisplayAs: display, Phrase: phrase,
+			Origin: m, State: on, TranscribeKo: ko, HeardAs: heard, AddedAt: fmt.Sprintf("2026-10-01T00:00:00.%06dZ", added)}
+	}
+	layers := []vocabLayer{
+		{name: "personal", rows: []model.DictTerm{
+			row("Claude Code", "Claude-Code", true, 1, "클로드 코드"),
+			row("S3", "S3", false, 2, "에스쓰리"),
+			// A term that is itself Hangul needs no replacement.
+			row("또박 노트", "또박-노트", true, 3),
+		}},
+		// A later layer cannot retarget a spoken form an earlier layer claimed.
+		{name: "common", rows: []model.DictTerm{row("Cloud Code", "Cloud-Code", true, 4, "클로드 코드", "클라우드 코드")}},
+	}
+	got := liveReplacements(layers)
+	want := []model.LiveReplacement{
+		{Heard: "클로드 코드", DisplayAs: "Claude Code"}, {Heard: "에스쓰리", DisplayAs: "S3"}, {Heard: "클라우드 코드", DisplayAs: "Cloud Code"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+	var many []model.DictTerm
+	for i := 0; i < LiveReplacementsMax+20; i++ {
+		// Distinct two-syllable spoken forms.
+		heard := string([]rune{rune(0xAC00 + i), rune(0xAC00 + i)})
+		many = append(many, row(fmt.Sprintf("Term%c%c", 'a'+i/26%26, 'a'+i%26)+strings.Repeat("x", i/676), "", false, i, heard))
+	}
+	if n := len(liveReplacements([]vocabLayer{{rows: many}})); n != LiveReplacementsMax {
+		t.Fatalf("cap: %d", n)
+	}
+}
