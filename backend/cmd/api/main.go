@@ -282,7 +282,7 @@ func init() {
 	// Generated Hangul spoken forms (ADR-008). The API generates only after a
 	// dictionary write, in a small batch; the summarize Lambda backfills.
 	if os.Getenv("SPOKEN_FORMS_MODE") == "on" {
-		dictService.SetSpokenForms(dictRepo, bedrockService, service.SpokenFormConfig{Batch: 20, Timeout: 6 * time.Second, WritesOnly: true})
+		dictService.SetSpokenForms(dictRepo, bedrockService, service.SpokenFormConfig{Batch: 20, Timeout: 6 * time.Second, WritesOnly: true, MinRemaining: 8 * time.Second})
 	}
 	metadata := repo.MetadataView()
 	attachmentTextService := service.NewAttachmentTextService(metadata, service.NewMeetingService(metadata), s3Client, bucketName, service.AttachmentTextPublisher(ebClient))

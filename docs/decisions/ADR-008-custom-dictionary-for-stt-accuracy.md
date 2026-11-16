@@ -386,7 +386,9 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   rows for one plan (`GeneratedSpoken`, never stored on the term). They join
   the table after any hand-written forms and feed the live replacements.
   - Eligible: active terms with a phrase, Latin letters and no Hangul in the
-    name, in the Personal and Account layers. Common terms are excluded:
+    name, in the Personal and Account layers, whether or not ko-KR accepts the
+    term's own phrase (an automatic acronym's dotted phrase is rejected; its
+    spoken form is then the term's only ko-KR row). Common terms are excluded:
     nobody reviewed them for this user and their everyday loanwords would be
     rewritten in every caption. A term with a hand-written Hangul form is not
     asked.
@@ -396,8 +398,14 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   - Where: the summarize Lambda generates on every vocabulary refresh (150
     terms per call, 45 s); the API generates only after a dictionary write (20
     terms, 6 s) and never on a read. One cache read and at most one model call
-    per ensure call. A model or cache failure is logged without term text, is
-    not cached and never fails or blocks the build.
+    per ensure call. A model call starts only while its full timeout plus a
+    reserve would remain on the caller's deadline (3 min in summarize, whose
+    terms run refreshes up to 50 users in a row; 8 s in the API), so
+    generation cannot use up the time the rest of a run needs. A model or
+    cache-write failure is logged without term text, is not cached and never
+    fails the build. A cache-read failure skips the build step with the usual
+    rebuild warning: a table planned without the cached forms would rebuild,
+    then rebuild again to restore.
   - The term names go to the model as a JSON array marked as data; only the
     validated Hangul comes back into the table. Accepted risk: a wrong or
     over-broad pronunciation is displayed as the term until the flag is turned

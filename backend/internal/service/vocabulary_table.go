@@ -210,8 +210,22 @@ func eligibleVocabularyRows(rows []model.DictTerm, lang string, spoken bool) []m
 			eligible = append(eligible, row)
 		}
 	}
-	sort.SliceStable(eligible, func(i, j int) bool {
-		a, b := eligible[i], eligible[j]
+	sortVocabularyRows(eligible)
+	return eligible
+}
+
+// spacelessPhraseKey compares phrases without their word breaks: live
+// replacement matches a spoken form with or without its spaces, so a spoken
+// form must not shadow a term's own phrase that differs only in spacing.
+func spacelessPhraseKey(phrase string) string {
+	return strings.ToLower(strings.ReplaceAll(phrase, "-", ""))
+}
+
+// sortVocabularyRows orders rows by table priority: manual first, then hits,
+// then oldest.
+func sortVocabularyRows(rows []model.DictTerm) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
 		if (a.Origin == model.TermOriginManual) != (b.Origin == model.TermOriginManual) {
 			return a.Origin == model.TermOriginManual
 		}
@@ -223,14 +237,6 @@ func eligibleVocabularyRows(rows []model.DictTerm, lang string, spoken bool) []m
 		}
 		return a.SK < b.SK
 	})
-	return eligible
-}
-
-// spacelessPhraseKey compares phrases without their word breaks: live
-// replacement matches a spoken form with or without its spaces, so a spoken
-// form must not shadow a term's own phrase that differs only in spacing.
-func spacelessPhraseKey(phrase string) string {
-	return strings.ToLower(strings.ReplaceAll(phrase, "-", ""))
 }
 
 // layeredVocabularyEntries concatenates the layers' eligible rows in layer

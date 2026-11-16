@@ -46,6 +46,11 @@ type SpokenFormConfig struct {
 	// WritesOnly generates only after a dictionary write, never on a read
 	// (the API Lambda); the background builder generates on every call.
 	WritesOnly bool
+	// MinRemaining is the time that must be left on the caller's deadline
+	// after a full Timeout for generation to start. One run may refresh many
+	// users' vocabularies in a row; this keeps their model calls from using
+	// up the time the rest of the run needs.
+	MinRemaining time.Duration
 }
 
 // SetSpokenForms enables generated spoken forms. Without it the vocabulary
@@ -78,7 +83,10 @@ func spokenFormEligible(row model.DictTerm) bool {
 }
 
 // spokenFormCandidates lists, in table priority order, the terms that still
-// need an answer. A term with a hand-written Hangul spoken form needs none.
+// need an answer. The term's own phrase need not be usable by ko-KR (an
+// automatic acronym keeps a dotted phrase ko-KR rejects): a spoken form is
+// what makes such a term recognizable. A term with a hand-written Hangul
+// spoken form needs none.
 func spokenFormCandidates(layers []vocabLayer, known map[string][]string) []model.DictTerm {
 	var out []model.DictTerm
 	seen := map[string]bool{}
@@ -86,13 +94,15 @@ func spokenFormCandidates(layers []vocabLayer, known map[string][]string) []mode
 		if !spokenLayer(layer) {
 			continue
 		}
-		for _, row := range eligibleVocabularyRows(layer.rows, model.VocabLangKo, true) {
-			if _, done := known[row.TermKey]; done || seen[row.TermKey] || !spokenFormEligible(row) || len(userSpokenPhrases(row)) > 0 {
-				continue
+		var rows []model.DictTerm
+		for _, row := range layer.rows {
+			if _, done := known[row.TermKey]; !done && !seen[row.TermKey] && spokenFormEligible(row) && len(userSpokenPhrases(row)) == 0 {
+				seen[row.TermKey] = true
+				rows = append(rows, row)
 			}
-			seen[row.TermKey] = true
-			out = append(out, row)
 		}
+		sortVocabularyRows(rows)
+		out = append(out, rows...)
 	}
 	return out
 }
@@ -120,33 +130,39 @@ type spokenForms struct {
 }
 
 // applySpokenForms attaches generated forms to the listed rows, generating
-// one batch first when this call may. Every failure is logged and leaves the
-// table with what is known: generation never fails or delays a build beyond
-// its timeout.
-func (s *DictionaryService) applySpokenForms(ctx context.Context, userID string, layers []vocabLayer, state *spokenForms, manual bool) {
+// one batch first when this call may. A generation failure is logged and
+// leaves the table with what is known: it never fails a build or delays it
+// beyond the timeout. A cache read failure is returned: a table planned
+// without the cached forms would differ from the active one and cause a
+// rebuild, then another to restore, so the caller skips the step instead.
+func (s *DictionaryService) applySpokenForms(ctx context.Context, userID string, layers []vocabLayer, state *spokenForms, manual bool) error {
 	if s.spokenStore == nil || state == nil {
-		return
+		return nil
 	}
 	if !state.loaded {
-		state.loaded = true
 		rows, err := s.spokenStore.ListSpokenForms(ctx, userID)
 		if err != nil {
-			log.Printf("spoken forms read failed for user %s: %v", userID, err)
-			return
+			return fmt.Errorf("read spoken forms: %w", err)
 		}
+		state.loaded = true
 		state.known = make(map[string][]string, len(rows))
 		for _, row := range rows {
 			state.known[row.TermKey] = validSpokenForms(row.Forms)
 		}
 	}
-	if state.known == nil {
-		return
-	}
-	if !state.generated && s.spokenGen != nil && s.spokenCfg.Batch > 0 && (manual || !s.spokenCfg.WritesOnly) {
+	if !state.generated && s.spokenGen != nil && s.spokenCfg.Batch > 0 && (manual || !s.spokenCfg.WritesOnly) && s.spokenTimeLeft(ctx) {
 		state.generated = true
 		s.generateSpokenForms(ctx, userID, spokenFormCandidates(layers, state.known), state.known)
 	}
 	attachSpokenForms(layers, state.known)
+	return nil
+}
+
+// spokenTimeLeft reports whether the caller's deadline leaves a full model
+// timeout plus MinRemaining. No deadline means no limit.
+func (s *DictionaryService) spokenTimeLeft(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) >= s.spokenCfg.Timeout+s.spokenCfg.MinRemaining
 }
 
 func (s *DictionaryService) generateSpokenForms(ctx context.Context, userID string, candidates []model.DictTerm, known map[string][]string) {

@@ -279,7 +279,10 @@ func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang s
 			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
 		}
-		s.applySpokenForms(ctx, userID, layers, spoken, manual)
+		if err := s.applySpokenForms(ctx, userID, layers, spoken, manual); err != nil {
+			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
+			return append(warnings, vocabularyRebuildWarning)
+		}
 		if listed != nil {
 			*listed = layers
 		}

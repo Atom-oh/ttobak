@@ -204,3 +204,51 @@ func TestParseSpokenFormsAnswer(t *testing.T) {
 		t.Fatal("an answer with no JSON must fail, so nothing is cached")
 	}
 }
+
+func TestSpokenFormsCoverTermsKoreanCannotRecognizeByPhrase(t *testing.T) {
+	// An automatic acronym keeps a dotted phrase ko-KR rejects (TranscribeKo
+	// false): it is exactly the term that needs a spoken form.
+	rows := []model.DictTerm{
+		{TermKey: "eks", DisplayAs: "EKS", Phrase: "E.K.S.", Origin: model.TermOriginAuto, State: model.TermStateActive, TranscribeEn: true, AddedAt: "2"},
+		{TermKey: "claudecode", DisplayAs: "Claude Code", Phrase: "Claude-Code", Origin: model.TermOriginManual, State: model.TermStateActive, TranscribeKo: true, AddedAt: "3"},
+	}
+	layers := []vocabLayer{{name: "personal-auto", rows: rows}}
+	got := spokenFormCandidates(layers, map[string][]string{})
+	if len(got) != 2 || got[0].DisplayAs != "Claude Code" || got[1].DisplayAs != "EKS" {
+		t.Fatalf("candidates in table priority order (manual first): %+v", got)
+	}
+	attachSpokenForms(layers, map[string][]string{"eks": {"이케이에스"}})
+	table, _ := RenderVocabularyTSV(layeredVocabularyEntries(layers, model.VocabLangKo))
+	if !strings.Contains(table, "이케이에스\t\t\tEKS\n") || strings.Contains(table, "E.K.S.") {
+		t.Fatalf("table:\n%s", table)
+	}
+}
+
+func TestSpokenFormsSkipGenerationNearTheDeadline(t *testing.T) {
+	fx, store, llm := spokenFixture(t, SpokenFormConfig{Batch: 10, Timeout: 45 * time.Second, MinRemaining: 3 * time.Minute})
+	fx.store.terms[model.DictTermSK("claudecode")] = model.DictTerm{PK: "USER#u1", SK: model.DictTermSK("claudecode"), TermKey: "claudecode",
+		DisplayAs: "Claude Code", Phrase: "Claude-Code", Origin: model.TermOriginAuto, State: model.TermStateActive, TranscribeKo: true, Version: 1}
+	short, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, warnings := fx.svc.EnsureVocabularies(short, "u1", model.VocabContextPersonal, false); len(warnings) != 0 || len(llm.asked) != 0 {
+		t.Fatalf("too little time left: the build runs, the model is not called: warnings=%v asked=%v", warnings, llm.asked)
+	}
+	long, cancelLong := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancelLong()
+	fx.svc.EnsureVocabularies(long, "u1", model.VocabContextPersonal, false)
+	if len(llm.asked) != 1 || len(store.rows) != 1 {
+		t.Fatalf("enough time left: asked=%v cached=%d", llm.asked, len(store.rows))
+	}
+}
+
+func TestSpokenFormsCacheReadFailureSkipsTheBuild(t *testing.T) {
+	fx, store, _ := spokenFixture(t, SpokenFormConfig{Batch: 10, Timeout: time.Second})
+	fx.store.terms[model.DictTermSK("claudecode")] = model.DictTerm{PK: "USER#u1", SK: model.DictTermSK("claudecode"), TermKey: "claudecode",
+		DisplayAs: "Claude Code", Phrase: "Claude-Code", Origin: model.TermOriginAuto, State: model.TermStateActive, TranscribeKo: true, Version: 1}
+	store.listErr = errors.New("synthetic")
+	// A table planned without the cached forms would differ from the active
+	// one and trigger a rebuild, then another to restore: skip instead.
+	if _, warnings := fx.ensure(false); len(warnings) != 1 || koTable(fx) != "" {
+		t.Fatalf("warnings=%v table=%q", warnings, koTable(fx))
+	}
+}

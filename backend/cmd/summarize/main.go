@@ -135,9 +135,11 @@ func init() {
 	// glossary for refinement, and heardAs feedback from repeated fixes.
 	dictService.SetCorrectionStore(dictionaryRepo)
 	// Generated Hangul spoken forms (ADR-008): this Lambda backfills them
-	// whenever it refreshes a vocabulary, off the request path.
+	// whenever it refreshes a vocabulary, off the request path. A run can
+	// refresh many users in a row, so a model call starts only while three
+	// minutes would remain after it.
 	if os.Getenv("SPOKEN_FORMS_MODE") == "on" {
-		dictService.SetSpokenForms(dictionaryRepo, bedrockService, service.SpokenFormConfig{Batch: 150, Timeout: 45 * time.Second})
+		dictService.SetSpokenForms(dictionaryRepo, bedrockService, service.SpokenFormConfig{Batch: 150, Timeout: 45 * time.Second, MinRemaining: 3 * time.Minute})
 	}
 	loadMeetingGlossary = dictService.GlossaryForMeeting
 	learnFromCorrections = func(ctx context.Context, meeting *model.Meeting, glossary []service.GlossaryTerm, corrections []model.TranscriptCorrection) {
