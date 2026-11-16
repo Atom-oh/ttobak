@@ -1188,6 +1188,17 @@ for bad in ({'Ref':'OtherRole'}, {'Fn::ImportValue':'unknown'}, qa):
       .toThrow(/ttobak:liveVocabularyMode/);
   });
 
+  test('spokenFormsMode: generated spoken forms are off by default, on two functions and validated', () => {
+    const withFlag = (value: Template) => Object.values(value.findResources('AWS::Lambda::Function'))
+      .filter(resource => resource.Properties.Environment?.Variables?.SPOKEN_FORMS_MODE !== undefined)
+      .map(resource => [resource.Properties.FunctionName, resource.Properties.Environment.Variables.SPOKEN_FORMS_MODE]);
+    expect(withFlag(template).sort()).toEqual([['ttobak-api', 'off'], ['ttobak-summarize', 'off']]);
+    const on = buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:spokenFormsMode': 'on' });
+    expect(withFlag(on).sort()).toEqual([['ttobak-api', 'on'], ['ttobak-summarize', 'on']]);
+    expect(() => buildTemplate('manual-only', false, undefined, false, undefined, undefined, undefined, { 'ttobak:spokenFormsMode': 'yes' }))
+      .toThrow(/ttobak:spokenFormsMode/);
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');

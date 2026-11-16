@@ -52,6 +52,11 @@ manifests.
 - Live captions and Mac interpretation rewrite a Hangul recognized form that
   Transcribe still spelled out to its dictionary term (for example to
   `plan mode`), using the same recognized forms as the vocabulary.
+- Custom dictionary: Korean pronunciations of Latin-named terms in your own and
+  your accounts' dictionaries are now generated automatically and used for
+  recognition and live captions, so they no longer have to be typed in.
+  Controlled by `ttobak:spokenFormsMode` (on); existing terms are filled in
+  gradually as meetings are processed and terms are saved.
 
 - Customer update drafts: the worker's run phases are switched on by setting the `ttobakCustomerUpdate` runtime ARN in `infra/cdk.json`; every 10 minutes it builds per-customer context (meeting-note excerpts included by default) and stores owner-private drafts. Nothing is sent automatically (#988).
 - Validate private asset paths before signing uploads or downloads, and bind meeting audio and attachments to their owner and meeting while preserving authorized sharing.

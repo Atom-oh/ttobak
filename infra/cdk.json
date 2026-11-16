@@ -46,6 +46,7 @@
     "ttobak:kbTermsMode": "personal",
     "ttobak:researchTermsMode": "personal",
     "ttobak:liveVocabularyMode": "on",
+    "ttobak:spokenFormsMode": "on",
     "customerUpdateRuntimeArn": "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakCustomerUpdate-BdIVW1CSJG",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,

@@ -279,6 +279,11 @@ func init() {
 	// synchronous Haiku extraction call; the async run itself is handed off
 	// to the ttobak-sim Lambda, not run inline here.
 	bedrockService := service.NewBedrockService(bedrockRuntimeClient2, s3Client, repo)
+	// Generated Hangul spoken forms (ADR-008). The API generates only after a
+	// dictionary write, in a small batch; the summarize Lambda backfills.
+	if os.Getenv("SPOKEN_FORMS_MODE") == "on" {
+		dictService.SetSpokenForms(dictRepo, bedrockService, service.SpokenFormConfig{Batch: 20, Timeout: 6 * time.Second, WritesOnly: true})
+	}
 	metadata := repo.MetadataView()
 	attachmentTextService := service.NewAttachmentTextService(metadata, service.NewMeetingService(metadata), s3Client, bucketName, service.AttachmentTextPublisher(ebClient))
 	attachmentTextHandler := handler.NewAttachmentTextHandler(attachmentTextService)

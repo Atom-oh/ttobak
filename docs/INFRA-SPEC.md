@@ -716,6 +716,11 @@ The same pattern applies to
 `infra/cdk.json` sets `on`), which lets the dictionary GET name the caller's
 READY vocabulary for live caption streams.
 
+The API and summarize Lambdas receive `SPOKEN_FORMS_MODE` from
+`ttobak:spokenFormsMode` (`off` by default; `infra/cdk.json` sets `on`): generated
+Hangul spoken forms for dictionary terms (ADR-008). Both already invoke the Haiku
+model and read and write `ttobak-main`; no new permission is added.
+
 `infra/cdk.json` sets `ttobak:transcriptCorrection` to `on` (2026-11-11).
 `infra/cdk.json` sets `ttobak:accountTermsMode` to `on` (2026-11-11), after the
 meeting relink cleanup (ADR-008 FU4) was deployed with the flag off.

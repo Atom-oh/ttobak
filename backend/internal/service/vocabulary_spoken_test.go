@@ -108,7 +108,13 @@ func TestSpokenFormsAreGeneratedOnAWriteAndCached(t *testing.T) {
 			}
 		}
 	}
-	if row, ok := store.rows[NormalizeTermKey("Bad")]; !ok || len(row.Forms) != 0 {
+	empty := 0
+	for _, row := range store.rows {
+		if len(row.Forms) == 0 {
+			empty++
+		}
+	}
+	if len(store.rows) != 3 || empty != 1 {
 		t.Fatalf("an unusable answer must be cached as empty: %+v", store.rows)
 	}
 	// Every term is asked once, however many writes follow.
