@@ -263,7 +263,7 @@ func (s *DictionaryService) updateTerm(ctx context.Context, userID string, t dic
 		// Committed, then removed concurrently: report the current state.
 		return nil, ErrNotFound
 	}
-	return s.targetResult(ctx, userID, t, updated, in.Phrase != nil || in.State != nil || in.DisplayAs != nil), nil
+	return s.targetResult(ctx, userID, t, updated, in.Phrase != nil || in.State != nil || in.DisplayAs != nil || in.HeardAs != nil), nil
 }
 
 func termChange(row model.DictTerm, in model.UpdateDictTermRequest) (repository.DictTermChange, error) {
@@ -359,7 +359,7 @@ func (s *DictionaryService) tombstoneTerm(ctx context.Context, userID string, t 
 	if !t.personal() {
 		return resp, nil // only personal writes rebuild the personal vocabulary here
 	}
-	views, warnings := s.ensureAfterWrite(ctx, userID, row.State == model.TermStateActive && row.TranscribeKo && row.Phrase != "")
+	views, warnings := s.ensureAfterWrite(ctx, userID, contributesVocabulary(*row))
 	resp.Status, resp.Vocabularies, resp.Warnings = s.currentVocabularyStatus(ctx, userID), views, append(resp.Warnings, warnings...)
 	return resp, nil
 }

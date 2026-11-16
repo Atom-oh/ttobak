@@ -530,8 +530,9 @@ func TestLegacyWritesMigrateTheBlobFirst(t *testing.T) {
 	if err != nil || store.blob.MigratedAt == "" || len(store.terms) != 2 || len(resp.Terms) != 2 {
 		t.Fatalf("legacy PUT must migrate and replace the list: %v %+v rows=%d", err, store.blob, len(store.terms))
 	}
+	// Three rows: the two terms plus the spoken form the legacy soundsLike carried.
 	state := store.vocab[model.VocabSK(model.VocabContextPersonal, model.VocabLangKo)]
-	if state.Status != model.VocabStatusBuilding || state.ActiveName != "ttobak-vocab-0123456789abcdef" || !state.ActiveReady || state.TermCount != 2 || state.InactiveName == state.ActiveName {
+	if state.Status != model.VocabStatusBuilding || state.ActiveName != "ttobak-vocab-0123456789abcdef" || !state.ActiveReady || state.TermCount != 3 || state.InactiveName == state.ActiveName {
 		t.Fatalf("the build goes to a new slot while the adopted name stays active: %+v", state)
 	}
 	if err := svc.DeleteTerm(ctx, "u1", "Omega"); err != nil || len(store.terms) != 1 {

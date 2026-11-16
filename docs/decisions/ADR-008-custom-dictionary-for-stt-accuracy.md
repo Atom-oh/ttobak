@@ -289,7 +289,22 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   and 48 KB; invalid rows are dropped individually. The phrase validator is
   minimal (spaces become `-`, AWS table rules), separate from `terms_filter.go`.
   ko-KR drops dotted acronyms until rollout check 2. en-US
-  needs five Latin-only phrases. The file is deleted after READY, FAILED or quota.
+  needs five Latin-only phrases.
+- **Spoken forms (ko-KR).** `SoundsLike` and `IPA` stay empty (AWS no longer
+  reads them), so a Latin phrase leaves ko-KR to guess how a Korean speaker
+  says it. Each `heardAs` written only in Hangul (two or more syllables,
+  `koSpokenPhrases`) therefore becomes one more row after the term's own, with
+  the term's `displayAs`: the Hangul spelling of how `Claude Code` is said
+  displays as `Claude Code`. This applies
+  to batch and live streams alike. Only manual or user-edited active terms
+  qualify; an untouched automatic term contributes its phrase only. A term
+  whose own phrase ko-KR rejects (digits, dotted acronyms) still contributes
+  its spoken forms. A spoken form never takes a phrase that is some term's own,
+  and the first term to claim one keeps it. An alias-only edit rebuilds the
+  vocabulary. `TermCount` counts table rows, not terms. Accepted risk: on a
+  qualifying term, an automatic `heardAs` append (L3) also becomes a row, so a
+  spoken form that is an ordinary word elsewhere is displayed as the term; the
+  blocklist is the only guard and removing the alias is the fix. The file is deleted after READY, FAILED or quota.
 - **Plan.** Every state-machine step reads the VOCAB# row and only then lists
   the terms, so a step never acts on a listing older than the row it read; a
   term deleted by a concurrent write is never built back in.
