@@ -96,6 +96,8 @@ func TestVocabularyHeardAsRows(t *testing.T) {
 		// Automatic terms the user never touched keep their aliases out.
 		row("Auto Term", "Auto-Term", a, true, 5, "오토 텀"),
 		edited, suggested,
+		// An empty phrase keeps the whole term out of the vocabulary, spoken forms included.
+		row("Opt Out", "", m, false, 8, "옵트 아웃"),
 	}
 	head := "Phrase\tSoundsLike\tIPA\tDisplayAs\n"
 	wantKo := head + "Claude-Code\t\t\tClaude Code\n클로드-코드\t\t\tClaude Code\n에스쓰리\t\t\tS3\nOther\t\t\tOther\n" +
@@ -108,7 +110,7 @@ func TestVocabularyHeardAsRows(t *testing.T) {
 		t.Fatalf("en table carries a Hangul alias:\n%q", got)
 	}
 	// An alias-only edit changes the table, so it must count as a vocabulary change.
-	if !contributesVocabulary(rows[1]) || contributesVocabulary(suggested) || contributesVocabulary(row("X", "", m, false, 9)) {
+	if !contributesVocabulary(rows[1]) || contributesVocabulary(suggested) || contributesVocabulary(row("X", "", m, false, 9, "엑스 텀")) {
 		t.Fatal("contributesVocabulary: an active term with a spoken form contributes; a suggestion or an empty term does not")
 	}
 }
