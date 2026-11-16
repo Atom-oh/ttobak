@@ -74,3 +74,8 @@ test('length is counted without spaces when choosing the longest form', () => {
   ]);
   assert.equal(replace('에이아이옵스 도입'), 'AIOps 도입');
 });
+
+test('a form also rewrites the head of a longer word: a particle cannot be told from a suffix', () => {
+  const replace = compileLiveReplacements([{ heard: '클로드', displayAs: 'Claude' }]);
+  assert.equal(replace('클로드가 클로드코드'), 'Claude가 Claude코드');
+});

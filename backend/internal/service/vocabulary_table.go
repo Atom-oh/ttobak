@@ -194,12 +194,19 @@ func contributesVocabulary(row model.DictTerm) bool {
 	return hasVocabularyPhrase(row, model.VocabLangKo) || hasVocabularyPhrase(row, model.VocabLangEn) || len(koSpokenPhrases(row)) > 0
 }
 
+// spokenLayer reports whether a layer's terms contribute spoken forms. Any
+// signed-in user can edit a Common term, and an edited Common term must not
+// become a correction path into other users' text (ADR-008 R17): Common
+// contributes its terms' own phrases only.
+func spokenLayer(layer vocabLayer) bool { return layer.name != model.DictLayerCommon }
+
 // eligibleVocabularyRows keeps active rows with the language's recognition
-// flag or, for ko-KR, a spoken form, ordered manual first, then hits, then oldest.
-func eligibleVocabularyRows(rows []model.DictTerm, lang string) []model.DictTerm {
+// flag or, for ko-KR when spoken is set, a spoken form, ordered manual first,
+// then hits, then oldest.
+func eligibleVocabularyRows(rows []model.DictTerm, lang string, spoken bool) []model.DictTerm {
 	eligible := make([]model.DictTerm, 0, len(rows))
 	for _, row := range rows {
-		if hasVocabularyPhrase(row, lang) || (lang == model.VocabLangKo && len(koSpokenPhrases(row)) > 0) {
+		if hasVocabularyPhrase(row, lang) || (spoken && lang == model.VocabLangKo && len(koSpokenPhrases(row)) > 0) {
 			eligible = append(eligible, row)
 		}
 	}
@@ -229,20 +236,22 @@ func spacelessPhraseKey(phrase string) string {
 // layeredVocabularyEntries concatenates the layers' eligible rows in layer
 // order; an eligible termKey (then Phrase) already taken by an earlier layer
 // is skipped, so the first layer wins. For ko-KR each term's spoken forms
-// follow its own row; a spoken form never takes a phrase that is some term's
-// own, whatever the order.
+// follow its own row, except in Common (spokenLayer); a spoken form never
+// takes a phrase that is some term's own, whatever the order.
 func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
 	eligible := make([][]model.DictTerm, len(layers))
 	own := map[string]bool{}
 	for i, layer := range layers {
-		eligible[i] = eligibleVocabularyRows(layer.rows, lang)
+		eligible[i] = eligibleVocabularyRows(layer.rows, lang, spokenLayer(layer))
 		for _, row := range eligible[i] {
 			if hasVocabularyPhrase(row, lang) {
 				own[spacelessPhraseKey(TranscribePhrase(row.Phrase))] = true
 			}
 		}
 	}
-	seenKey, seen := map[string]bool{}, map[string]bool{}
+	// Spoken forms are compared without their word breaks, like the client's
+	// live replacement, so two spacings of one form are one row.
+	seenKey, seen, seenSpoken := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var out []vocabEntry
 	for i := range layers {
 		for _, row := range eligible[i] {
@@ -260,10 +269,10 @@ func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
 					out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display})
 				}
 			}
-			if lang == model.VocabLangKo {
+			if lang == model.VocabLangKo && spokenLayer(layers[i]) {
 				for _, phrase := range koSpokenPhrases(row) {
-					if key := strings.ToLower(phrase); !seen[key] && !own[spacelessPhraseKey(phrase)] {
-						seen[key], added = true, true
+					if key, spaceless := strings.ToLower(phrase), spacelessPhraseKey(phrase); !seen[key] && !seenSpoken[spaceless] && !own[spaceless] {
+						seen[key], seenSpoken[spaceless], added = true, true, true
 						out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display, spoken: true})
 					}
 				}

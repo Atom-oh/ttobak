@@ -30,8 +30,10 @@ export function liveReplacementsFrom(value: unknown): LiveReplacement[] | undefi
 /**
  * A function that rewrites every spoken form in a caption to its term, or
  * undefined when there is nothing to rewrite. A form matches at a word start
- * (so not inside a longer word), with or without its spaces, and may be
- * followed by a particle. The longest form wins.
+ * (never after a letter or digit), with or without its spaces. Nothing is
+ * required after it: Korean particles attach to the word, and they cannot be
+ * told apart from the rest of a longer word, so a form also rewrites the
+ * head of a longer Hangul word. The longest form wins.
  */
 export function compileLiveReplacements(pairs: readonly LiveReplacement[] | undefined): ((text: string) => string) | undefined {
   const byHeard = new Map<string, string>();
