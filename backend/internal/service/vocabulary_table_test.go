@@ -91,7 +91,7 @@ func TestVocabularyHeardAsRows(t *testing.T) {
 		// The main phrase is not valid for ko-KR; the spoken form still is.
 		row("S3", "S3", m, false, 2, "에스쓰리"),
 		// An alias never takes another term's own phrase, in either order.
-		row("Other", "Other", m, true, 3, "또박 노트", "클로드-코드"),
+		row("Other", "Other", m, true, 3, "또박 노트", "또박노트", "클로드-코드"),
 		row("또박 노트", "또박-노트", m, true, 4),
 		// Automatic terms the user never touched keep their aliases out.
 		row("Auto Term", "Auto-Term", a, true, 5, "오토 텀"),

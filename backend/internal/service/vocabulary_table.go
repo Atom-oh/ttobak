@@ -192,6 +192,13 @@ func eligibleVocabularyRows(rows []model.DictTerm, lang string) []model.DictTerm
 	return eligible
 }
 
+// spacelessPhraseKey compares phrases without their word breaks: live
+// replacement matches a spoken form with or without its spaces, so a spoken
+// form must not shadow a term's own phrase that differs only in spacing.
+func spacelessPhraseKey(phrase string) string {
+	return strings.ToLower(strings.ReplaceAll(phrase, "-", ""))
+}
+
 // layeredVocabularyEntries concatenates the layers' eligible rows in layer
 // order; an eligible termKey (then Phrase) already taken by an earlier layer
 // is skipped, so the first layer wins. For ko-KR each term's spoken forms
@@ -204,7 +211,7 @@ func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
 		eligible[i] = eligibleVocabularyRows(layer.rows, lang)
 		for _, row := range eligible[i] {
 			if hasVocabularyPhrase(row, lang) {
-				own[strings.ToLower(TranscribePhrase(row.Phrase))] = true
+				own[spacelessPhraseKey(TranscribePhrase(row.Phrase))] = true
 			}
 		}
 	}
@@ -228,7 +235,7 @@ func layeredVocabularyEntries(layers []vocabLayer, lang string) []vocabEntry {
 			}
 			if lang == model.VocabLangKo {
 				for _, phrase := range koSpokenPhrases(row) {
-					if key := strings.ToLower(phrase); !seen[key] && !own[key] {
+					if key := strings.ToLower(phrase); !seen[key] && !own[spacelessPhraseKey(phrase)] {
 						seen[key], added = true, true
 						out = append(out, vocabEntry{Phrase: phrase, DisplayAs: display, spoken: true})
 					}

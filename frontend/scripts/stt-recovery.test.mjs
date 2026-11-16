@@ -31,7 +31,7 @@ const translationModule = loadModule('liveTranslation', {});
 const liveVocabularyModule = loadModule('liveVocabulary', {});
 const liveReplacementModule = loadModule('liveReplacement', {});
 
-function managerFixture({ withConfig = true, translationEnabled = false, targetLang = 'ko', vocabularies } = {}) {
+function managerFixture({ withConfig = true, translationEnabled = false, targetLang = 'ko', vocabularies, replacements } = {}) {
   const window = new EventTarget();
   const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
   const navigator = { onLine: true };
@@ -58,7 +58,7 @@ function managerFixture({ withConfig = true, translationEnabled = false, targetL
     stop() { this.active = false; }
     pause() {}
     resume() {}
-    transcript() { this.callbacks.onTranscript('Recovered fallback speech', true); }
+    transcript(text = 'Recovered fallback speech') { this.callbacks.onTranscript(text, true); }
   }
   const { SttManager } = loadModule('sttManager', {
     './transcribeStreamingClient': { TranscribeStreamingSession: Session },
@@ -79,7 +79,7 @@ function managerFixture({ withConfig = true, translationEnabled = false, targetL
     },
     targetLang,
     translationEnabled,
-    transcribeStreamingConfig: withConfig ? { ...config, vocabularies } : undefined,
+    transcribeStreamingConfig: withConfig ? { ...config, vocabularies, replacements } : undefined,
     onReconnecting: () => events.push('reconnecting'),
     onReconnected: () => events.push('reconnected'),
     onVocabularyFallback: () => events.push('vocabulary-fallback'),
@@ -96,6 +96,29 @@ function managerFixture({ withConfig = true, translationEnabled = false, targetL
     get trackStops() { return trackStops; },
   };
 }
+
+test('spoken forms are rewritten in Korean captions only, and a rewritten caption still translates from Korean', async () => {
+  const replacements = [{ heard: '클로드 코드', displayAs: 'Claude Code' }, { heard: '플랜 모드', displayAs: 'plan mode' }];
+  const state = managerFixture({ translationEnabled: true, targetLang: 'ko-en', replacements });
+  await state.start();
+  state.sessions[0].transcript('클로드 코드를 씁니다.', true, 'ko-KR', 'a');
+  state.sessions[0].transcript('클로드 코드', true, 'en-US', 'b');
+  await tick();
+  assert.deepEqual(state.events.filter((event) => /Claude|클로드/.test(event)), ['Claude Code를 씁니다.', '클로드 코드']);
+  state.manager.stop();
+
+  // Web Speech gives no language. A caption made only of spoken forms has no
+  // Hangul left after the rewrite; it must still be translated from Korean.
+  const fallback = managerFixture({ translationEnabled: true, targetLang: 'ko-en', replacements });
+  await fallback.start('web-speech');
+  fallback.fallbacks[0].transcript('클로드 코드 플랜 모드');
+  await tick();
+  assert.ok(fallback.events.includes('Claude Code plan mode'));
+  assert.deepEqual(fallback.translationRequests.map(({ text, sourceLang, targetLang }) => [text, sourceLang, targetLang]), [
+    ['Claude Code plan mode', 'ko', 'en'],
+  ]);
+  fallback.manager.stop();
+});
 
 test('a rejected vocabulary is dropped for later sessions of the recording', async () => {
   const state = managerFixture({ vocabularies: { 'ko-KR': 'v-ko' } });
