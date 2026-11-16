@@ -252,3 +252,23 @@ func TestSpokenFormsCacheReadFailureSkipsTheBuild(t *testing.T) {
 		t.Fatalf("warnings=%v table=%q", warnings, koTable(fx))
 	}
 }
+
+func TestParseSpokenFormsAnswerSalvagesATruncatedAnswer(t *testing.T) {
+	terms := []string{"Claude Code", "plan mode", "EKS"}
+	// The model stopped at its output budget inside the third item.
+	cut := `{"items":[{"i":0,"ko":["클로드 코드"]}, {"i": 1, "ko": ["플랜 모드"]},{"i":2,"ko":["이케이`
+	got, err := parseSpokenFormsAnswer(cut, terms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || strings.Join(got["Claude Code"], ",") != "클로드 코드" || strings.Join(got["plan mode"], ",") != "플랜 모드" {
+		t.Fatalf("complete items must be kept and the cut one left unanswered: %v", got)
+	}
+	if _, answered := got["EKS"]; answered {
+		t.Fatal("a cut item must stay unanswered so it is asked again")
+	}
+	// Nothing complete: an error, so nothing is cached.
+	if _, err := parseSpokenFormsAnswer(`{"items":[{"i":0,"ko":["클로`, terms); err == nil {
+		t.Fatal("an answer with no complete item must fail")
+	}
+}

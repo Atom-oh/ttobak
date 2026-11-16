@@ -139,7 +139,7 @@ func init() {
 	// refresh many users in a row, so a model call starts only while three
 	// minutes would remain after it.
 	if os.Getenv("SPOKEN_FORMS_MODE") == "on" {
-		dictService.SetSpokenForms(dictionaryRepo, bedrockService, service.SpokenFormConfig{Batch: 150, Timeout: 45 * time.Second, MinRemaining: 3 * time.Minute})
+		dictService.SetSpokenForms(dictionaryRepo, bedrockService, service.SpokenFormConfig{Batch: 60, Timeout: 45 * time.Second, MinRemaining: 3 * time.Minute})
 	}
 	loadMeetingGlossary = dictService.GlossaryForMeeting
 	learnFromCorrections = func(ctx context.Context, meeting *model.Meeting, glossary []service.GlossaryTerm, corrections []model.TranscriptCorrection) {

@@ -395,8 +395,11 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   - Forms are kept only if Hangul words of two or more syllables, at most 40
     runes, not on the term blocklist, at most two per term; two spacings of
     one pronunciation are one form.
-  - Where: the summarize Lambda generates on every vocabulary refresh (150
-    terms per call, 45 s); the API generates only after a dictionary write (20
+  - Where: the summarize Lambda generates on every vocabulary refresh (60
+    terms per call, 45 s for the model call and the cache writes together; 60
+    answers fit well inside the 4,096-token output budget, and an answer cut
+    off at that budget still yields its complete items, so a batch always
+    makes progress); the API generates only after a dictionary write (20
     terms, 6 s) and never on a read. One cache read and at most one model call
     per ensure call. A model call starts only while its full timeout plus a
     reserve would remain on the caller's deadline (3 min in summarize, whose

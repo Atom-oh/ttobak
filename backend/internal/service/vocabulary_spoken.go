@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -204,7 +205,8 @@ func (s *DictionaryService) generateSpokenForms(ctx context.Context, userID stri
 	if len(rows) == 0 {
 		return
 	}
-	if err := s.spokenStore.PutSpokenForms(ctx, rows); err != nil {
+	// Under the same timeout as the model call, so one generation is bounded as a whole.
+	if err := s.spokenStore.PutSpokenForms(callCtx, rows); err != nil {
 		log.Printf("spoken forms write failed for user %s: %v", userID, err)
 		return
 	}
@@ -281,32 +283,37 @@ func (s *BedrockService) GenerateKoSpokenForms(ctx context.Context, terms []stri
 	return parseSpokenFormsAnswer(answer, terms)
 }
 
-// parseSpokenFormsAnswer reads the model's JSON. Every answered position gets
-// an entry, empty when no form survives validation; an unanswered position
-// gets none, so it is asked again later.
+// spokenAnswerItem matches one complete item of the answer. The model call
+// returns whatever text it produced when it stops at its output budget, so an
+// answer can end inside an item; complete items are still usable.
+var spokenAnswerItem = regexp.MustCompile(`\{\s*"i"\s*:\s*\d+\s*,\s*"ko"\s*:\s*\[[^\[\]{}]*\]\s*\}`)
+
+// parseSpokenFormsAnswer reads the model's JSON item by item. Every complete
+// item with a valid position gets an entry, empty when no form survives
+// validation. A position that is missing or cut off gets none, so it is
+// asked again later; an answer with no complete item is an error, so nothing
+// is cached.
 func parseSpokenFormsAnswer(answer string, terms []string) (map[string][]string, error) {
-	start, end := strings.Index(answer, "{"), strings.LastIndex(answer, "}")
-	if start < 0 || end <= start {
-		return nil, errors.New("spoken forms answer has no JSON object")
-	}
-	var parsed struct {
-		Items []struct {
-			I  *int     `json:"i"`
-			Ko []string `json:"ko"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal([]byte(answer[start:end+1]), &parsed); err != nil {
-		return nil, fmt.Errorf("spoken forms answer is not valid JSON: %w", err)
+	items := spokenAnswerItem.FindAllString(answer, -1)
+	if len(items) == 0 {
+		return nil, errors.New("spoken forms answer has no complete item")
 	}
 	out := map[string][]string{}
-	for _, item := range parsed.Items {
-		if item.I == nil || *item.I < 0 || *item.I >= len(terms) {
+	for _, raw := range items {
+		var item struct {
+			I  *int     `json:"i"`
+			Ko []string `json:"ko"`
+		}
+		if err := json.Unmarshal([]byte(raw), &item); err != nil || item.I == nil || *item.I < 0 || *item.I >= len(terms) {
 			continue
 		}
 		if _, dup := out[terms[*item.I]]; dup {
 			continue
 		}
 		out[terms[*item.I]] = validSpokenForms(item.Ko)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("spoken forms answer has no usable item")
 	}
 	return out, nil
 }
