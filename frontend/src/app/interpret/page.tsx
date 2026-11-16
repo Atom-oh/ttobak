@@ -11,7 +11,7 @@ import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler
 import { useInterpretSession } from '@/hooks/useInterpretSession';
 import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
 import { upsertCaptionLine, visibleCaptionLines } from '@/lib/interpretCaptions';
-import { rememberSpeaker, speakerColorIndex, speakerNumber } from '@/lib/interpretSpeakers';
+import { mainSpeaker, rememberSpeaker, speakerColorSlot, speakerNumber } from '@/lib/interpretSpeakers';
 import { INTERPRET_MESSAGES, formatElapsed } from '@/lib/interpretSession';
 import {
   DEFAULT_SPEECH_LANGUAGES, MAX_SPEECH_LANGUAGES, SPEECH_LANGUAGES, SPEECH_LANGUAGE_KEY,
@@ -49,7 +49,8 @@ const CAPTION_LANGUAGE_LABELS: Record<CaptionLang, string> = { ko: '한국어', 
 
 type CaptionLines = Partial<Record<CaptionLang, TranslationEntry[]>>;
 
-// One text colour per speaker, readable on both themes; unlabelled lines keep the default.
+// One text colour per speaker, readable on both themes. The speaker who talks most
+// and unlabelled lines keep the default colour.
 const SPEAKER_TEXT = [
   'text-indigo-700 dark:text-indigo-300',
   'text-emerald-700 dark:text-emerald-300',
@@ -60,8 +61,8 @@ const SPEAKER_TEXT = [
 ];
 
 /** One caption language's lines in large text; follows the newest line. */
-function CaptionColumn({ lang, lines, open, speakers }: {
-  lang: CaptionLang; lines: TranslationEntry[]; open: boolean; speakers: Record<string, string>;
+function CaptionColumn({ lang, lines, open, speakers, main }: {
+  lang: CaptionLang; lines: TranslationEntry[]; open: boolean; speakers: Record<string, string>; main: string | undefined;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
   const last = lines[lines.length - 1];
@@ -76,7 +77,7 @@ function CaptionColumn({ lang, lines, open, speakers }: {
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
         {lines.map((line, at) => {
           const speaker = speakers[line.id];
-          const color = speakerColorIndex(speaker);
+          const color = speakerColorSlot(speaker, main);
           const number = speakerNumber(speaker);
           // The name tag appears where the speaker changes, so colour is not the only cue.
           const changed = number !== null && speaker !== speakers[lines[at - 1]?.id];
@@ -120,9 +121,15 @@ function Interpreter() {
   const captionLinkRef = useRef<Pick<CaptionOverlayState, 'extraLanguage' | 'onSegment'> | null>(null);
   const getExtraLanguage = useCallback(() => captionLinkRef.current?.extraLanguage, []);
   // Who said each line, by segment ID; in memory only, like the captions.
-  const [speakers, setSpeakers] = useState<Record<string, string>>({});
+  // The main speaker is chosen from the remembered lines and shown in the default colour.
+  const [{ speakers, main }, setSpeakerState] = useState<{ speakers: Record<string, string>; main: string | undefined }>({ speakers: {}, main: undefined });
   const onSegment = useCallback<CaptionSegmentHandler>((id, text, isFinal, languageCode, speaker) => {
-    if (isFinal && speaker) setSpeakers((previous) => rememberSpeaker(previous, id, speaker));
+    if (isFinal && speaker) {
+      setSpeakerState((previous) => {
+        const next = rememberSpeaker(previous.speakers, id, speaker);
+        return next === previous.speakers ? previous : { speakers: next, main: mainSpeaker(next, previous.main) };
+      });
+    }
     captionLinkRef.current?.onSegment(id, text, isFinal, languageCode, speaker);
   }, []);
   // Spoken languages: one or two of four, kept as a per-viewer preference.
@@ -155,7 +162,7 @@ function Interpreter() {
   const start = () => {
     // A new run restarts the caption engines and their line order.
     setCaptionLines({});
-    setSpeakers({});
+    setSpeakerState({ speakers: {}, main: undefined });
     void session.start(inputUid || undefined);
   };
   const languages = captionLanguages(captions.view?.settings.extraLanguage ?? null);
@@ -260,7 +267,7 @@ function Interpreter() {
       {/* The same languages as the caption windows, side by side in large text. */}
       <div className="grid min-h-0 flex-1 auto-rows-fr gap-4 md:grid-flow-col md:auto-cols-fr">
         {languages.map((lang) => (
-          <CaptionColumn key={lang} lang={lang} lines={visibleCaptionLines(captionLines[lang] ?? [])} open={captions.openLangs.includes(lang)} speakers={speakers} />
+          <CaptionColumn key={lang} lang={lang} lines={visibleCaptionLines(captionLines[lang] ?? [])} open={captions.openLangs.includes(lang)} speakers={speakers} main={main} />
         ))}
       </div>
     </div>

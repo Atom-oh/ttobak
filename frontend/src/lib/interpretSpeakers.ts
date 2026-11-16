@@ -41,6 +41,42 @@ export function speakerColorIndex(label: string | undefined): number | null {
   return number === null ? null : number % SPEAKER_COLOR_COUNT;
 }
 
+/** Lines another speaker must lead by to take over as the main speaker. */
+export const MAIN_SPEAKER_LEAD = 3;
+
+/**
+ * The speaker who said the most remembered lines. Transcribe numbers voices
+ * in the order it first hears them, so label "0" is often not the person who
+ * talks most; the main speaker is the one shown in the default colour. The
+ * current main speaker keeps the role until another leads by
+ * MAIN_SPEAKER_LEAD lines, so two speakers taking turns do not swap colours
+ * on every line. A tie goes to the lower label.
+ */
+export function mainSpeaker(speakers: Record<string, string>, current?: string): string | undefined {
+  const counts = new Map<string, number>();
+  for (const label of Object.values(speakers)) {
+    if (speakerNumber(label) !== null) counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  let best: string | undefined;
+  let bestCount = 0;
+  for (const [label, count] of counts) {
+    if (count > bestCount || (count === bestCount && best !== undefined && Number(label) < Number(best))) {
+      best = label;
+      bestCount = count;
+    }
+  }
+  const held = current === undefined ? 0 : counts.get(current) ?? 0;
+  return held > 0 && bestCount - held < MAIN_SPEAKER_LEAD ? current : best;
+}
+
+/**
+ * Colour slot of a line: null (the default colour) for the main speaker and
+ * for an unlabelled line, otherwise the speaker's own slot.
+ */
+export function speakerColorSlot(label: string | undefined, main: string | undefined): number | null {
+  return label !== undefined && label === main ? null : speakerColorIndex(label);
+}
+
 /**
  * Records one segment's speaker, dropping the oldest entries past the cap.
  * Returns the same object when nothing changes.

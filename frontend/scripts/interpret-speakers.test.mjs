@@ -57,3 +57,31 @@ test('the interpret session asks for speaker labels and the page has one colour 
   const palette = read('../src/app/interpret/page.tsx').match(/const SPEAKER_TEXT = \[([\s\S]*?)\];/)[1];
   assert.equal(palette.split('\n').filter((row) => row.includes("'text-")).length, SPEAKER_COLOR_COUNT);
 });
+
+const { mainSpeaker, speakerColorSlot, MAIN_SPEAKER_LEAD } = loaded.exports;
+const lines = (...labels) => Object.fromEntries(labels.map((label, at) => [`s${at}`, label]));
+
+test('the speaker with the most lines is the main speaker, whatever its label', () => {
+  assert.equal(mainSpeaker(lines('1', '0', '1', '1')), '1');
+  assert.equal(mainSpeaker(lines('0', '1')), '0', 'a tie goes to the lower label');
+  assert.equal(mainSpeaker({}), undefined);
+  assert.equal(mainSpeaker(lines('x', 'y')), undefined, 'labels that are not speaker numbers do not count');
+});
+
+test('the main speaker keeps the role until another leads by a clear margin', () => {
+  // "0" is main; "1" overtakes by one or two lines without taking over.
+  assert.equal(mainSpeaker(lines('0', '0', '1', '1', '1'), '0'), '0');
+  assert.equal(mainSpeaker(lines('0', '0', '1', '1', '1', '1'), '0'), '0');
+  const ahead = lines('0', '0', ...Array(2 + MAIN_SPEAKER_LEAD).fill('1'));
+  assert.equal(mainSpeaker(ahead, '0'), '1');
+  // A main speaker whose lines all scrolled out of memory loses the role at once.
+  assert.equal(mainSpeaker(lines('1'), '0'), '1');
+});
+
+test('the main speaker and unlabelled lines use the default colour; others get a slot', () => {
+  assert.equal(speakerColorSlot('1', '1'), null);
+  assert.equal(speakerColorSlot(undefined, '1'), null);
+  assert.equal(speakerColorSlot('0', '1'), 0);
+  assert.equal(speakerColorSlot('7', '1'), 7 % SPEAKER_COLOR_COUNT);
+  assert.equal(speakerColorSlot('0', undefined), 0);
+});
