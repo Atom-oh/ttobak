@@ -72,6 +72,10 @@ type DictionaryService struct {
 	// liveVocabulary serves the READY active vocabulary name to its owner for
 	// live caption streams (SetLiveVocabulary).
 	liveVocabulary bool
+	// Generated spoken forms (SetSpokenForms); nil store disables them.
+	spokenStore SpokenFormStore
+	spokenGen   SpokenFormGenerator
+	spokenCfg   SpokenFormConfig
 }
 
 // SetLiveVocabulary enables naming the caller's READY vocabulary in dictionary

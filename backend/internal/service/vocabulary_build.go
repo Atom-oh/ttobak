@@ -241,6 +241,11 @@ type vocabStep struct {
 // call (no claim, no plan) with a warning.
 func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang string, manual bool, memo *membershipMemo, listed *[]vocabLayer) []string {
 	bypass := manual
+	// One cache read and at most one generation batch per call; ko-KR only.
+	var spoken *spokenForms
+	if lang == model.VocabLangKo {
+		spoken = &spokenForms{}
+	}
 	var warnings []string
 	var (
 		accountIDs []string
@@ -274,6 +279,7 @@ func (s *DictionaryService) ensureVocabulary(ctx context.Context, userID, lang s
 			log.Printf("vocabulary build skipped for user %s: %v", userID, err)
 			return append(warnings, vocabularyRebuildWarning)
 		}
+		s.applySpokenForms(ctx, userID, layers, spoken, manual)
 		if listed != nil {
 			*listed = layers
 		}
