@@ -44,13 +44,15 @@ async function loadTranscribeConfig(): Promise<TranscribeStreamingConfig | null>
     identityPoolId: cfg.cognito.identityPoolId,
     userPoolId: cfg.cognito.userPoolId,
   };
-  // Same custom-vocabulary lookup as a recording; captions work without it.
+  // Same custom-vocabulary and spoken-form lookup as a recording; captions work without it.
   try {
-    const [{ dictionaryApi }, { liveVocabularyNamesFrom }] = await Promise.all([
-      import('@/lib/api'), import('@/lib/liveVocabulary'),
+    const [{ dictionaryApi }, { liveVocabularyNamesFrom }, { liveReplacementsFrom }] = await Promise.all([
+      import('@/lib/api'), import('@/lib/liveVocabulary'), import('@/lib/liveReplacement'),
     ]);
-    const vocabularies = liveVocabularyNamesFrom((await dictionaryApi.get()).vocabularies);
-    if (vocabularies) return { ...config, vocabularies };
+    const dictionary = await dictionaryApi.get();
+    const vocabularies = liveVocabularyNamesFrom(dictionary.vocabularies);
+    const replacements = liveReplacementsFrom(dictionary.liveReplacements);
+    if (vocabularies || replacements) return { ...config, vocabularies, replacements };
   } catch {
     // Fall through to captions with no custom vocabulary.
   }

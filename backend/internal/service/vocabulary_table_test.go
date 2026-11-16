@@ -91,7 +91,7 @@ func TestVocabularyHeardAsRows(t *testing.T) {
 		// The main phrase is not valid for ko-KR; the spoken form still is.
 		row("S3", "S3", m, false, 2, "에스쓰리"),
 		// An alias never takes another term's own phrase, in either order.
-		row("Other", "Other", m, true, 3, "또박 노트", "클로드-코드"),
+		row("Other", "Other", m, true, 3, "또박 노트", "또박노트", "클로드-코드"),
 		row("또박 노트", "또박-노트", m, true, 4),
 		// Automatic terms the user never touched keep their aliases out.
 		row("Auto Term", "Auto-Term", a, true, 5, "오토 텀"),
@@ -112,5 +112,49 @@ func TestVocabularyHeardAsRows(t *testing.T) {
 	// An alias-only edit changes the table, so it must count as a vocabulary change.
 	if !contributesVocabulary(rows[1]) || contributesVocabulary(suggested) || contributesVocabulary(row("X", "", m, false, 9, "엑스 텀")) {
 		t.Fatal("contributesVocabulary: an active term with a spoken form contributes; a suggestion or an empty term does not")
+	}
+}
+
+func TestLiveReplacements(t *testing.T) {
+	m, on := model.TermOriginManual, model.TermStateActive
+	row := func(display, phrase string, ko bool, added int, heard ...string) model.DictTerm {
+		return model.DictTerm{SK: "DICTTERM#" + display, TermKey: NormalizeTermKey(display), DisplayAs: display, Phrase: phrase,
+			Origin: m, State: on, TranscribeKo: ko, HeardAs: heard, AddedAt: fmt.Sprintf("2026-10-01T00:00:00.%06dZ", added)}
+	}
+	layers := []vocabLayer{
+		{name: "personal", rows: []model.DictTerm{
+			row("Claude Code", "Claude-Code", true, 1, "클로드 코드"),
+			row("S3", "S3", false, 2, "에스쓰리"),
+			// A term that is itself Hangul needs no replacement.
+			row("또박 노트", "또박-노트", true, 3),
+		}},
+		// A later layer cannot retarget a spoken form an earlier layer claimed.
+		{name: "account:a1", rows: []model.DictTerm{row("Cloud Code", "Cloud-Code", true, 4, "클로드 코드", "클라우드 코드", "클라우드코드")}},
+		// Any signed-in user can edit a Common term: its spoken forms reach
+		// neither other users' captions nor their vocabulary (ADR-008 R17).
+		{name: model.DictLayerCommon, rows: []model.DictTerm{
+			row("Shared Term", "Shared-Term", true, 5, "셰어드 텀"),
+			row("Digits 9", "Digits-9", false, 6, "디지츠 나인"),
+		}},
+	}
+	if table, _ := RenderVocabularyTSV(layeredVocabularyEntries(layers, model.VocabLangKo)); strings.Contains(table, "셰어드") ||
+		strings.Contains(table, "디지츠") || !strings.Contains(table, "Shared-Term\t\t\tShared Term\n") || strings.Contains(table, "클라우드코드") {
+		t.Fatalf("Common spoken forms or a spacing-only duplicate reached the table:\n%s", table)
+	}
+	got := liveReplacements(layers)
+	want := []model.LiveReplacement{
+		{Heard: "클로드 코드", DisplayAs: "Claude Code"}, {Heard: "에스쓰리", DisplayAs: "S3"}, {Heard: "클라우드 코드", DisplayAs: "Cloud Code"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+	var many []model.DictTerm
+	for i := 0; i < LiveReplacementsMax+20; i++ {
+		// Distinct two-syllable spoken forms.
+		heard := string([]rune{rune(0xAC00 + i), rune(0xAC00 + i)})
+		many = append(many, row(fmt.Sprintf("Term%c%c", 'a'+i/26%26, 'a'+i%26)+strings.Repeat("x", i/676), "Digit-9", false, i, heard))
+	}
+	if n := len(liveReplacements([]vocabLayer{{rows: many}})); n != LiveReplacementsMax {
+		t.Fatalf("cap: %d", n)
 	}
 }

@@ -146,11 +146,13 @@ export function useRecordingSession({
         // Streams started after it resolves send that name as VocabularyNames;
         // a rejected name is dropped for the recording (liveVocabulary.ts).
         // An earlier stream keeps running without one rather than waiting.
-        Promise.all([import('@/lib/api'), import('@/lib/liveVocabulary')])
-          .then(([{ dictionaryApi }, { liveVocabularyNamesFrom }]) => dictionaryApi.get().then(response => {
+        Promise.all([import('@/lib/api'), import('@/lib/liveVocabulary'), import('@/lib/liveReplacement')])
+          .then(([{ dictionaryApi }, { liveVocabularyNamesFrom }, { liveReplacementsFrom }]) => dictionaryApi.get().then(response => {
             const vocabularies = liveVocabularyNamesFrom(response.vocabularies);
-            if (cancelled || !vocabularies || transcribeConfigRef.current !== config) return;
-            transcribeConfigRef.current = { ...config, vocabularies };
+            // Spoken forms the vocabulary did not catch are rewritten in the caption text (liveReplacement.ts).
+            const replacements = liveReplacementsFrom(response.liveReplacements);
+            if (cancelled || (!vocabularies && !replacements) || transcribeConfigRef.current !== config) return;
+            transcribeConfigRef.current = { ...config, vocabularies, replacements };
           }))
           .catch(() => {});
         // A recording that started (createManager, below) before this fetch

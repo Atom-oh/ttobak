@@ -300,7 +300,9 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   qualify; an untouched automatic term contributes its phrase only. A term
   whose own phrase ko-KR rejects (digits, dotted acronyms) still contributes
   its spoken forms; a term with an empty phrase (the vocabulary opt-out)
-  contributes none. A spoken form never takes a phrase that is some term's own,
+  contributes none. Common terms contribute no spoken forms at all, edited or
+  not (R17): any signed-in user can edit a Common term, and its spoken form
+  would otherwise enter every user's vocabulary and live captions. A spoken form never takes a phrase that is some term's own,
   and the first term to claim one keeps it. An edit that changes a term's
   spoken forms (an alias edit, or the first edit of an automatic term) rebuilds
   the vocabulary. `TermCount` counts table rows, not terms. Accepted risk: on a
@@ -375,8 +377,22 @@ readers never build. Callers and response: [API-SPEC](../API-SPEC.md#personal-di
   language when given names; with one, a vocabulary BadRequest before the first
   event retries once without it and any vocabulary rejection drops it for the
   recording. Without names it adds no request fields and never retries.
-- Not covered: live-config, source meeting titles, account dictionaries, live
-  aliases, backfill.
+- **Live replacements.** With `LIVE_VOCABULARY_MODE=on` the dictionary GET also
+  lists `liveReplacements`: the ko-KR table's spoken-form rows as
+  `{heard, displayAs}` text pairs (`liveReplacements`, at most 500, table
+  order, taken from the listing the ko-KR ensure already made). The vocabulary
+  only raises the chance that Transcribe writes the term; `liveReplacement.ts`
+  rewrites a caption that still spells the spoken form in Hangul. A form
+  matches at a word start, with or without its spaces, and the longest wins;
+  nothing is required after it, because a particle cannot be told from the
+  rest of a longer word, so a form also rewrites the head of a longer Hangul
+  word; only captions identified as Korean (or with
+  no language) are rewritten, before translation and the caption windows. The
+  client validates each pair (Hangul words only, bounded display text). The
+  same accepted risk as spoken-form rows applies, here deterministically: a
+  spoken form that is an ordinary word is always rewritten.
+- Not covered: live-config, source meeting titles, account dictionaries,
+  backfill.
 
 Rollout checks (record each with a date):
 
@@ -431,7 +447,9 @@ owns. An organisation-only dictionary was rejected as insufficiently personal.
   are tombstones that can be restored from the audit snapshot.
 - **R17 (edited Common terms).** A Common term a user edited (`userEditedAt`
   set) is left out of the transcript-correction glossary; vocabulary and the
-  Whisper prompt still include it (bias only). The oldest audit row of a Common
+  Whisper prompt still include its own phrase (bias only). No Common term,
+  edited or not, contributes a spoken-form row or a live replacement: those
+  display another text as the term, which is correction, not bias. The oldest audit row of a Common
   term is never trimmed. Together these keep L2 (anyone edits) from turning L3
   (silent correction) into a vandalism path; the cost is that a user-improved
   Common term does not drive corrections.
