@@ -217,8 +217,25 @@ class BuildAgentTest(unittest.TestCase):
         reader = self.build("reader")
         self.assertEqual(reader.kwargs["model"].kwargs["additional_request_fields"],
                          {"reasoning": {"effort": "low"}})
-        writer = self.build("writer")
+        writer = self.build("writer", {"WRITER_MODEL_ID": "writer-x"})
         self.assertNotIn("additional_request_fields", writer.kwargs["model"].kwargs)
+
+    def test_sonnet_5_5_reasons_only_between_tools(self):
+        between = {"thinking": {"type": "between_tools"}}
+        for role, env in (("writer", {}), ("researcher", {}),
+                          ("writer", {"WRITER_MODEL_ID": "apac.anthropic.claude-sonnet-5-5"}),
+                          ("orchestrator",
+                           {"ORCHESTRATOR_MODEL_ID": "global.anthropic.claude-sonnet-5-5"})):
+            with self.subTest(role=role, env=env):
+                for name in ("WRITER_MODEL_ID", "ORCHESTRATOR_MODEL_ID"):
+                    env.setdefault(name, "")
+                kwargs = self.build(role, env).kwargs["model"].kwargs
+                self.assertEqual(kwargs["additional_request_fields"], between)
+        for model_id in ("global.anthropic.claude-haiku-5-5",
+                         "global.anthropic.claude-sonnet-5-5-x"):
+            with self.subTest(model_id=model_id):
+                kwargs = self.build("writer", {"WRITER_MODEL_ID": model_id}).kwargs["model"].kwargs
+                self.assertNotIn("additional_request_fields", kwargs)
 
     def test_reasoning_fields_follow_role_and_resolved_luna_id(self):
         def fields(role, env):
@@ -262,6 +279,25 @@ class BuildAgentTest(unittest.TestCase):
     def test_unknown_role(self):
         with self.assertRaises(ValueError):
             self.build("admin")
+
+
+class IsMaxTokensTest(unittest.TestCase):
+    def test_matches_only_the_strands_exception(self):
+        class MaxTokensReachedException(Exception):
+            pass
+
+        exceptions = types.ModuleType("strands.types.exceptions")
+        exceptions.MaxTokensReachedException = MaxTokensReachedException
+        fake = {"strands": types.ModuleType("strands"),
+                "strands.types": types.ModuleType("strands.types"),
+                "strands.types.exceptions": exceptions}
+        with mock.patch.dict(sys.modules, fake):
+            self.assertTrue(llm.is_max_tokens(MaxTokensReachedException("cap")))
+            self.assertFalse(llm.is_max_tokens(RuntimeError("cap")))
+
+    def test_false_without_strands(self):
+        with mock.patch.dict(sys.modules, {"strands": None}):
+            self.assertFalse(llm.is_max_tokens(RuntimeError("x")))
 
 
 class ScriptedAgent:

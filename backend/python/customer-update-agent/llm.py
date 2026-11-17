@@ -16,6 +16,11 @@ ROLES = frozenset({"orchestrator", "reader", "gate", "researcher", "writer", "re
 _WRITER_ROLES = frozenset({"researcher", "writer"})
 # Same request field as backend/python/crawler/news_enrichment.py.
 LUNA_REQUEST_FIELDS = {"reasoning": {"effort": "low"}}
+# Claude Sonnet 5.5 reasons before answering by default, and those tokens count
+# against maxTokens: measured 2026-11-16, two of three writer replies stopped at
+# the 1500 cap. It rejects {"type": "disabled"}; "between_tools" keeps reasoning
+# only between tool calls (same setting as backend/internal/service/terms_extract.go).
+SONNET_5_5_REQUEST_FIELDS = {"thinking": {"type": "between_tools"}}
 MAX_RESPONSE_BYTES = 64_000
 MAX_DEPTH = 32
 DEFAULT_REGION = "ap-northeast-2"
@@ -64,7 +69,24 @@ def _uses_luna_fields(role, model_id):
     return role not in _WRITER_ROLES and model_id == _luna_model_id()
 
 
-def _bedrock_model(model_id, luna_fields, max_tokens):
+def _is_claude_sonnet_5_5(model_id):
+    name = model_id
+    i = name.rfind("anthropic.")
+    if i >= 0:
+        name = name[i + len("anthropic."):]
+    return name == "claude-sonnet-5-5"
+
+
+def _request_fields(role, model_id):
+    """additionalModelRequestFields for one role, or None."""
+    if _uses_luna_fields(role, model_id):
+        return LUNA_REQUEST_FIELDS
+    if _is_claude_sonnet_5_5(model_id):
+        return SONNET_5_5_REQUEST_FIELDS
+    return None
+
+
+def _bedrock_model(model_id, request_fields, max_tokens):
     """All BedrockModel kwargs live here. Verified offline against
     strands-agents 1.65.0: format_request maps max_tokens to Converse
     inferenceConfig.maxTokens and additional_request_fields to
@@ -79,8 +101,8 @@ def _bedrock_model(model_id, luna_fields, max_tokens):
         "boto_client_config": Config(read_timeout=120, connect_timeout=10,
                                      retries={"max_attempts": 3, "mode": "adaptive"}),
     }
-    if luna_fields:
-        kwargs["additional_request_fields"] = json.loads(json.dumps(LUNA_REQUEST_FIELDS))
+    if request_fields:
+        kwargs["additional_request_fields"] = json.loads(json.dumps(request_fields))
     return BedrockModel(**kwargs)
 
 
@@ -101,7 +123,7 @@ def build_agent(role, system_prompt, tools=None):
     from strands import Agent
 
     model_id = model_id_for(role)
-    model = _bedrock_model(model_id, _uses_luna_fields(role, model_id), MAX_TOKENS[role])
+    model = _bedrock_model(model_id, _request_fields(role, model_id), MAX_TOKENS[role])
     kwargs = {"model": model, "system_prompt": system_prompt,
               "tools": list(tools) if tools else [], "callback_handler": None}
     executor = _sequential_executor() if tools else None
@@ -202,6 +224,17 @@ def _repair_prompt(required):
     keys = ", ".join(json.dumps(k) for k in sorted(required))
     return ("Your previous reply was not a valid answer. Reply again with exactly one JSON "
             f"object containing the keys {keys}, and no other text.")
+
+
+def is_max_tokens(error):
+    """True for strands' MaxTokensReachedException (a reply stopped at the output cap).
+
+    False where strands is absent (unit tests fake it per case)."""
+    try:
+        from strands.types.exceptions import MaxTokensReachedException
+    except ImportError:
+        return False
+    return isinstance(error, MaxTokensReachedException)
 
 
 def ask_json(agent, prompt, required):
