@@ -335,6 +335,25 @@ class DraftPairTest(unittest.TestCase):
         self.assertEqual((result.outcome, result.discard_reason), ("discarded", "writer_error"))
         self.assertEqual(d.ask_review.prompts, [])
 
+    def test_writer_stopped_at_output_cap_gets_rewrite(self):
+        class MaxTokensReachedException(Exception):
+            pass
+
+        exceptions = types.ModuleType("strands.types.exceptions")
+        exceptions.MaxTokensReachedException = MaxTokensReachedException
+        fake = {"strands": types.ModuleType("strands"),
+                "strands.types": types.ModuleType("strands.types"),
+                "strands.types.exceptions": exceptions}
+        with mock.patch.dict(sys.modules, fake):
+            write = FakeModel(MaxTokensReachedException("cap"), GOOD)
+            result, _, _ = self.run_pair(write=write)
+            self.assertEqual(result.outcome, "drafted")
+            self.assertEqual(len(write.prompts), 2)
+            self.assertIn("too long", write.prompts[1][0])
+            result, led, _ = self.run_pair(write=FakeModel(MaxTokensReachedException("cap")))
+        self.assertEqual((result.outcome, result.discard_reason), ("discarded", "writer_error"))
+        self.assertEqual(led.stats()["discarded"], 1)
+
     def test_unexpected_exception_is_pipeline_error(self):
         result, led, _ = self.run_pair(write=FakeModel(RuntimeError("boom")))
         self.assertEqual((result.outcome, result.discard_reason), ("discarded", "pipeline_error"))
