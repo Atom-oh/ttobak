@@ -581,6 +581,23 @@ test('assigning a customer links without sharing and maps failures to row messag
   assert.match(await fail(new Error('network')), /고객 연결에 실패했습니다/);
 });
 
+test('local account links survive stale refresh rows until a newer account appears', () => {
+  const { applyLocalAccountLinks } = loadWorkspace()('@/lib/meetingWorkspace');
+  const links = new Map([['linked', 'acct']]);
+  const stale = [meeting('linked'), meeting('other')];
+  const [restored, other] = applyLocalAccountLinks(stale, links);
+  assert.equal(restored.accountId, 'acct');
+  assert.equal(stale[0].accountId, undefined);
+  assert.equal(other, stale[1]);
+  const confirmed = meeting('linked', undefined, { accountId: 'acct' });
+  assert.equal(applyLocalAccountLinks([confirmed], links)[0], confirmed);
+  assert.equal(links.size, 1);
+  const moved = meeting('linked', undefined, { accountId: 'newer' });
+  assert.equal(applyLocalAccountLinks([moved], links)[0].accountId, 'newer');
+  assert.equal(links.size, 0);
+  assert.equal(applyLocalAccountLinks([meeting('linked')], links)[0].accountId, undefined);
+});
+
 test('loaded-result scope includes deduplicated count and remains visible on empty matches', () => {
   const rows = [meeting('first'), meeting('second'), meeting('first')];
   const html = renderList({ meetings: rows, hasMore: true });

@@ -29,6 +29,7 @@ function render(search = '') {
     '@/lib/auth': { getIdToken: () => null },
     '@/lib/postUploadRefresh': { useProcessingRefresh() {}, useUploadSeed: () => ({ current: null }), withUploadSeed: rows => rows },
     '@/types/specreqTask': { parseTaskHighlight: value => value || undefined },
+    '@/lib/meetingWorkspace': { applyLocalAccountLinks: rows => rows },
   };
   const cache = new Map();
   const load = path => {

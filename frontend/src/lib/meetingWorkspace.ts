@@ -118,3 +118,25 @@ export function meetingDateBoundary(value: string, edge: 'from' | 'to'): string 
   }
   return boundary.toISOString();
 }
+
+/**
+ * Re-applies account links made in this list to rows from a response that may
+ * have been issued before the link committed, so a stale refresh cannot show the
+ * row as unassigned again. A row showing a different account is a newer change and
+ * ends its entry; a full reload clears every entry.
+ */
+export function applyLocalAccountLinks<T extends Pick<Meeting, 'meetingId' | 'accountId' | 'meetingCategory'>>(
+  meetings: T[], links: Map<string, string>,
+): T[] {
+  if (!links.size) return meetings;
+  return meetings.map(meeting => {
+    const accountId = links.get(meeting.meetingId);
+    if (!accountId) return meeting;
+    if (meeting.accountId === accountId) return meeting;
+    if (meeting.accountId) {
+      links.delete(meeting.meetingId);
+      return meeting;
+    }
+    return { ...meeting, accountId, meetingCategory: undefined };
+  });
+}

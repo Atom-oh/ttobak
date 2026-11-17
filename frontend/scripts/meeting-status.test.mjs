@@ -142,6 +142,8 @@ function homeFixture(initial, { search = '?uploaded=uploaded' } = {}) {
   const token = sub => `x.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.y`;
   dependencies['@/lib/auth'] = { getIdToken: () => token(auth.user?.userId) };
   modules['@/lib/postUploadRefresh'] = loadModule('../src/lib/postUploadRefresh.ts');
+  modules['@/lib/meetingCategory'] = loadModule('../src/lib/meetingCategory.ts');
+  modules['@/lib/meetingWorkspace'] = loadModule('../src/lib/meetingWorkspace.ts');
   const workspace = loadModule('../src/components/workspace/MeetingsWorkspace.tsx', true);
   const exports = { default: () => {
     let node = workspace.MeetingsWorkspace();
