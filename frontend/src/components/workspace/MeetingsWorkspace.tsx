@@ -10,6 +10,7 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 import { accountApi, meetingsApi } from '@/lib/api';
 import { getIdToken } from '@/lib/auth';
 import { useProcessingRefresh, useUploadSeed, withUploadSeed } from '@/lib/postUploadRefresh';
+import { applyLocalAccountLinks } from '@/lib/meetingWorkspace';
 import { parseTaskHighlight } from '@/types/specreqTask';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { PrivateUpcomingMeetings } from './UpcomingMeetings';
@@ -111,6 +112,8 @@ function MeetingsContent({ userId }: { userId: string }) {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
+  // Links made from this list, kept until a response confirms them (stale refreshes cannot revert them).
+  const localLinksRef = useRef(new Map<string, string>());
   const accountList = useWorkspaceAccounts(userId);
   const apiTab = activeTab === 'shared' ? 'shared' : 'all';
   // Processing meetings (and an upload hint, if present) refresh in place.
@@ -123,6 +126,7 @@ function MeetingsContent({ userId }: { userId: string }) {
     setError(null);
     setIsLoadingMore(Boolean(cursor));
     if (!cursor) {
+      localLinksRef.current.clear();
       setIsFetching(true);
       setMeetings([]);
       setNextCursor(null);
@@ -138,7 +142,7 @@ function MeetingsContent({ userId }: { userId: string }) {
         const merged = Array.from(new Map(
           [...(cursor ? previous : []), ...result.meetings].map(meeting => [meeting.meetingId, meeting]),
         ).values());
-        return cursor ? merged : withUploadSeed(merged, seed);
+        return applyLocalAccountLinks(cursor ? merged : withUploadSeed(merged, seed), localLinksRef.current);
       });
       setNextCursor(result.nextCursor);
     } catch {
@@ -161,7 +165,7 @@ function MeetingsContent({ userId }: { userId: string }) {
     list: signal => meetingsApi.list({
       tab: apiTab, accountIds: selectedAccountIds.length ? selectedAccountIds : undefined,
     }, { signal, expectedUserId: userId }).then(result => result.meetings),
-    setMeetings,
+    setMeetings: update => setMeetings(previous => applyLocalAccountLinks(update(previous), localLinksRef.current)),
     busy: () => Boolean(requestRef.current),
   });
 
@@ -214,8 +218,10 @@ function MeetingsContent({ userId }: { userId: string }) {
                 accountsError={accountList.error} onRetryAccounts={accountList.retry}
                 hasMore={Boolean(nextCursor)} error={error} onRetry={retry}
                 onDeleteMeeting={meetingId => setMeetings(previous => previous.filter(meeting => meeting.meetingId !== meetingId))}
-                onMeetingAccountLinked={(meetingId, accountId) => setMeetings(previous => previous.map(meeting => (
-                  meeting.meetingId === meetingId ? { ...meeting, accountId, meetingCategory: undefined } : meeting)))}
+                onMeetingAccountLinked={(meetingId, accountId) => {
+                  localLinksRef.current.set(meetingId, accountId);
+                  setMeetings(previous => applyLocalAccountLinks(previous, localLinksRef.current));
+                }}
               />
             </Suspense>
             {nextCursor && !isFetching && (
