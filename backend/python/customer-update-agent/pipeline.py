@@ -101,6 +101,11 @@ def _attempt(content, account, research, feedback, allowed, deps):
         draft = writer.write(content, account, research, feedback, deps.ask_write)
     except llm.ModelOutputError:
         return None, [WRITER_ERROR], "writer_error: reply with valid JSON in the required shape"
+    except Exception as error:
+        if not llm.is_max_tokens(error):
+            raise
+        # A reply stopped at the output cap gets the one rewrite, not a pair failure.
+        return None, [WRITER_ERROR], "writer_error: the reply was too long; keep it short"
     codes = _code_failures(draft, account, allowed)
     if codes:
         return None, codes, "failed checks: " + ", ".join(codes)

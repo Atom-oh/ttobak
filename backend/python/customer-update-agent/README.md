@@ -39,6 +39,10 @@ the owner steps are in the [runbook](../../../docs/runbooks/customer-update-agen
   tool calls or a third of `RUN_DEADLINE_SECONDS`, the researcher after 12 tool
   calls per pair (`llm.build_stoppable_agent` cancels the Strands loop); past the
   deadline the sweep raises `RunDeadline` and writes no results and no `DONE`.
+- Claude Sonnet 5.5 requests (researcher, writer, or an orchestrator override)
+  carry `thinking: {"type": "between_tools"}`: its default reasoning counts
+  against `maxTokens` (two of three measured writer replies stopped at the cap). A writer reply
+  that still stops at the cap is a `writer_error` and gets the one rewrite.
 - The reviewer also sees the account's insights and notes, fenced as internal
   material the draft must not quote or paraphrase, and the public news apart.
 
