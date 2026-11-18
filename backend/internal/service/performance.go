@@ -54,6 +54,8 @@ type PerformanceStore interface {
 	// ListPerformanceInvites returns the unexpired invite records of one SFDC account.
 	ListPerformanceInvites(ctx context.Context, userID, sfdcAccountID string) ([]model.PerformanceInvite, error)
 	PutPerformanceInvite(ctx context.Context, userID string, invite model.PerformanceInvite) error
+	// DeletePerformanceTeamAccount removes one SFDC account's team and invite rows.
+	DeletePerformanceTeamAccount(ctx context.Context, userID, sfdcAccountID string) error
 	// GetAccountMappings returns the mappings for exactly the given SFDC IDs.
 	GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
@@ -146,8 +148,16 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 		// a repository change) for every batch, complete or not, so an assignment
 		// removed in a non-final batch cannot orphan its automatic mapping. The
 		// delete is conditional on manual = false and never touches manual rows.
-		if err := svc.deleteRemovedAutoMappings(ctx, userID, removedAssignmentIDs(normalized)); err != nil {
+		removed := removedAssignmentIDs(normalized)
+		if err := svc.deleteRemovedAutoMappings(ctx, userID, removed); err != nil {
 			log.Printf("performance removed mapping cleanup failed: %v", err)
+		}
+		// The account team of a removed assignment is deleted with it (ADR-023),
+		// whether or not the Mac team step still runs.
+		for _, id := range removed {
+			if err := svc.store.DeletePerformanceTeamAccount(ctx, userID, id); err != nil {
+				log.Printf("performance removed team cleanup failed: %v", err)
+			}
 		}
 		if normalized.Complete {
 			if err := svc.autoMapAssignments(ctx, userID, nil); err != nil {

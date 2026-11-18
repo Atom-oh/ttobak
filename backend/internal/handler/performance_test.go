@@ -56,6 +56,15 @@ func (store *performanceMemoryStore) ListPerformanceInvites(_ context.Context, _
 	return out, nil
 }
 
+func (store *performanceMemoryStore) DeletePerformanceTeamAccount(_ context.Context, userID, sfdcAccountID string) error {
+	for key, member := range store.team[userID] {
+		if member.SFDCAccountID == sfdcAccountID {
+			delete(store.team[userID], key)
+		}
+	}
+	return nil
+}
+
 func (store *performanceMemoryStore) PutPerformanceInvite(_ context.Context, _ string, invite model.PerformanceInvite) error {
 	store.invites = append(store.invites, invite)
 	return nil

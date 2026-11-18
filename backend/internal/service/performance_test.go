@@ -39,6 +39,12 @@ type performanceStoreFake struct {
 	team          map[string][]model.SFDCTeamMember
 	invites       map[string][]model.PerformanceInvite
 	putInvites    []model.PerformanceInvite
+	teamDeleted   []string
+}
+
+func (fake *performanceStoreFake) DeletePerformanceTeamAccount(_ context.Context, _, sfdcAccountID string) error {
+	fake.teamDeleted = append(fake.teamDeleted, sfdcAccountID)
+	return nil
 }
 
 func (fake *performanceStoreFake) ListPerformanceTeam(_ context.Context, userID, sfdcAccountID string) ([]model.SFDCTeamMember, error) {

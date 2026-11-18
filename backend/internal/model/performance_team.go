@@ -139,6 +139,8 @@ const (
 	OnboardingInviteInvited       = "invited"
 	OnboardingInviteAlreadyMember = "already_member"
 	OnboardingInviteFailed        = "failed"
+	// OnboardingInviteNotAttempted: the request's time budget ran out first; retry it.
+	OnboardingInviteNotAttempted = "not_attempted"
 )
 
 func PerformanceInviteSortKey(sfdcAccountID, alias string) string {

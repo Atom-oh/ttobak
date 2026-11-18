@@ -20,6 +20,11 @@ const performanceOnboardingMaxAccounts = 100
 // performanceInviteTTL matches the platform's pending-invite expiry.
 const performanceInviteTTL = 30 * 24 * time.Hour
 
+// performanceInviteBudget bounds one invite request. A new-user invite may take
+// up to 10 seconds (Cognito budget) and the API Lambda times out at 30 seconds,
+// so no item starts after this much time; later items report not_attempted.
+const performanceInviteBudget = 15 * time.Second
+
 // PerformanceMemberInviter is the AccountService member-add path. Onboarding
 // invitations go through it unchanged, so its membership, role and invite
 // rules apply.
@@ -53,7 +58,9 @@ func (svc *PerformanceService) onboardingAssignment(ctx context.Context, userID,
 }
 
 // onboardingMembers reads the mapped Account's member emails. ok is false
-// when the caller cannot read that Account.
+// when the caller cannot read that Account, or reads it only through an
+// ancestor grant: inviting needs direct membership (AddMember), so an
+// inherited reader gets "unknown" statuses and no invite.
 func (svc *PerformanceService) onboardingMembers(ctx context.Context, userID, accountID string) (map[string]bool, bool, error) {
 	if svc.accounts == nil {
 		return nil, false, nil
@@ -65,7 +72,7 @@ func (svc *PerformanceService) onboardingMembers(ctx context.Context, userID, ac
 	if err != nil {
 		return nil, false, err
 	}
-	if account == nil {
+	if account == nil || account.InheritedFromAccountID != "" {
 		return nil, false, nil
 	}
 	emails := make(map[string]bool, len(account.Members))
@@ -280,8 +287,14 @@ func (svc *PerformanceService) InviteOnboarding(ctx context.Context, userID, sfd
 		}
 	}
 	response := &model.OnboardingInviteResponse{Results: make([]model.OnboardingInviteResult, 0, len(request.Items))}
+	started := svc.now()
 	for _, item := range request.Items {
 		result := model.OnboardingInviteResult{Alias: item.Alias}
+		if svc.now().Sub(started) >= performanceInviteBudget {
+			result.Outcome = model.OnboardingInviteNotAttempted
+			response.Results = append(response.Results, result)
+			continue
+		}
 		dto, err := inviter.AddMember(ctx, userID, accountID, &model.AddMemberRequest{Email: onboardingEmail(item.Alias), Role: item.Role})
 		switch {
 		case errors.Is(err, ErrMemberExists):
