@@ -7,6 +7,9 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
+/** Local MCP OAuth callback ports registered on every MCP-capable client. */
+export const MCP_CALLBACK_PORTS = [9876, 9877, 9878, 9879] as const;
+
 /** Custom attributes cc-on-bedrock requires on a shared pool (append-only). */
 export const CC_ON_BEDROCK_ATTRIBUTES = [
   'subdomain', 'container_os', 'resource_tier', 'security_policy', 'container_id',
@@ -249,9 +252,16 @@ export class AuthStack extends cdk.Stack {
     const configuredMcpCallbacks = ssm.StringListParameter.valueForTypedListParameter(
       this, '/ttobak/auth/mcp-callback-urls',
     );
+    // Loopback callbacks for ports 9876-9879. Cognito matches redirect URIs
+    // exactly (no port wildcard), so a local client whose default port is taken
+    // can move to an alternate port only if that port is registered here.
+    // Every entry stays on localhost; no external callback is introduced.
+    const mcpLoopbackCallbacks = MCP_CALLBACK_PORTS.flatMap(port => [
+      `http://localhost:${port}/callback`,
+      `http://localhost:${port}/callback/Z3RALQJi3TX1`,
+    ]);
     const mcpCallbacks = cdk.Fn.split(',', cdk.Fn.join(',', [
-      'http://localhost:9876/callback',
-      'http://localhost:9876/callback/Z3RALQJi3TX1',
+      ...mcpLoopbackCallbacks,
       cdk.Fn.join(',', configuredMcpCallbacks),
     ]));
 

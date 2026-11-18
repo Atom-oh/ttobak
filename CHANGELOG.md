@@ -11,6 +11,10 @@ manifests.
 
 ## [Unreleased]
 
+### Changed
+
+- MCP sign-in: Cognito now accepts local MCP callbacks on ports 9876-9879, so Claude Code, Codex or Kiro can switch to an alternate callback port when 9876 is busy. All registered callbacks stay on localhost.
+
 ## [1.1.0] - 2026-11-17
 
 ### Added

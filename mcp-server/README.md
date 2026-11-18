@@ -299,6 +299,11 @@ and baseline scopes. Both require an exactly registered callback. The SPA client
 `http://localhost:9876/callback` and adds the configured Codex host's callback,
 `http://localhost:9876/callback/Z3RALQJi3TX1`. Codex appends this server-specific
 path because Cognito discovery does not advertise authorization-response `iss`.
+AuthStack registers the same two loopback callbacks on ports `9877`-`9879` as
+well. If another process holds `9876`, set the client's callback port to one
+of those and keep the same path; any other port fails Cognito's exact match.
+This applies to external clients (Claude Code, Codex, Kiro); this package's
+stdio login still listens only on `9876`.
 Use callback port `9876`, callback base `http://localhost:9876/callback`, and
 baseline login scopes `openid,email,profile`, adding the resource-derived read
 scope in private mode; the issuer also advertises `phone`, which these clients

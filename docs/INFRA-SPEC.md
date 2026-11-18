@@ -87,7 +87,10 @@ reserved `access` scope. The old `ConnectorResourceServer` is retained without
 being referenced by these clients' allowed scopes. Cognito rejects resource
 binding when custom scopes belong to a different resource-server identifier.
 
-The public SPA/MCP client retains its two local port-9876 callbacks and adds
+The public SPA/MCP client and both connector clients register two local callbacks
+(`/callback` and `/callback/Z3RALQJi3TX1`) on each loopback port 9876-9879
+(`MCP_CALLBACK_PORTS`), so a local client can move off a busy port; Cognito has
+no port wildcard. They add
 deployment-specific redirects from the SSM StringList
 `/ttobak/auth/mcp-callback-urls`. Bootstrap that parameter in the deployment
 account and region before deploying AuthStack; its absence fails deployment.
