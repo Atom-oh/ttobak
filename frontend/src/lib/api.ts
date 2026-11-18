@@ -16,6 +16,7 @@ import type { SpecReqTaskChange, SpecReqTaskPage, SpecReqTaskView } from '@/type
 import type { CustomerBriefResponse } from '@/types/customerBrief';
 import type { PerformanceReport, PerformanceReportList } from '@/lib/performanceReport';
 import type { AccountMapping, PerformanceGoals, PerformanceMappingList, PerformanceMissedList, PerformancePeriod, PerformanceSourceList } from '@/lib/performance';
+import type { OnboardingDetail, OnboardingInviteItem, OnboardingInviteResult, OnboardingSummary } from '@/lib/onboarding';
 import type {
   AccountCalendarPage, CalendarEvent, CalendarEventPage, CalendarEventQuery, CalendarShareDirectoryAccount,
   CalendarSharingRequest, CalendarSourcePage,
@@ -240,6 +241,15 @@ export const performanceApi = {
     }),
   sources: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     apiFetch<PerformanceSourceList>('/api/performance/sources', { ...options, cache: 'no-store' }),
+  onboarding: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<OnboardingSummary>('/api/performance/onboarding', { ...options, cache: 'no-store' }),
+  onboardingDetail: (sfdcAccountId: string, options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<OnboardingDetail>(`/api/performance/onboarding/${encodeURIComponent(sfdcAccountId)}`, { ...options, cache: 'no-store' }),
+  // Each item runs the account member-add path on the server (verified email, allowlist, hourly limit).
+  inviteOnboarding: (sfdcAccountId: string, items: OnboardingInviteItem[], options?: { signal?: AbortSignal; expectedUserId?: string }) =>
+    apiFetch<{ results: OnboardingInviteResult[] }>(`/api/performance/onboarding/${encodeURIComponent(sfdcAccountId)}/invites`, {
+      ...options, method: 'POST', cache: 'no-store', body: JSON.stringify({ items }),
+    }),
   // Reports are written only by the owner's Mac CLI (PUT); the web lists, reads and deletes.
   reports: (options?: { signal?: AbortSignal; expectedUserId?: string }) =>
     apiFetch<PerformanceReportList>('/api/performance/reports', { ...options, cache: 'no-store' }),

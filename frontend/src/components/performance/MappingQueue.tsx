@@ -1,7 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { ApiError, performanceApi } from '@/lib/api';
+import { useMemo, useRef, useState } from 'react';
+import { accountApi, ApiError, performanceApi } from '@/lib/api';
+import { accountCreationAttempt } from '@/lib/accountCreation';
+import { ONBOARDING_COPY } from '@/lib/onboarding';
 import { buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
 import { mappingQueueGroups, mappingReasonText, type PerformanceMappingItem } from '@/lib/performance';
 import type { AccountSummary } from '@/types/meeting';
@@ -20,13 +22,65 @@ function placeholder(status: AccountsStatus, hasOptions: boolean): string {
   return hasOptions ? 'TTOBAK 어카운트 선택' : '연결할 어카운트가 없습니다';
 }
 
-function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: {
+/**
+ * Creates a TTOBAK Account named after an unmapped SFDC account, with the
+ * caller as Owner, then maps it manually. A retry after an unknown outcome
+ * replays the same requestId, so it never creates a second Account.
+ */
+function CreateCustomerButton({ item, userId, disabled, onCreated }: {
+  item: PerformanceMappingItem;
+  userId: string;
+  disabled: boolean;
+  onCreated: (sfdcAccountId: string, name: string) => void;
+}) {
+  const attempt = useRef<ReturnType<typeof accountCreationAttempt> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = (item.name || item.sfdcAccountId).trim();
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    let accountId: string;
+    try {
+      const request = { name };
+      attempt.current = accountCreationAttempt(request, attempt.current, () => crypto.randomUUID());
+      accountId = (await accountApi.create({ ...request, requestId: attempt.current.requestId }, userId)).accountId;
+    } catch {
+      setError(ONBOARDING_COPY.createFailed);
+      setBusy(false);
+      return;
+    }
+    try {
+      await performanceApi.putMapping(item.sfdcAccountId, accountId, { expectedUserId: userId });
+    } catch {
+      setError(ONBOARDING_COPY.mapFailed);
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    onCreated(item.sfdcAccountId, name);
+  };
+
+  return (
+    <>
+      <button type="button" onClick={() => void create()} disabled={disabled || busy}
+        className="shrink-0 rounded-lg border border-primary/40 px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/5 disabled:opacity-40">
+        {busy ? ONBOARDING_COPY.creating : ONBOARDING_COPY.createCustomer}
+      </button>
+      {error && <p role="alert" className="basis-full text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </>
+  );
+}
+
+function MappingRow({ item, reason, options, accountsStatus, userId, onSaved, onCreated }: {
   item: PerformanceMappingItem;
   reason: string | null;
   options: { accountId: string; path: string }[];
   accountsStatus: AccountsStatus;
   userId: string;
   onSaved: () => void;
+  onCreated?: (sfdcAccountId: string, name: string) => void;
 }) {
   // An automatic mapping starts on its current account: saving it unchanged confirms it as manual.
   // An unreadable one starts empty, like any unmapped assignment.
@@ -56,7 +110,7 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: 
         <label htmlFor={selectId} className="min-w-0 truncate text-sm font-medium text-slate-800 dark:text-text-main">{item.name || item.sfdcAccountId}</label>
         <span className="text-xs text-slate-500 dark:text-text-muted">{item.role ? `${item.role} · ` : ''}{item.sfdcAccountId}</span>
       </div>
-      <div className="flex min-w-0 gap-2">
+      <div className="flex min-w-0 flex-wrap gap-2">
         <select id={selectId} value={accountId} onChange={event => setAccountId(event.target.value)} disabled={saving || accountsStatus !== 'ready' || !options.length}
           className="w-full min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-50 dark:border-white/10 dark:bg-surface-lowest dark:text-text-secondary">
           <option value="">{placeholder(accountsStatus, options.length > 0)}</option>
@@ -66,6 +120,7 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: 
           className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-40">
           {saving ? '저장 중…' : !current ? '연결' : accountId === current ? '확인' : '변경'}
         </button>
+        {onCreated && !item.mapped && !item.reason && <CreateCustomerButton item={item} userId={userId} disabled={saving} onCreated={onCreated} />}
       </div>
       {reason && <p className="text-xs text-amber-700 dark:text-amber-400">{reason}</p>}
       {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{error}</p>}
@@ -79,7 +134,7 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved }: 
  * the owner can confirm or correct. A manual mapping always wins and is not
  * listed.
  */
-export function MappingQueue({ items, truncated, accounts, accountsStatus, onRetryAccounts, userId, onSaved }: {
+export function MappingQueue({ items, truncated, accounts, accountsStatus, onRetryAccounts, userId, onSaved, onCreated }: {
   items: PerformanceMappingItem[];
   truncated: boolean;
   accounts: AccountSummary[];
@@ -87,6 +142,8 @@ export function MappingQueue({ items, truncated, accounts, accountsStatus, onRet
   onRetryAccounts: () => void;
   userId: string;
   onSaved: () => void;
+  /** An Account was created and mapped for an unmapped SFDC account; the invite step opens. */
+  onCreated?: (sfdcAccountId: string, name: string) => void;
 }) {
   // Readability is judged only against a loaded list; a failed list judges nothing.
   const readable = useMemo(() => accountsStatus === 'ready' ? new Set(accounts.map(account => account.accountId)) : null,
@@ -96,7 +153,7 @@ export function MappingQueue({ items, truncated, accounts, accountsStatus, onRet
     .map(({ node, path }) => ({ accountId: node.accountId, path })), [accounts]);
   const row = (item: PerformanceMappingItem) => (
     <MappingRow key={`${item.sfdcAccountId}:${item.accountId ?? ''}:${item.manual}`} item={item} reason={mappingReasonText(item, readable)}
-      options={options} accountsStatus={accountsStatus} userId={userId} onSaved={onSaved} />
+      options={options} accountsStatus={accountsStatus} userId={userId} onSaved={onSaved} onCreated={onCreated} />
   );
 
   return (
