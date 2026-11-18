@@ -7,10 +7,10 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
-/** Custom attributes cc-on-bedrock requires on a shared pool (append-only). */
-
 /** Local MCP OAuth callback ports registered on every MCP-capable client. */
 export const MCP_CALLBACK_PORTS = [9876, 9877, 9878, 9879] as const;
+
+/** Custom attributes cc-on-bedrock requires on a shared pool (append-only). */
 export const CC_ON_BEDROCK_ATTRIBUTES = [
   'subdomain', 'container_os', 'resource_tier', 'security_policy', 'container_id',
   'department', 'budget_exceeded', 'storage_type', 'dept_manager_sub',
