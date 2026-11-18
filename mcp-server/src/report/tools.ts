@@ -52,7 +52,7 @@ export const TOOL_SERVERS: readonly ReportServer[] = REPORT_SERVERS.filter(serve
 /**
  * Permission rules for `--allowedTools`. All paths are absolute. File reads
  * are limited to `readDirs` (the skill, the run directory and the run's own
- * Claude session directory); writes to `outDir`, a subdirectory of the
+ * Claude session directory); writes (an Edit rule) to `outDir`, a subdirectory of the
  * working directory and never the working directory itself (its `.claude/`
  * would be a settings source).
  */
@@ -62,7 +62,8 @@ export function allowedTools(options: { skillDir: string; outDir: string; readDi
   for (const directory of options.readDirs) {
     for (const tool of ['Read', 'Glob', 'Grep']) rules.push(`${tool}(/${directory}/**)`);
   }
-  rules.push(`Write(/${options.outDir}/**)`);
+  // The CLI scopes every file-writing tool (Write, Edit, MultiEdit) by Edit(...) rules; a Write(path) allow rule never matches.
+  rules.push(`Edit(/${options.outDir}/**)`);
   for (const script of SKILL_SCRIPTS) rules.push(`Bash(python3 -I ${options.skillDir}/scripts/${script}:*)`);
   for (const server of REPORT_SERVERS) {
     if (!options.servers.includes(server)) continue;

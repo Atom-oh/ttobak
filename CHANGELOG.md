@@ -17,6 +17,7 @@ manifests.
 
 ### Fixed
 
+- The SA performance report can save small tool results in its output folder again: its write permission is an `Edit(...)` rule, the only form Claude Code applies to file writes.
 - The SA performance report runs on the owner's `model` setting, else Fable (it ran on the CLI default Sonnet), and its prompt names the exact script command form, so calendar, interview, Slack thread and PFR/CI counts are no longer skipped.
 
 ## [1.1.0] - 2026-11-17

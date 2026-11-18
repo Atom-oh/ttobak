@@ -151,7 +151,8 @@ test('allowlist_is_read_only', () => {
   }
   for (const tool of ['Read', 'Glob', 'Grep', 'Bash', 'Write', 'Edit']) assert.ok(!rules.includes(tool), tool);
   for (const tool of ['Read', 'Glob', 'Grep']) assert.ok(rules.includes(`${tool}(//s/skill/**)`), tool);
-  assert.deepEqual(rules.filter(rule => rule.startsWith('Write')), ['Write(//t/run/work/out/**)']);
+  assert.deepEqual(rules.filter(rule => rule.startsWith('Edit')), ['Edit(//t/run/work/out/**)']);
+  assert.ok(!rules.some(rule => rule.startsWith('Write')));
   // The working directory's .claude/ (a settings source) is denied to every file-writing tool.
   for (const tool of ['Write', 'Edit', 'MultiEdit']) assert.ok(deniedTools('/s/skill', '/t/run/work').includes(`${tool}(//t/run/work/.claude/**)`), tool);
   // The v1.4.0 data-sources read tools.
