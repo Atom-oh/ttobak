@@ -682,6 +682,10 @@ func (svc *PerformanceService) missedFreshness(ctx context.Context, userID strin
 	}
 	freshness := make([]model.PerformanceSourceFreshness, 0, len(sources.Sources)+1)
 	for _, source := range sources.Sources {
+		// Gaps never read the account team, so its freshness is not reported here.
+		if source.Source == model.PerformanceSourceSFDCAccountTeam {
+			continue
+		}
 		freshness = append(freshness, model.PerformanceSourceFreshness{Source: source.Source, LastCompletedAt: source.LastCompletedAt})
 	}
 	calendar := model.PerformanceSourceFreshness{Source: "calendar"}

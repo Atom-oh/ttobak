@@ -35,7 +35,7 @@ var (
 	performanceUserPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 	performanceIDPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	performanceAccountPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-	performanceSources        = []string{model.PerformanceSourceSFDCAssignments, model.PerformanceSourceSFDCTasks}
+	performanceSources        = []string{model.PerformanceSourceSFDCAssignments, model.PerformanceSourceSFDCTasks, model.PerformanceSourceSFDCAccountTeam}
 	performancePeriods        = map[string]bool{"week": true, "quarter": true, "year": true}
 )
 
@@ -48,6 +48,14 @@ type PerformanceStore interface {
 	ListPerformanceSources(ctx context.Context, userID string) ([]model.PerformanceSourceStatus, error)
 	ListPerformanceAssignments(ctx context.Context, userID string) ([]model.SFDCAssignment, error)
 	ListPerformanceTasks(ctx context.Context, userID string, from, to string) ([]model.SFDCTask, error)
+	// ListPerformanceTeam returns at most PerformanceTeamMaxPerAccount+1 stored
+	// team members of one SFDC account.
+	ListPerformanceTeam(ctx context.Context, userID, sfdcAccountID string) ([]model.SFDCTeamMember, error)
+	// ListPerformanceInvites returns the unexpired invite records of one SFDC account.
+	ListPerformanceInvites(ctx context.Context, userID, sfdcAccountID string) ([]model.PerformanceInvite, error)
+	PutPerformanceInvite(ctx context.Context, userID string, invite model.PerformanceInvite) error
+	// DeletePerformanceTeamAccount removes one SFDC account's team and invite rows.
+	DeletePerformanceTeamAccount(ctx context.Context, userID, sfdcAccountID string) error
 	// GetAccountMappings returns the mappings for exactly the given SFDC IDs.
 	GetAccountMappings(ctx context.Context, userID string, sfdcAccountIDs []string) (map[string]model.AccountMapping, error)
 	PutAccountMapping(ctx context.Context, userID string, mapping model.AccountMapping, onlyIfNotManual bool) error
@@ -84,7 +92,8 @@ func NewPerformanceService(store PerformanceStore, accounts PerformanceAccountRe
 }
 
 func validPerformanceSourceName(source string) bool {
-	return source == model.PerformanceSourceSFDCAssignments || source == model.PerformanceSourceSFDCTasks
+	return source == model.PerformanceSourceSFDCAssignments || source == model.PerformanceSourceSFDCTasks ||
+		source == model.PerformanceSourceSFDCAccountTeam
 }
 
 // Sync validates and normalizes one batch, computes its payload digest, and
@@ -124,6 +133,11 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 			return nil, err
 		}
 	}
+	if source == model.PerformanceSourceSFDCAccountTeam {
+		if err := svc.checkTeamCap(ctx, userID, normalized); err != nil {
+			return nil, err
+		}
+	}
 	receipt, err := svc.store.ApplyPerformanceBatch(ctx, userID, source, normalized, digest)
 	if err != nil {
 		return nil, err
@@ -134,8 +148,16 @@ func (svc *PerformanceService) Sync(ctx context.Context, userID, source string, 
 		// a repository change) for every batch, complete or not, so an assignment
 		// removed in a non-final batch cannot orphan its automatic mapping. The
 		// delete is conditional on manual = false and never touches manual rows.
-		if err := svc.deleteRemovedAutoMappings(ctx, userID, removedAssignmentIDs(normalized)); err != nil {
+		removed := removedAssignmentIDs(normalized)
+		if err := svc.deleteRemovedAutoMappings(ctx, userID, removed); err != nil {
 			log.Printf("performance removed mapping cleanup failed: %v", err)
+		}
+		// The account team of a removed assignment is deleted with it (ADR-023),
+		// whether or not the Mac team step still runs.
+		for _, id := range removed {
+			if err := svc.store.DeletePerformanceTeamAccount(ctx, userID, id); err != nil {
+				log.Printf("performance removed team cleanup failed: %v", err)
+			}
 		}
 		if normalized.Complete {
 			if err := svc.autoMapAssignments(ctx, userID, nil); err != nil {
@@ -192,7 +214,7 @@ func (svc *PerformanceService) normalizePerformanceRequest(source string, reques
 	for _, mutation := range request.Mutations {
 		switch mutation.Op {
 		case "remove":
-			if mutation.Assignment != nil || mutation.Task != nil || !performanceIDPattern.MatchString(mutation.ExternalID) {
+			if mutation.Assignment != nil || mutation.Task != nil || mutation.TeamMember != nil || !validPerformanceRemoveID(source, mutation.ExternalID) {
 				return model.PerformanceSyncRequest{}, ErrInvalidInput
 			}
 			normalized.Mutations = append(normalized.Mutations, model.PerformanceMutation{Op: "remove", ExternalID: mutation.ExternalID})
@@ -236,7 +258,7 @@ func normalizePerformanceUpsert(source string, mutation model.PerformanceMutatio
 	switch source {
 	case model.PerformanceSourceSFDCAssignments:
 		assignment := mutation.Assignment
-		if assignment == nil || mutation.Task != nil || !performanceIDPattern.MatchString(assignment.SFDCAccountID) ||
+		if assignment == nil || mutation.Task != nil || mutation.TeamMember != nil || !performanceIDPattern.MatchString(assignment.SFDCAccountID) ||
 			!validPerformanceText(assignment.Name, performanceMaxNameBytes) || !validPerformanceText(assignment.Role, performanceMaxLabelBytes) {
 			return model.PerformanceMutation{}, ErrInvalidInput
 		}
@@ -244,7 +266,7 @@ func normalizePerformanceUpsert(source string, mutation model.PerformanceMutatio
 		return model.PerformanceMutation{Op: "upsert", Assignment: &copied}, nil
 	case model.PerformanceSourceSFDCTasks:
 		task := mutation.Task
-		if task == nil || mutation.Assignment != nil || !performanceIDPattern.MatchString(task.TaskID) ||
+		if task == nil || mutation.Assignment != nil || mutation.TeamMember != nil || !performanceIDPattern.MatchString(task.TaskID) ||
 			(task.SFDCAccountID != "" && !performanceIDPattern.MatchString(task.SFDCAccountID)) ||
 			(task.SpecReqID != "" && !performanceIDPattern.MatchString(task.SpecReqID)) ||
 			!validPerformanceText(task.Subject, performanceMaxSubject) || !validPerformanceText(task.Type, performanceMaxLabelBytes) ||
@@ -257,8 +279,81 @@ func normalizePerformanceUpsert(source string, mutation model.PerformanceMutatio
 		}
 		copied := *task
 		return model.PerformanceMutation{Op: "upsert", Task: &copied}, nil
+	case model.PerformanceSourceSFDCAccountTeam:
+		member := mutation.TeamMember
+		if member == nil || mutation.Assignment != nil || mutation.Task != nil {
+			return model.PerformanceMutation{}, ErrInvalidInput
+		}
+		copied := *member
+		copied.Alias = strings.ToLower(copied.Alias)
+		if !model.ValidPerformanceTeamAccountID(copied.SFDCAccountID) || !model.PerformanceTeamAlias.MatchString(copied.Alias) ||
+			!validPerformanceText(copied.Name, performanceMaxNameBytes) || !validPerformanceText(copied.Title, performanceMaxNameBytes) ||
+			!validPerformanceText(copied.TeamMemberRole, performanceMaxLabelBytes) || !validPerformanceText(copied.AllTeamRoles, performanceMaxNameBytes) {
+			return model.PerformanceMutation{}, ErrInvalidInput
+		}
+		return model.PerformanceMutation{Op: "upsert", TeamMember: &copied}, nil
 	}
 	return model.PerformanceMutation{}, ErrInvalidInput
+}
+
+// validPerformanceRemoveID checks a remove ID against its source's grammar.
+func validPerformanceRemoveID(source, id string) bool {
+	if source == model.PerformanceSourceSFDCAccountTeam {
+		_, _, ok := model.ParsePerformanceTeamExternalID(id)
+		return ok
+	}
+	return performanceIDPattern.MatchString(id)
+}
+
+// checkTeamCap rejects a batch that takes any SFDC account's stored team over
+// model.PerformanceTeamMaxPerAccount. Updates and removes always pass, and
+// the same read-then-write overshoot bound as checkAssignmentCap applies.
+func (svc *PerformanceService) checkTeamCap(ctx context.Context, userID string, req model.PerformanceSyncRequest) error {
+	type change struct{ adds, removes map[string]bool }
+	byAccount := make(map[string]*change)
+	entry := func(account string) *change {
+		if byAccount[account] == nil {
+			byAccount[account] = &change{adds: map[string]bool{}, removes: map[string]bool{}}
+		}
+		return byAccount[account]
+	}
+	for _, mutation := range req.Mutations {
+		if mutation.Op == "upsert" && mutation.TeamMember != nil {
+			entry(mutation.TeamMember.SFDCAccountID).adds[mutation.TeamMember.Alias] = true
+		} else if account, alias, ok := model.ParsePerformanceTeamExternalID(mutation.ExternalID); mutation.Op == "remove" && ok {
+			entry(account).removes[alias] = true
+		}
+	}
+	for account, changes := range byAccount {
+		if len(changes.adds) == 0 {
+			continue
+		}
+		current, err := svc.store.ListPerformanceTeam(ctx, userID, account)
+		if err != nil {
+			return err
+		}
+		stored := make(map[string]bool, len(current))
+		for _, member := range current {
+			stored[member.Alias] = true
+		}
+		count := len(stored)
+		for alias := range changes.removes {
+			if stored[alias] {
+				delete(stored, alias)
+				count--
+			}
+		}
+		for alias := range changes.adds {
+			if !stored[alias] {
+				stored[alias] = true
+				count++
+			}
+		}
+		if count > model.PerformanceTeamMaxPerAccount && count > len(current) {
+			return ErrInvalidInput
+		}
+	}
+	return nil
 }
 
 func validPerformanceText(value string, maxBytes int) bool {

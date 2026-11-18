@@ -32,6 +32,42 @@ type performanceMemoryStore struct {
 	mappings    map[string]map[string]model.AccountMapping
 	goals       map[string]model.PerformanceGoals
 	reports     map[string]map[string]model.PerformanceReport
+	team        map[string]map[string]model.SFDCTeamMember
+	invites     []model.PerformanceInvite
+}
+
+func (store *performanceMemoryStore) ListPerformanceTeam(_ context.Context, userID, sfdcAccountID string) ([]model.SFDCTeamMember, error) {
+	var out []model.SFDCTeamMember
+	for _, member := range store.team[userID] {
+		if member.SFDCAccountID == sfdcAccountID {
+			out = append(out, member)
+		}
+	}
+	return out, nil
+}
+
+func (store *performanceMemoryStore) ListPerformanceInvites(_ context.Context, _, sfdcAccountID string) ([]model.PerformanceInvite, error) {
+	var out []model.PerformanceInvite
+	for _, invite := range store.invites {
+		if invite.SFDCAccountID == sfdcAccountID {
+			out = append(out, invite)
+		}
+	}
+	return out, nil
+}
+
+func (store *performanceMemoryStore) DeletePerformanceTeamAccount(_ context.Context, userID, sfdcAccountID string) error {
+	for key, member := range store.team[userID] {
+		if member.SFDCAccountID == sfdcAccountID {
+			delete(store.team[userID], key)
+		}
+	}
+	return nil
+}
+
+func (store *performanceMemoryStore) PutPerformanceInvite(_ context.Context, _ string, invite model.PerformanceInvite) error {
+	store.invites = append(store.invites, invite)
+	return nil
 }
 
 func newPerformanceMemoryStore() *performanceMemoryStore {
@@ -39,7 +75,7 @@ func newPerformanceMemoryStore() *performanceMemoryStore {
 		batches: map[string]performanceSavedBatch{}, revisions: map[string]int64{},
 		assignments: map[string]map[string]model.SFDCAssignment{}, tasks: map[string]map[string]model.SFDCTask{},
 		mappings: map[string]map[string]model.AccountMapping{}, goals: map[string]model.PerformanceGoals{},
-		reports: map[string]map[string]model.PerformanceReport{},
+		reports: map[string]map[string]model.PerformanceReport{}, team: map[string]map[string]model.SFDCTeamMember{},
 	}
 }
 
@@ -76,6 +112,12 @@ func (store *performanceMemoryStore) ApplyPerformanceBatch(_ context.Context, us
 			}
 			store.assignments[userID][mutation.Assignment.SFDCAccountID] = *mutation.Assignment
 			receipt.Upserted++
+		case mutation.TeamMember != nil:
+			if store.team[userID] == nil {
+				store.team[userID] = map[string]model.SFDCTeamMember{}
+			}
+			store.team[userID][mutation.TeamMember.SFDCAccountID+":"+mutation.TeamMember.Alias] = *mutation.TeamMember
+			receipt.Upserted++
 		case mutation.Task != nil:
 			if store.tasks[userID] == nil {
 				store.tasks[userID] = map[string]model.SFDCTask{}
@@ -93,7 +135,7 @@ func (store *performanceMemoryStore) ApplyPerformanceBatch(_ context.Context, us
 
 func (store *performanceMemoryStore) ListPerformanceSources(_ context.Context, userID string) ([]model.PerformanceSourceStatus, error) {
 	var out []model.PerformanceSourceStatus
-	for _, source := range []string{model.PerformanceSourceSFDCAssignments, model.PerformanceSourceSFDCTasks} {
+	for _, source := range []string{model.PerformanceSourceSFDCAssignments, model.PerformanceSourceSFDCTasks, model.PerformanceSourceSFDCAccountTeam} {
 		if revision := store.revisions[userID+"|"+source]; revision > 0 {
 			out = append(out, model.PerformanceSourceStatus{Source: source, Revision: revision, LastCompletedAt: "2026-11-10T00:00:00Z"})
 		}
@@ -182,7 +224,9 @@ func performanceHTTPRouter(api PerformanceAPI, userID string) http.Handler {
 	if userID != "" {
 		router.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), middleware.UserIDKey, userID)))
+				ctx := context.WithValue(request.Context(), middleware.UserIDKey, userID)
+				ctx = context.WithValue(ctx, middleware.UserEmailVerifiedKey, !strings.HasSuffix(userID, "-unverified"))
+				next.ServeHTTP(writer, request.WithContext(ctx))
 			})
 		})
 	}
@@ -193,6 +237,9 @@ func performanceHTTPRouter(api PerformanceAPI, userID string) http.Handler {
 	router.Get("/api/performance/mappings", handler.ListMappings)
 	router.Put("/api/performance/mappings/{sfdcAccountId}", handler.PutMapping)
 	router.Get("/api/performance/missed", handler.ListMissed)
+	router.Get("/api/performance/onboarding", handler.ListOnboarding)
+	router.Get("/api/performance/onboarding/{sfdcAccountId}", handler.GetOnboarding)
+	router.Post("/api/performance/onboarding/{sfdcAccountId}/invites", handler.InviteOnboarding)
 	router.Get("/api/performance/reports", handler.ListReports)
 	router.Get("/api/performance/reports/{periodKey}", handler.GetReport)
 	router.Put("/api/performance/reports/{periodKey}", handler.PutReport)

@@ -21,8 +21,8 @@ contacts below.
 ## Decision
 
 - **Owner-private residency table.** These fields may be stored in `PERF*` rows
-  under the owner's own `USER#` partition. Only the `sfdc-assignments` and
-  `sfdc-tasks` sources are implemented, and the performance report is in progress; the other
+  under the owner's own `USER#` partition. Only the `sfdc-assignments`,
+  `sfdc-tasks` and `sfdc-account-team` sources are implemented, and the performance report is in progress; the other
   rows are decided but have no source, model type or key prefix yet. Calendar
   data is not copied into `PERF*` rows: the dashboard reads the calendar
   intake's events at request time. Bodies, notes, attachments, join links and
@@ -36,6 +36,8 @@ contacts below.
   | Slack | per channel/account/month counts, thread counts, permalinks, channel names | message bodies |
   | SFDC assignments | account ID, account name, role (registry `assignmentSource` or `activity`) | none |
   | SFDC Tasks | ID, date, account, type/category, subject, status, linked SpecReq ID | description, comments |
+  | SFDC account team | account ID, member alias (lower-case), name, title, `teamMemberRole`, `allTeamRoles`; at most 100 per account; refreshed by each Mac team step, and deleted by the server with its invite records when the assignment sync removes the account | email, phone, SFDC user ID, access levels, created date |
+  | Onboarding invites | SFDC account ID, alias, TTOBAK Account ID, role, sent time; 30-day TTL, matching pending-invite expiry | email (derived as `alias@amazon.com`, never stored) |
   | SFDC opportunities | ID, name, stage, close date, SA-on-team flag, amount band | exact amounts, contact details |
   | SpecReq | ID, title, state, complexity, type, customer, created/closed dates | body, comments |
   | TFC Hub | activity ID, title, type, date, community, learning-path link flag | none |

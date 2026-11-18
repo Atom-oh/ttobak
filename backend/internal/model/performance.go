@@ -50,6 +50,7 @@ type PerformanceMutation struct {
 	Op         string          `json:"op"`
 	Assignment *SFDCAssignment `json:"assignment,omitempty"`
 	Task       *SFDCTask       `json:"task,omitempty"`
+	TeamMember *SFDCTeamMember `json:"teamMember,omitempty"`
 	ExternalID string          `json:"externalId,omitempty"`
 }
 
