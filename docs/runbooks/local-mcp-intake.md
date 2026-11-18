@@ -991,7 +991,8 @@ Sandbox and CLI:
 - [ ] A denied write really fails, proving Bash ran sandboxed (the init event
   has no sandbox field).
 - [ ] The rule forms parse and do not fail startup: the comma-joined,
-  space-containing `Bash(...)` list and `Read`/`Glob`/`Grep`/`Write(//abs/**)`.
+  space-containing `Bash(...)` list and `Read`/`Glob`/`Grep`/`Edit(//abs/**)`. A headless `Write(//abs/**)` allow
+  rule never matches (Claude Code 2.1.323): file writes are scoped by `Edit(...)`.
 - [ ] The session folder name matches `claudeProjectDir(<tmp>/work)` and tool
   results land in its `tool-results/`.
 - [ ] A Keychain login works with only HOME, PATH, LANG, USER, LOGNAME and the
