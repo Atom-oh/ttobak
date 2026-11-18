@@ -11,6 +11,10 @@ manifests.
 
 ## [Unreleased]
 
+### Added
+
+- SA dashboard onboarding API: an owner-private `sfdc-account-team` sync source, an onboarding read that joins the SFDC account team with the mapped Account's members, and an invite route that invites selected team members (at most 20 per request) through the existing member-add rules.
+
 ### Changed
 
 - MCP sign-in: Cognito now accepts local MCP callbacks on ports 9876-9879, so Claude Code, Codex or Kiro can switch to an alternate callback port when 9876 is busy. All registered callbacks stay on localhost.

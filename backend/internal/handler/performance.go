@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -35,6 +36,9 @@ type PerformanceAPI interface {
 	GetReport(ctx context.Context, userID, periodKey string) (*model.PerformanceReport, error)
 	ListReports(ctx context.Context, userID string) (*model.PerformanceReportList, error)
 	DeleteReport(ctx context.Context, userID, periodKey string) error
+	ListOnboarding(ctx context.Context, userID string) (*model.OnboardingSummary, error)
+	GetOnboarding(ctx context.Context, userID, sfdcAccountID string) (*model.OnboardingDetail, error)
+	InviteOnboarding(ctx context.Context, userID, sfdcAccountID string, request model.OnboardingInviteRequest) (*model.OnboardingInviteResponse, error)
 }
 
 type PerformanceHandler struct {
@@ -152,6 +156,67 @@ func (handler *PerformanceHandler) PutMapping(writer http.ResponseWriter, reques
 		return
 	}
 	result, err := handler.service.PutMapping(request.Context(), userID, chi.URLParam(request, "sfdcAccountId"), input.AccountID)
+	if err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writePerformanceJSON(writer, result)
+}
+
+func (handler *PerformanceHandler) ListOnboarding(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	result, err := handler.service.ListOnboarding(request.Context(), userID)
+	if err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writePerformanceJSON(writer, result)
+}
+
+func (handler *PerformanceHandler) GetOnboarding(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	result, err := handler.service.GetOnboarding(request.Context(), userID, chi.URLParam(request, "sfdcAccountId"))
+	if err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	writePerformanceJSON(writer, result)
+}
+
+// InviteOnboarding requires a verified email claim, the same precondition
+// as POST /api/accounts/{accountId}/members.
+func (handler *PerformanceHandler) InviteOnboarding(writer http.ResponseWriter, request *http.Request) {
+	userID := calendarHTTPUser(writer, request)
+	if userID == "" {
+		return
+	}
+	if !middleware.GetEmailVerified(request.Context()) {
+		writeError(writer, http.StatusForbidden, model.ErrCodeForbidden, "이메일을 인증한 뒤 멤버를 초대하세요.")
+		return
+	}
+	if _, err := calendarHTTPQuery(request); err != nil {
+		writePerformanceError(writer, err)
+		return
+	}
+	var input model.OnboardingInviteRequest
+	if !decodePerformanceBody(writer, request, &input, "items") {
+		return
+	}
+	result, err := handler.service.InviteOnboarding(request.Context(), userID, chi.URLParam(request, "sfdcAccountId"), input)
 	if err != nil {
 		writePerformanceError(writer, err)
 		return
