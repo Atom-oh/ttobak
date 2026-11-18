@@ -910,6 +910,19 @@ period control (this week / quarter / this year, default this week) drives
   "change" when another account is selected. Manual mappings are not listed.
   `403` reads as "cannot read this account", `404` as "not your
   assigned SFDC account"; a saved mapping reloads the queue and the missed list.
+  An unmapped assignment without a reason also has a create-customer button:
+  it creates an Account named after the SFDC account with the caller as Owner
+  (`accountApi.create`, `accountCreationAttempt` replays the same `requestId`
+  on retry), maps it manually, reloads the page and opens the invite step.
+- Customer onboarding (`OnboardingList`, `OnboardingPanel`, helpers in
+  `lib/onboarding.ts`): `GET /api/performance/onboarding` lists mapped readable
+  Accounts with an AM/TAM/SA summary (done, pending, not invited) and an
+  invite-team button. The panel (`GET /api/performance/onboarding/{id}`) lists
+  AM, TAM and SA first with mapped role and status; uninvited core roles start
+  checked, and "show all" reveals the others unchecked with a role select.
+  Invites (at most 20 per click, `POST .../invites`) show a per-person result
+  and reload the page. An unreadable or unmapped Account disables invites with
+  a notice. Nothing is invited without the owner's click.
 - Source freshness: the `IntakeRunControl` collect button sits here (Mac app
   only; a browser shows a hint, an older app build shows nothing, a failed state
   read shows a one-line error). A run that ends with success or `PARTIAL_FAILURE`

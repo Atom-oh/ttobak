@@ -13,6 +13,7 @@ manifests.
 
 ### Added
 
+- SA activity page: a create-customer button on unmapped SFDC accounts and a customer onboarding section that invites the SFDC account team's AM, TAM and SA to the mapped Account, at most 20 per click.
 - SA dashboard onboarding API: an owner-private `sfdc-account-team` sync source, an onboarding read that joins the SFDC account team with the mapped Account's members, and an invite route that invites selected team members (at most 20 per request) through the existing member-add rules.
 - Local intake: a new `sfdc-account-team` step after the SFDC sync collects each assigned account's SFDC team (alias, name, title and roles only; at most 100 per account) for onboarding; `intake options --sfdc-account-team on|off` turns it off.
 
