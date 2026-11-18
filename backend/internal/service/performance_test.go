@@ -36,6 +36,22 @@ type performanceStoreFake struct {
 	reports       map[string]map[string]model.PerformanceReport
 	summaries     []model.PerformanceReportSummary
 	readTruncated bool
+	team          map[string][]model.SFDCTeamMember
+	invites       map[string][]model.PerformanceInvite
+	putInvites    []model.PerformanceInvite
+}
+
+func (fake *performanceStoreFake) ListPerformanceTeam(_ context.Context, userID, sfdcAccountID string) ([]model.SFDCTeamMember, error) {
+	return fake.team[userID+"/"+sfdcAccountID], nil
+}
+
+func (fake *performanceStoreFake) ListPerformanceInvites(_ context.Context, userID, sfdcAccountID string) ([]model.PerformanceInvite, error) {
+	return fake.invites[userID+"/"+sfdcAccountID], nil
+}
+
+func (fake *performanceStoreFake) PutPerformanceInvite(_ context.Context, userID string, invite model.PerformanceInvite) error {
+	fake.putInvites = append(fake.putInvites, invite)
+	return nil
 }
 
 type storedPerformanceReceipt struct {
@@ -399,7 +415,7 @@ func TestPerformanceSourcesListsEveryKnownSource(test *testing.T) {
 		"owner": {{Source: model.PerformanceSourceSFDCTasks, Revision: 4, LastCompletedAt: "2026-11-09T00:00:00Z"}},
 	}}
 	list, err := performanceTestService(store, nil).ListSources(test.Context(), "owner")
-	if err != nil || len(list.Sources) != 2 || list.Sources[0].Source != model.PerformanceSourceSFDCAssignments ||
+	if err != nil || len(list.Sources) != 3 || list.Sources[0].Source != model.PerformanceSourceSFDCAssignments ||
 		list.Sources[0].Revision != 0 || list.Sources[1].Revision != 4 {
 		test.Fatalf("sources: %+v %v", list, err)
 	}

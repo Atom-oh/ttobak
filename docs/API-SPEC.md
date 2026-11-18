@@ -152,13 +152,16 @@ runner collects and syncs.
 
 | Route | Request | Success |
 |---|---|---|
-| `POST /api/performance/sources/{source}/sync` | `source` is `sfdc-assignments` or `sfdc-tasks`; JSON `batchId`, `expectedRevision`, `complete`, `mutations` | `200` receipt: `revision`, `completed`, `upserted`, `removed` |
+| `POST /api/performance/sources/{source}/sync` | `source` is `sfdc-assignments`, `sfdc-tasks` or `sfdc-account-team`; JSON `batchId`, `expectedRevision`, `complete`, `mutations` | `200` receipt: `revision`, `completed`, `upserted`, `removed` |
 | `GET /api/performance/sources` | none | `{sources:[{source,revision,lastAttemptAt?,lastCompletedAt?}]}`, one entry per source; never-synced sources report revision 0 |
 | `GET /api/performance/goals?year=YYYY` | `year` within previous/current/next year | `{year,text,updatedAt}`; empty text when unset |
 | `PUT /api/performance/goals?year=YYYY` | JSON `{text}`, at most 8,000 UTF-8 bytes | saved goals |
 | `GET /api/performance/mappings` | none | `{items:[{sfdcAccountId,name,role,mapped,accountId?,manual,reason?,updatedAt?}],truncated}` sorted by SFDC ID; at most 500 items, `truncated:true` when more assignments exist |
 | `PUT /api/performance/mappings/{sfdcAccountId}` | JSON `{accountId}` | saved mapping with `manual:true` |
 | `GET /api/performance/missed` | optional `period` = `week` (default), `quarter` or `year`; any other value is `400` | `{items:[{kind,accountId,sfdcAccountId?,refKind?,refId?,at?,daysSince}],unmappedCount,sourceFreshness:[{source,lastCompletedAt?}],calendarCoverageStart}` |
+| `GET /api/performance/onboarding` | none | `{items:[{sfdcAccountId,name,accountId,roles}],truncated}`: for each assignment mapped to a readable Account, `roles` maps each of `AM`, `TAM`, `SA` present in the stored SFDC team to `member`, `pending` or `missing`; at most 100 mapped Accounts are read, `truncated:true` beyond |
+| `GET /api/performance/onboarding/{sfdcAccountId}` | none | `{sfdcAccountId,name,accountId?,mapped,accountReadable,truncated,members:[{sfdcAccountId,alias,name,title,teamMemberRole,allTeamRoles,role,status}]}`; `status` is `member`, `pending`, `none` or `unknown` (mapped Account not readable; its ID is omitted); `404` when the SFDC account is not assigned to the caller; emails are never returned |
+| `POST /api/performance/onboarding/{sfdcAccountId}/invites` | verified email claim; JSON `{items:[{alias,role}]}`, 1 to 20 distinct aliases from the stored team, role in the assignable roles | `{results:[{alias,outcome,code?}]}`, `outcome` `added`, `invited`, `already_member` or `failed` (with the API error code); each item goes through the account member-add path with `alias@amazon.com`, and a failed item does not stop the rest; `404` when the SFDC account is unassigned, unmapped, or an alias is not in its stored team |
 | `PUT /api/performance/reports/{periodKey}` | JSON report (below), at most 256 KiB | `{periodKey,generatedAt}`; replaces any report for the key |
 | `GET /api/performance/reports` | none | `{items:[{periodKey,label,generatedAt,partial}],truncated}` newest `generatedAt` first; at most 200 items |
 | `GET /api/performance/reports/{periodKey}` | none | the stored report; `404` when absent or expired |
@@ -2452,6 +2455,9 @@ The Go inventory in this section comes from `backend/cmd/api/main.go`.
 | GET | `/api/performance/mappings` | `performanceHandler.ListMappings` |
 | PUT | `/api/performance/mappings/{sfdcAccountId}` | `performanceHandler.PutMapping` |
 | GET | `/api/performance/missed` | `performanceHandler.ListMissed` |
+| GET | `/api/performance/onboarding` | `performanceHandler.ListOnboarding` |
+| GET | `/api/performance/onboarding/{sfdcAccountId}` | `performanceHandler.GetOnboarding` |
+| POST | `/api/performance/onboarding/{sfdcAccountId}/invites` | `performanceHandler.InviteOnboarding` |
 | GET | `/api/performance/reports` | `performanceHandler.ListReports` |
 | GET | `/api/performance/reports/{periodKey}` | `performanceHandler.GetReport` |
 | PUT | `/api/performance/reports/{periodKey}` | `performanceHandler.PutReport` |

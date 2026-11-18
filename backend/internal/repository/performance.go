@@ -60,6 +60,21 @@ type performanceTaskRow struct {
 	model.SFDCTask
 }
 
+type performanceTeamRow struct {
+	PK     string `dynamodbav:"PK"`
+	SK     string `dynamodbav:"SK"`
+	UserID string `dynamodbav:"userId"`
+	model.SFDCTeamMember
+}
+
+type performanceInviteRow struct {
+	PK        string `dynamodbav:"PK"`
+	SK        string `dynamodbav:"SK"`
+	UserID    string `dynamodbav:"userId"`
+	ExpiresAt int64  `dynamodbav:"pendingShareExpiresAt"`
+	model.PerformanceInvite
+}
+
 type performanceMappingRow struct {
 	PK     string `dynamodbav:"PK"`
 	SK     string `dynamodbav:"SK"`
@@ -108,7 +123,22 @@ func performanceTaskExpiry(activityDate string) (int64, error) {
 }
 
 func validPerformanceSource(source string) bool {
-	return source == model.PerformanceSourceSFDCAssignments || source == model.PerformanceSourceSFDCTasks
+	return source == model.PerformanceSourceSFDCAssignments || source == model.PerformanceSourceSFDCTasks ||
+		source == model.PerformanceSourceSFDCAccountTeam
+}
+
+// validPerformanceTeamMember checks a stored team row: lower-case alias,
+// valid account ID, and bounded UTF-8 text.
+func validPerformanceTeamMember(m *model.SFDCTeamMember) bool {
+	if m == nil || !model.ValidPerformanceTeamAccountID(m.SFDCAccountID) || !model.PerformanceTeamAlias.MatchString(m.Alias) {
+		return false
+	}
+	for _, value := range []string{m.Name, m.Title, m.TeamMemberRole, m.AllTeamRoles} {
+		if !utf8.ValidString(value) || len(value) > 512 {
+			return false
+		}
+	}
+	return true
 }
 
 func performanceScopeCondition(userID, source string) expression.ConditionBuilder {
@@ -222,8 +252,26 @@ func buildPerformanceRows(userID, source string, req model.PerformanceSyncReques
 		var sortKey string
 		var item any
 		switch source {
+		case model.PerformanceSourceSFDCAccountTeam:
+			if mutation.Assignment != nil || mutation.Task != nil {
+				return nil, nil, ErrInvalidPerformanceBatch
+			}
+			if mutation.Op == "upsert" {
+				m := mutation.TeamMember
+				if !validPerformanceTeamMember(m) || mutation.ExternalID != "" {
+					return nil, nil, ErrInvalidPerformanceBatch
+				}
+				sortKey = model.PerformanceTeamSortKey(m.SFDCAccountID, m.Alias)
+				item = performanceTeamRow{PK: pk, SK: sortKey, UserID: userID, SFDCTeamMember: *m}
+			} else {
+				account, alias, ok := model.ParsePerformanceTeamExternalID(mutation.ExternalID)
+				if !ok || mutation.TeamMember != nil {
+					return nil, nil, ErrInvalidPerformanceBatch
+				}
+				sortKey = model.PerformanceTeamSortKey(account, alias)
+			}
 		case model.PerformanceSourceSFDCAssignments:
-			if mutation.Task != nil {
+			if mutation.Task != nil || mutation.TeamMember != nil {
 				return nil, nil, ErrInvalidPerformanceBatch
 			}
 			id := mutation.ExternalID
@@ -240,7 +288,7 @@ func buildPerformanceRows(userID, source string, req model.PerformanceSyncReques
 				sortKey = model.PerformanceAssignmentSortKey(id)
 			}
 		case model.PerformanceSourceSFDCTasks:
-			if mutation.Assignment != nil {
+			if mutation.Assignment != nil || mutation.TeamMember != nil {
 				return nil, nil, ErrInvalidPerformanceBatch
 			}
 			id := mutation.ExternalID
@@ -268,7 +316,7 @@ func buildPerformanceRows(userID, source string, req model.PerformanceSyncReques
 		case "upsert":
 			receipt.Upserted++
 		case "remove":
-			if !performanceExternal.MatchString(mutation.ExternalID) || mutation.Assignment != nil || mutation.Task != nil {
+			if !performanceExternal.MatchString(mutation.ExternalID) || mutation.Assignment != nil || mutation.Task != nil || mutation.TeamMember != nil {
 				return nil, nil, ErrInvalidPerformanceBatch
 			}
 			receipt.Removed++
@@ -461,6 +509,81 @@ func (r *DynamoDBRepository) ListPerformanceTasks(ctx context.Context, userID st
 		tasks = append(tasks, row.SFDCTask)
 	}
 	return tasks, nil
+}
+
+// ListPerformanceTeam returns at most model.PerformanceTeamMaxPerAccount+1
+// stored team rows of one SFDC account.
+func (r *DynamoDBRepository) ListPerformanceTeam(ctx context.Context, userID, sfdcAccountID string) ([]model.SFDCTeamMember, error) {
+	if !model.ValidPerformanceTeamAccountID(sfdcAccountID) {
+		return nil, ErrInvalidPerformanceInput
+	}
+	items, err := r.queryPerformanceRows(ctx, userID, model.PerformanceTeamAccountPrefix(sfdcAccountID), model.PerformanceTeamMaxPerAccount+1)
+	if err != nil {
+		return nil, err
+	}
+	team := make([]model.SFDCTeamMember, 0, len(items))
+	for _, item := range items {
+		var row performanceTeamRow
+		if err := attributevalue.UnmarshalMap(item, &row); err != nil || row.UserID != userID ||
+			row.SFDCAccountID != sfdcAccountID || row.SK != model.PerformanceTeamSortKey(row.SFDCAccountID, row.Alias) {
+			return nil, ErrPerformanceCorruptData
+		}
+		team = append(team, row.SFDCTeamMember)
+	}
+	return team, nil
+}
+
+// performanceInviteTTL matches the platform's 30-day pending-invite expiry.
+const performanceInviteTTL = 30 * 24 * time.Hour
+
+// performanceInviteReadLimit bounds one account's invite records.
+const performanceInviteReadLimit = 200
+
+// PutPerformanceInvite records (or refreshes) one sent invitation.
+func (r *DynamoDBRepository) PutPerformanceInvite(ctx context.Context, userID string, invite model.PerformanceInvite) error {
+	if !performanceUserID.MatchString(userID) || !model.ValidPerformanceTeamAccountID(invite.SFDCAccountID) ||
+		!model.PerformanceTeamAlias.MatchString(invite.Alias) || !performanceUserID.MatchString(invite.AccountID) ||
+		len(invite.Role) > 64 {
+		return ErrInvalidPerformanceInput
+	}
+	at, err := time.Parse(time.RFC3339, invite.InvitedAt)
+	if err != nil {
+		return ErrInvalidPerformanceInput
+	}
+	sortKey := model.PerformanceInviteSortKey(invite.SFDCAccountID, invite.Alias)
+	put, err := r.performancePut(performanceInviteRow{PK: model.PrefixUser + userID, SK: sortKey, UserID: userID,
+		ExpiresAt: at.Add(performanceInviteTTL).Unix(), PerformanceInvite: invite}, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: put.TableName, Item: put.Item}); err != nil {
+		return fmt.Errorf("put performance invite: %w", err)
+	}
+	return nil
+}
+
+// ListPerformanceInvites returns one SFDC account's unexpired invite records.
+func (r *DynamoDBRepository) ListPerformanceInvites(ctx context.Context, userID, sfdcAccountID string) ([]model.PerformanceInvite, error) {
+	if !model.ValidPerformanceTeamAccountID(sfdcAccountID) {
+		return nil, ErrInvalidPerformanceInput
+	}
+	items, err := r.queryPerformanceRows(ctx, userID, model.PerformanceInviteAccountPrefix(sfdcAccountID), performanceInviteReadLimit)
+	if err != nil {
+		return nil, err
+	}
+	invites := make([]model.PerformanceInvite, 0, len(items))
+	for _, item := range items {
+		var row performanceInviteRow
+		if err := attributevalue.UnmarshalMap(item, &row); err != nil || row.UserID != userID ||
+			row.SFDCAccountID != sfdcAccountID || row.SK != model.PerformanceInviteSortKey(row.SFDCAccountID, row.Alias) {
+			return nil, ErrPerformanceCorruptData
+		}
+		if performanceExpired(row.ExpiresAt) {
+			continue
+		}
+		invites = append(invites, row.PerformanceInvite)
+	}
+	return invites, nil
 }
 
 // ListPerformanceAssignments returns at most PerformanceListRowLimit rows.
