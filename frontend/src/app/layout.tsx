@@ -38,9 +38,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <meta name="color-scheme" content="light dark" />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')}catch(e){}})()`,
+            __html: `(function(){try{var t=localStorage.getItem('theme'),m=document.querySelector('meta[name="color-scheme"]');if(t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark');if(m&&(t==='dark'||t==='light'))m.content=t}catch(e){}})()`,
           }}
         />
         {/* Recover from stale JS chunks after deployment — force full reload */}

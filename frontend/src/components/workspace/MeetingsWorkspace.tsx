@@ -38,7 +38,7 @@ export function useWorkspaceAccounts(userId: string) {
         const result = await accountApi.list();
         if (ignore) return;
         if (!matchesUser(userId)) throw new Error('Authentication changed');
-        setAccounts([...result.accounts].sort((left, right) => left.name.localeCompare(right.name, 'ko')));
+        setAccounts(result.accounts.toSorted((left, right) => left.name.localeCompare(right.name, 'ko')));
       } catch {
         if (!ignore) setError('어카운트 목록을 불러오지 못했습니다.');
       } finally {

@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { useState, useRef, useEffect } from 'react';
 import type { Research } from '@/types/meeting';
 
@@ -120,7 +121,7 @@ export function ResearchPageTree({
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSubmit();
+                  if (e.key === 'Enter' && !isImeKey(e)) handleSubmit();
                   if (e.key === 'Escape') { setShowInput(false); setTopic(''); }
                 }}
                 placeholder="하위 주제 입력..."

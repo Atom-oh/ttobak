@@ -12,6 +12,15 @@
    No neon, no glow — calm premium (Linear/Vercel-like).
    ═══════════════════════════════════════════════ */
 
+/* Native UI (scrollbars, form controls, canvas) follows the theme. layout.tsx
+   sets the meta to the stored theme before paint; without one it stays
+   "light dark" and follows the system, like the .dark bootstrap. */
+:root {
+  color-scheme: light dark;
+  &:has(> head > meta[name="color-scheme"][content="light"]) { color-scheme: light; }
+  &:has(> head > meta[name="color-scheme"][content="dark"]) { color-scheme: dark; }
+}
+
 /* If you change these values (light block below or .dark override),
    also update MermaidBlock.tsx's LIGHT_THEME_VARIABLES/DARK_THEME_VARIABLES
    -- mermaid needs a hardcoded JS palette (no 1:1 token for keys like
@@ -219,25 +228,39 @@ body {
 }
 
 .no-scrollbar {
-  -ms-overflow-style: none;
   scrollbar-width: none;
 }
 
-.dark ::-webkit-scrollbar {
-  width: 4px;
+.dark {
+  --scrollbar-thumb: rgb(255 255 255 / 0.25);
+  --scrollbar-track: rgb(255 255 255 / 0.02);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
-.dark ::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.02);
+.dark,
+.dark * {
+  scrollbar-width: thin;
 }
 
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-}
+/* WebKit before scrollbar-color (Safari < 26.2, older macOS app WebViews). */
+@supports not (scrollbar-color: auto) {
+  .dark,
+  .dark * {
+    scrollbar-width: auto;
+  }
 
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  .dark ::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .dark ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 10px;
+  }
 }
 
 /* ═══════════════════════════════════════════════

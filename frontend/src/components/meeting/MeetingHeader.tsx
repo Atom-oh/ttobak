@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { confirmDialog, alertDialog } from '@/lib/dialog';
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -140,7 +141,7 @@ export function MeetingHeader({ meeting, isCreator = true, canManage = true, onS
             onChange={(e) => { setEditTitle(e.target.value); onTitleDirtyChange?.(e.target.value.trim() !== meeting.title.trim()); }}
             onBlur={saveTitle}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') saveTitle();
+              if (e.key === 'Enter' && !isImeKey(e)) saveTitle();
               if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); setTitleError(''); onTitleDirtyChange?.(false); }
             }}
             className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-primary mb-4 bg-transparent border-b-2 border-primary outline-none text-slate-900"

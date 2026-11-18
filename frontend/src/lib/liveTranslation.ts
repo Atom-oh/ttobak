@@ -257,10 +257,7 @@ export class LiveTranslation {
     const requestOptions: TranslateRequestOptions = isFinal && segment.context?.length
       ? { quality, context: [...segment.context] }
       : { quality };
-    let rejectCancellation: (reason: Error) => void = () => {};
-    const cancellation = new Promise<never>((resolve, reject) => {
-      rejectCancellation = reject;
-    });
+    const { promise: cancellation, reject: rejectCancellation } = Promise.withResolvers<never>();
     const onAbort = () => rejectCancellation(new Error('Translation cancelled'));
     controller.signal.addEventListener('abort', onAbort, { once: true });
     const isCurrent = () => !this.stopped && this.options.enabled &&
