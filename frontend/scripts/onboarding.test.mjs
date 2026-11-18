@@ -36,6 +36,7 @@ test('invite plan skips members and pending', () => {
 test('default selection is core roles only', () => {
   const members = [member('am', 'AM'), member('tam', 'TAM', 'member'), member('sa', 'SA'), member('bdm', ''), member('u', 'SA', 'unknown')];
   assert.deepEqual([...onboarding.defaultSelection(members)], ['am', 'sa']);
+  assert.deepEqual([...onboarding.defaultSelection(members, new Set(['am']))], ['sa'], 'an alias invited this session is not re-selected');
 });
 
 test('summaryText orders AM, TAM, SA and omits absent roles', () => {
@@ -48,6 +49,8 @@ test('inviteResultText maps outcomes and codes', () => {
   assert.equal(onboarding.inviteResultText({ alias: 'a', outcome: 'invited' }), '초대함');
   assert.equal(onboarding.inviteResultText({ alias: 'a', outcome: 'added' }), '멤버로 추가함');
   assert.equal(onboarding.inviteResultText({ alias: 'a', outcome: 'already_member' }), '이미 멤버');
+  assert.match(onboarding.inviteResultText({ alias: 'a', outcome: 'invited', code: 'INTERNAL_ERROR' }), /기록 저장 실패/);
+  assert.match(onboarding.inviteResultText({ alias: 'a', outcome: 'not_attempted' }), /다시 초대하세요/);
   assert.match(onboarding.inviteResultText({ alias: 'a', outcome: 'failed', code: 'RATE_LIMITED' }), /^실패: 초대 요청이 많습니다/);
   assert.equal(onboarding.inviteResultText({ alias: 'a', outcome: 'failed', code: 'WHAT' }), '실패: 알 수 없는 오류');
 });

@@ -36,7 +36,7 @@ export interface OnboardingSummaryItem {
 
 export interface OnboardingSummary { items: OnboardingSummaryItem[]; truncated: boolean }
 
-export type OnboardingInviteOutcome = 'added' | 'invited' | 'already_member' | 'failed';
+export type OnboardingInviteOutcome = 'added' | 'invited' | 'already_member' | 'failed' | 'not_attempted';
 
 export interface OnboardingInviteResult { alias: string; outcome: OnboardingInviteOutcome; code?: string }
 
@@ -91,10 +91,14 @@ export function summaryText(roles: OnboardingSummaryItem['roles']): string {
   return CORE_ROLES.filter(role => roles[role]).map(role => `${role} ${SUMMARY_TEXT[roles[role]!]}`).join(' · ');
 }
 
-/** Core-role members not yet invited are selected by default. */
-export function defaultSelection(members: OnboardingMember[]): Set<string> {
-  return new Set(members.filter(member => member.status === 'none' && (CORE_ROLES as string[]).includes(member.role))
-    .map(member => member.alias));
+/**
+ * Core-role members not yet invited are selected by default. `sent` holds
+ * aliases invited in this session: one whose private record failed still reads
+ * `none`, and must not be re-selected.
+ */
+export function defaultSelection(members: OnboardingMember[], sent: ReadonlySet<string> = new Set()): Set<string> {
+  return new Set(members.filter(member => member.status === 'none' && !sent.has(member.alias) &&
+    (CORE_ROLES as string[]).includes(member.role)).map(member => member.alias));
 }
 
 /**
@@ -125,7 +129,8 @@ const CODE_TEXT: Record<string, string> = {
 export function inviteResultText(result: OnboardingInviteResult): string {
   switch (result.outcome) {
     case 'added': return '멤버로 추가함';
-    case 'invited': return '초대함';
+    case 'invited': return result.code ? '초대함 (기록 저장 실패: 다시 초대하지 마세요)' : '초대함';
+    case 'not_attempted': return '시간이 부족해 보내지 않았습니다. 다시 초대하세요';
     case 'already_member': return '이미 멤버';
     default: return `실패: ${CODE_TEXT[result.code ?? ''] ?? '알 수 없는 오류'}`;
   }

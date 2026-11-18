@@ -31,6 +31,8 @@ export function OnboardingPanel({ sfdcAccountId, title, userId, onClose, onInvit
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<{ results: OnboardingInviteResult[]; capped: boolean } | null>(null);
+  // Aliases invited in this panel; a reload never re-selects them.
+  const sent = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -42,7 +44,7 @@ export function OnboardingPanel({ sfdcAccountId, title, userId, onClose, onInvit
   useEffect(() => {
     const controller = new AbortController();
     performanceApi.onboardingDetail(sfdcAccountId, { signal: controller.signal, expectedUserId: userId })
-      .then(detail => { setResult({ key: reload, detail }); setSelected(defaultSelection(detail.members)); })
+      .then(detail => { setResult({ key: reload, detail }); setSelected(defaultSelection(detail.members, sent.current)); })
       .catch(() => { if (!controller.signal.aborted) setResult({ key: reload, error: true }); });
     return () => controller.abort();
   }, [sfdcAccountId, userId, reload]);
@@ -52,8 +54,9 @@ export function OnboardingPanel({ sfdcAccountId, title, userId, onClose, onInvit
   const readable = !!detail?.mapped && detail.accountReadable;
   const members = useMemo(() => (detail?.members ?? []).filter(member => showAll || CORE.has(member.role)), [detail, showAll]);
   const hiddenCount = (detail?.members.length ?? 0) - members.length;
-  const plan = useMemo(() => detail && selected ? invitePlan(detail.members, selected, roles) : { items: [], capped: false },
-    [detail, selected, roles]);
+  // Only visible members are sent: someone selected and then hidden again by "show all" is dropped.
+  const plan = useMemo(() => selected ? invitePlan(members, selected, roles) : { items: [], capped: false },
+    [members, selected, roles]);
   const resultsByAlias = new Map((outcomes?.results ?? []).map(item => [item.alias, item]));
 
   const toggle = (alias: string) => setSelected(previous => {
@@ -68,6 +71,7 @@ export function OnboardingPanel({ sfdcAccountId, title, userId, onClose, onInvit
     setSendError(null);
     try {
       const response = await performanceApi.inviteOnboarding(sfdcAccountId, plan.items, { expectedUserId: userId });
+      for (const item of response.results) if (item.outcome === 'invited' || item.outcome === 'added') sent.current.add(item.alias);
       setOutcomes({ results: response.results, capped: plan.capped });
       onInvited();
       setReload(key => key + 1);

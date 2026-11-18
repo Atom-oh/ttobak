@@ -27,11 +27,13 @@ function placeholder(status: AccountsStatus, hasOptions: boolean): string {
  * caller as Owner, then maps it manually. A retry after an unknown outcome
  * replays the same requestId, so it never creates a second Account.
  */
-function CreateCustomerButton({ item, userId, disabled, onCreated }: {
+function CreateCustomerButton({ item, userId, disabled, onCreated, onReload }: {
   item: PerformanceMappingItem;
   userId: string;
   disabled: boolean;
   onCreated: (sfdcAccountId: string, name: string) => void;
+  /** Reloads the account list so a created but unmapped Account can be selected. */
+  onReload: () => void;
 }) {
   const attempt = useRef<ReturnType<typeof accountCreationAttempt> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -56,6 +58,7 @@ function CreateCustomerButton({ item, userId, disabled, onCreated }: {
     } catch {
       setError(ONBOARDING_COPY.mapFailed);
       setBusy(false);
+      onReload();
       return;
     }
     setBusy(false);
@@ -120,7 +123,7 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved, on
           className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-40">
           {saving ? '저장 중…' : !current ? '연결' : accountId === current ? '확인' : '변경'}
         </button>
-        {onCreated && !item.mapped && !item.reason && <CreateCustomerButton item={item} userId={userId} disabled={saving} onCreated={onCreated} />}
+        {onCreated && !item.mapped && !item.reason && <CreateCustomerButton item={item} userId={userId} disabled={saving} onCreated={onCreated} onReload={onSaved} />}
       </div>
       {reason && <p className="text-xs text-amber-700 dark:text-amber-400">{reason}</p>}
       {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{error}</p>}
