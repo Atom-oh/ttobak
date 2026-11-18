@@ -265,10 +265,11 @@ describe('AuthStack', () => {
       }
       throw new Error('Unexpected callback template expression');
     };
-    expect(resolve(spa!.Properties.CallbackURLs)).toEqual([
-      'http://localhost:9876/callback',
-      'http://localhost:9876/callback/Z3RALQJi3TX1',
-      ...configured,
+    const loopback = [9876, 9877, 9878, 9879].flatMap(port => [
+      `http://localhost:${port}/callback`,
+      `http://localhost:${port}/callback/Z3RALQJi3TX1`,
     ]);
+    expect(resolve(spa!.Properties.CallbackURLs)).toEqual([...loopback, ...configured]);
+    for (const url of loopback) expect(new URL(url).hostname).toBe('localhost');
   });
 });
