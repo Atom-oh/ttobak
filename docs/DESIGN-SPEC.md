@@ -57,6 +57,27 @@ Custom Enter handlers on text fields must skip IME composition keys through
 textareas use `field-sizing-content`; `fitToContent` (`lib/fieldSizing.ts`) measures
 `scrollHeight` only where `field-sizing` is unsupported.
 
+## Astryx pilot
+
+Astryx (`@astryxdesign/core`, beta, pinned exactly with its CLI) renders only
+Settings › Customer update sources, through `components/astryx/AstryxScope`.
+The scope imports Astryx CSS, so other routes do not load it, and passes the
+`useTheme` mode to `<Theme>`. `globals.css` declares
+`@layer reset, theme, base, astryx-base, astryx-theme, components, utilities`
+above the Tailwind import; moving it below inverts the cascade. Astryx's
+`tailwind-theme.css` bridge is not imported because it redefines app utility
+names (`text-primary`, `bg-surface`). The local `ttobak` theme
+(`src/themes/ttobak/ttobakTheme.ts`) extends neutral with the brand accent, app
+text colors and the system font stack; `npx astryx theme build` regenerates its
+`.js`/`.css`, and `astryx theme` regenerates `src/astryx-themes.ts`. Do not run
+`astryx init`: it writes a managed block into `AGENTS.md`/`CLAUDE.md`.
+
+Astryx layered surfaces (Selector, menus, tooltips, popovers) need CSS anchor
+positioning (Safari 26), so the pilot uses only non-layered components; the kind
+choice is a SegmentedControl. Theme colors need `@scope` and `light-dark()`
+(Safari 17.4/17.5), above the macOS app's 14.2 floor: unupdated macOS 14.2–14.4
+WebViews may render this section with default colors.
+
 ## Workspace sizing
 
 `AppLayout` uses the dynamic viewport height and a shrinking main column beside
