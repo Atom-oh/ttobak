@@ -24006,7 +24006,7 @@ var init_api2 = __esm({
       // SSH keypairs: id_rsa, id_ed25519(.pub)
     ];
     PROJECT_OPTIONAL_FIELDS = ["description", "sfdcOpptyId", "sfdcUrl", "stage"];
-    PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks"];
+    PERFORMANCE_SOURCES = ["sfdc-assignments", "sfdc-tasks", "sfdc-account-team"];
     MAX_PERFORMANCE_API_BYTES = 14e3;
     MAX_PERFORMANCE_MAPPINGS_BYTES = 2e6;
     MAX_SFDC_CONTACT_SYNC_RESPONSE_BYTES = 256 * 1024;
@@ -28784,6 +28784,12 @@ var init_schedule = __esm({
 
 // src/intake/sfdc.ts
 import { createHash as createHash5, randomUUID as randomUUID5 } from "node:crypto";
+function mutationId(mutation) {
+  if (mutation.op === "remove") return mutation.externalId;
+  if ("assignment" in mutation) return mutation.assignment.sfdcAccountId;
+  if ("task" in mutation) return mutation.task.taskId;
+  return `${mutation.teamMember.sfdcAccountId}:${mutation.teamMember.alias}`;
+}
 function record18(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -28911,7 +28917,7 @@ function planSource(rows, key, ledger) {
     mutations.push({ op: "remove", externalId: id });
     remove.push(id);
   }
-  const external = (mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId;
+  const external = mutationId;
   const rank = (mutation) => `${mutation.op === "remove" ? 0 : 1}${external(mutation)}`;
   mutations.sort((first, second) => rank(first) < rank(second) ? -1 : rank(first) > rank(second) ? 1 : 0);
   const plan2 = { mutations, set: Object.fromEntries(set2), remove };
@@ -29047,12 +29053,14 @@ async function serverRevisions(api) {
   }
   const sources = record18(value) && Array.isArray(value.sources) ? value.sources : null;
   if (!sources) throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
-  const result = { "sfdc-assignments": 0, "sfdc-tasks": 0 };
+  const result = { "sfdc-assignments": 0, "sfdc-tasks": 0, "sfdc-account-team": 0 };
   for (const item2 of sources) {
     if (!record18(item2) || typeof item2.source !== "string" || !Number.isSafeInteger(item2.revision) || item2.revision < 0) {
       throw new IntakeError("TTOBAK_UNAVAILABLE", "performance source status has an unexpected shape");
     }
-    if (item2.source === "sfdc-assignments" || item2.source === "sfdc-tasks") result[item2.source] = item2.revision;
+    if (item2.source === "sfdc-assignments" || item2.source === "sfdc-tasks" || item2.source === "sfdc-account-team") {
+      result[item2.source] = item2.revision;
+    }
   }
   return result;
 }
@@ -29081,7 +29089,7 @@ async function deliver(api, store, state, plan2) {
   if (!groups.length) groups.push([]);
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index];
-    const ids = new Set(group.map((mutation) => mutation.op === "remove" ? mutation.externalId : "assignment" in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId));
+    const ids = new Set(group.map(mutationId));
     state.pending = {
       body: {
         batchId: randomUUID5(),
@@ -29134,13 +29142,22 @@ async function runSfdc(options2) {
   const [assignmentState, taskState] = states;
   const plan2 = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
   const revisions = () => ({ "sfdc-assignments": assignmentState.revision, "sfdc-tasks": taskState.revision });
-  if (dryRun) return { counts: plan2.counts, revisions: revisions() };
+  const snapshot = { assignmentIds: plannedAssignmentIds(registry3, tasks, now), ownerAlias: personal.alias };
+  if (dryRun) return { counts: plan2.counts, revisions: revisions(), ...snapshot };
   if (plan2.counts.assignments.fetched > MAX_ASSIGNMENTS) {
     throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan2.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
   }
   await deliver(options2.api, store, assignmentState, plan2.assignments);
   await deliver(options2.api, store, taskState, plan2.tasks);
-  return { counts: plan2.counts, revisions: revisions() };
+  return { counts: plan2.counts, revisions: revisions(), ...snapshot };
+}
+function plannedAssignmentIds(registry3, tasks, now) {
+  const { earliest, latest } = taskWindow(now);
+  const ids = new Set(registry3.map((item2) => item2.sfdcAccountId));
+  for (const { task } of tasks) {
+    if (task.sfdcAccountId && task.activityDate >= earliest && task.activityDate <= latest) ids.add(task.sfdcAccountId);
+  }
+  return [...ids].sort();
 }
 var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_CONTACTS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT2, MAX_ASSIGNMENTS, MAX_PAGES2, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
 var init_sfdc = __esm({
@@ -29701,6 +29718,153 @@ var init_sfdc_contacts = __esm({
     CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
     byId = (first, second) => first.sfdcContactId < second.sfdcContactId ? -1 : first.sfdcContactId > second.sfdcContactId ? 1 : 0;
     optionalText = (value) => typeof value === "string" ? value : "";
+  }
+});
+
+// src/intake/sfdc-team.ts
+function teamRoleRank(teamMemberRole, allTeamRoles) {
+  const role = teamMemberRole.trim();
+  if (role === "Account Manager") {
+    return allTeamRoles.split(/[;,]/).some((part) => part.trim() === "Account Manager") ? 0 : 3;
+  }
+  if (role === "Technical Account Manager" || role === "Enterprise Support Manager") return 1;
+  if (role === "Solutions Architect") return 2;
+  return 3;
+}
+function parseTeamMembers(records2, sfdcAccountId, ownerAlias) {
+  const owner = ownerAlias.toLowerCase();
+  const byAlias = /* @__PURE__ */ new Map();
+  let skippedInvalid = 0;
+  for (const item2 of records2) {
+    if (!(item2.user === void 0 || item2.user === null || record18(item2.user))) throw parseFailed("team member has an unexpected user");
+    const user = record18(item2.user) ? item2.user : {};
+    const alias2 = text(user, "alias", LABEL_BYTES2).toLowerCase();
+    if (!ALIAS2.test(alias2) || alias2 === owner || byAlias.has(alias2)) {
+      skippedInvalid++;
+      continue;
+    }
+    byAlias.set(alias2, {
+      sfdcAccountId,
+      alias: alias2,
+      name: text(user, "name", NAME_BYTES2),
+      title: text(user, "title", NAME_BYTES2),
+      teamMemberRole: text(item2, "teamMemberRole", LABEL_BYTES2),
+      allTeamRoles: text(item2, "all_Team_Roles__c", NAME_BYTES2)
+    });
+  }
+  const sorted = [...byAlias.values()].sort((a, b) => teamRoleRank(a.teamMemberRole, a.allTeamRoles) - teamRoleRank(b.teamMemberRole, b.allTeamRoles) || (a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0));
+  return { members: sorted.slice(0, MAX_TEAM_PER_ACCOUNT), skippedCap: Math.max(0, sorted.length - MAX_TEAM_PER_ACCOUNT), skippedInvalid };
+}
+function planTeam(rows, ledger, kept) {
+  const mutations = [];
+  const set2 = [];
+  const remove = [];
+  let unchanged = 0;
+  for (const [id, row] of rows) {
+    const fp = fingerprint2(row);
+    if (Object.hasOwn(ledger, id) && ledger[id] === fp) {
+      unchanged++;
+      continue;
+    }
+    mutations.push({ op: "upsert", teamMember: row });
+    set2.push([id, fp]);
+  }
+  for (const id of Object.keys(ledger)) {
+    if (rows.has(id) || kept.has(id.slice(0, id.indexOf(":")))) continue;
+    mutations.push({ op: "remove", externalId: id });
+    remove.push(id);
+  }
+  const rank = (mutation) => `${mutation.op === "remove" ? 0 : 1}${mutation.op === "remove" ? mutation.externalId : "teamMember" in mutation ? `${mutation.teamMember.sfdcAccountId}:${mutation.teamMember.alias}` : ""}`;
+  mutations.sort((a, b) => rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0);
+  return { plan: { mutations, set: Object.fromEntries(set2), remove }, upserts: set2.length, removals: remove.length, unchanged };
+}
+function emptyCounts2() {
+  return {
+    accounts: 0,
+    fetched: 0,
+    upserts: 0,
+    removals: 0,
+    unchanged: 0,
+    skippedCap: 0,
+    skippedInvalid: 0,
+    failedAccounts: 0,
+    skippedBudget: 0
+  };
+}
+async function runSfdcTeam(options2) {
+  const { session, store, sourceId, dryRun } = options2;
+  if (!dryRun && (!options2.scope || !options2.api)) throw new IntakeError("INVALID_ARGUMENT", "TTOBAK sign-in is required");
+  const state = options2.scope ? loadSfdcState(store, SOURCE, sourceId, options2.scope) : null;
+  if (!dryRun && state) {
+    if (state.reconcileRequired && !options2.reconcile) throw new IntakeError("TTOBAK_CONFLICT", "source revision conflict; run with --reconcile");
+    if (state.pending) await send2(options2.api, store, state);
+    if (options2.reconcile || state.revision === null) {
+      state.revision = (await serverRevisions(options2.api))[SOURCE];
+      if (options2.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map((id) => [id, ""]));
+      state.reconcileRequired = false;
+      store.write(state, "sfdc", sourceId, options2.scope, `${SOURCE}.json`);
+    }
+  }
+  const counts = emptyCounts2();
+  const rows = /* @__PURE__ */ new Map();
+  const kept = /* @__PURE__ */ new Set();
+  const failures = [];
+  const clock = options2.clock ?? Date.now;
+  const started = clock();
+  for (const accountId of [...new Set(options2.accountIds)].filter((id) => ACCOUNT.test(id)).sort()) {
+    if (clock() - started > SFDC_TEAM_BUDGET_MS) {
+      kept.add(accountId);
+      counts.skippedBudget++;
+      continue;
+    }
+    let records2;
+    try {
+      records2 = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: "Account", id: accountId });
+    } catch (error3) {
+      const code = intakeCode(error3);
+      if (code === "AUTH_EXPIRED_MIDWAY") throw error3;
+      kept.add(accountId);
+      counts.failedAccounts++;
+      failures.push(code);
+      continue;
+    }
+    counts.fetched += records2.length;
+    let parsed;
+    try {
+      parsed = parseTeamMembers(records2, accountId, options2.ownerAlias);
+    } catch (error3) {
+      kept.add(accountId);
+      counts.failedAccounts++;
+      failures.push(intakeCode(error3));
+      continue;
+    }
+    counts.accounts++;
+    counts.skippedCap += parsed.skippedCap;
+    counts.skippedInvalid += parsed.skippedInvalid;
+    for (const member of parsed.members) rows.set(`${accountId}:${member.alias}`, member);
+  }
+  const planned = planTeam(rows, state?.ledger ?? {}, kept);
+  counts.upserts = planned.upserts;
+  counts.removals = planned.removals;
+  counts.unchanged = planned.unchanged;
+  if (!dryRun && state) await deliver(options2.api, store, state, planned.plan);
+  const result = failures.length === 0 ? "ok" : failures.every((code) => code === failures[0]) && counts.accounts === 0 ? failures[0] : "PARTIAL_FAILURE";
+  return { result, counts };
+}
+var SFDC_TEAM_TOOL, MAX_TEAM_PER_ACCOUNT, SFDC_TEAM_BUDGET_MS, SOURCE, ALIAS2, ACCOUNT, NAME_BYTES2, LABEL_BYTES2;
+var init_sfdc_team = __esm({
+  "src/intake/sfdc-team.ts"() {
+    "use strict";
+    init_errors4();
+    init_sfdc();
+    SFDC_TEAM_TOOL = { name: "get_team_members", properties: ["memberType", "id", "limit", "after"] };
+    MAX_TEAM_PER_ACCOUNT = 100;
+    SFDC_TEAM_BUDGET_MS = 8 * 6e4;
+    SOURCE = "sfdc-account-team";
+    ALIAS2 = /^[a-z0-9._-]{1,64}$/;
+    ACCOUNT = /^[A-Za-z0-9_-]{1,64}$/;
+    NAME_BYTES2 = 200;
+    LABEL_BYTES2 = 64;
   }
 });
 
@@ -32098,14 +32262,14 @@ async function sfdcRun(options2, environment, store, signedIn) {
     previous = store.read("status.json")?.sfdc;
     let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options2.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
-    const contactsOn = syncOptions(selection).sfdcContacts;
+    const { sfdcContacts: contactsOn, sfdcAccountTeam: teamOn } = syncOptions(selection);
     session = await openSession(
       environment,
       selected.host,
       selected.server,
       selected.pathDirs,
       SFDC_TOOLS,
-      contactsOn ? [SFDC_CONTACTS_TOOL] : []
+      [...contactsOn ? [SFDC_CONTACTS_TOOL] : [], ...teamOn ? [SFDC_TEAM_TOOL] : []]
     );
     const active = session;
     const source = { call: async (tool, request2) => resultJson(await active.call(tool, request2), tool) };
@@ -32141,7 +32305,28 @@ async function sfdcRun(options2, environment, store, signedIn) {
         await active.requireTool(SFDC_CONTACTS_TOOL);
       }
     ) : void 0;
-    return { ok: true, connector: "sfdc", dryRun, counts: result.counts, ...sfdcContacts ? { sfdcContacts } : {} };
+    const sfdcAccountTeam = api ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
+      await active.requireTool(SFDC_TEAM_TOOL);
+      return runSfdcTeam({
+        session: source,
+        api,
+        store,
+        sourceId: selected.sourceId,
+        ...scope ? { scope } : {},
+        dryRun,
+        reconcile: options2.reconcile === true,
+        accountIds: result.assignmentIds,
+        ownerAlias: result.ownerAlias
+      });
+    }, dryRun) : void 0;
+    return {
+      ok: true,
+      connector: "sfdc",
+      dryRun,
+      counts: result.counts,
+      ...sfdcContacts ? { sfdcContacts } : {},
+      ...sfdcAccountTeam ? { sfdcAccountTeam } : {}
+    };
   } catch (error3) {
     const entry2 = {
       ...previous ?? {},
@@ -32176,6 +32361,30 @@ async function sfdcContactsStep(store, source, api, scope, dryRun, ranAt, on, re
     const previous = status.sfdcContacts?.lastSuccessAt;
     const lastSuccessAt = step.result === "ok" && !dryRun ? ranAt.toISOString() : previous;
     store.write({ ...status, sfdcContacts: {
+      lastRunAt: ranAt.toISOString(),
+      result: step.result,
+      ...step.counts ? { counts: step.counts } : {},
+      ...lastSuccessAt ? { lastSuccessAt } : {}
+    } }, "status.json");
+  } catch {
+  }
+  return step;
+}
+async function sfdcTeamStep(store, ranAt, on, execute, dryRun) {
+  let step;
+  if (!on) step = { result: "disabled" };
+  else {
+    try {
+      step = await execute();
+    } catch (error3) {
+      step = { result: intakeCode(error3) };
+    }
+  }
+  try {
+    const status = store.read("status.json") ?? {};
+    const previous = status.sfdcAccountTeam?.lastSuccessAt;
+    const lastSuccessAt = step.result === "ok" && !dryRun ? ranAt.toISOString() : previous;
+    store.write({ ...status, sfdcAccountTeam: {
       lastRunAt: ranAt.toISOString(),
       result: step.result,
       ...step.counts ? { counts: step.counts } : {},
@@ -32334,6 +32543,12 @@ async function runConnectors(options2, environment, store) {
         break;
       }
       if (contacts && contacts.result !== "ok" && contacts.result !== "disabled") code ??= "PARTIAL_FAILURE";
+      const team = "sfdcAccountTeam" in rest ? rest.sfdcAccountTeam : void 0;
+      if (team?.result === "AUTH_EXPIRED_MIDWAY") {
+        code = "AUTH_EXPIRED_MIDWAY";
+        break;
+      }
+      if (team && team.result !== "ok" && team.result !== "disabled") code ??= "PARTIAL_FAILURE";
     } catch (error3) {
       const failure2 = intakeCode(error3);
       results[id] = { result: failure2 };
@@ -32367,12 +32582,17 @@ async function run(args, environment, store) {
 function syncOptions(selection) {
   const stored = selection?.options?.calendarResponses;
   const calendarResponses = Array.isArray(stored) ? CALENDAR_RESPONSES.filter((response) => stored.includes(response)) : [...DEFAULT_CALENDAR_RESPONSES];
-  return { calendarResponses, sfdcContacts: selection?.options?.sfdcContacts !== false };
+  return {
+    calendarResponses,
+    sfdcContacts: selection?.options?.sfdcContacts !== false,
+    sfdcAccountTeam: selection?.options?.sfdcAccountTeam !== false
+  };
 }
 function options(args, store) {
-  const given = flags(args, { "--calendar-responses": "value", "--sfdc-contacts": "value" });
+  const given = flags(args, { "--calendar-responses": "value", "--sfdc-contacts": "value", "--sfdc-account-team": "value" });
   const csv = given["--calendar-responses"];
   const contacts = given["--sfdc-contacts"];
+  const team = given["--sfdc-account-team"];
   let responses;
   if (typeof csv === "string") {
     const parts = csv === "" ? [] : csv.split(",");
@@ -32384,13 +32604,17 @@ function options(args, store) {
   if (contacts !== void 0 && contacts !== "on" && contacts !== "off") {
     throw new IntakeError("INVALID_ARGUMENT", "--sfdc-contacts must be on or off");
   }
+  if (team !== void 0 && team !== "on" && team !== "off") {
+    throw new IntakeError("INVALID_ARGUMENT", "--sfdc-account-team must be on or off");
+  }
   const selection = store.read("selection.json");
-  if (responses || contacts !== void 0) {
+  if (responses || contacts !== void 0 || team !== void 0) {
     const current = syncOptions(selection);
     store.write(
       { ...selection ?? {}, version: 1, options: {
         calendarResponses: responses ?? current.calendarResponses,
-        sfdcContacts: contacts === void 0 ? current.sfdcContacts : contacts === "on"
+        sfdcContacts: contacts === void 0 ? current.sfdcContacts : contacts === "on",
+        sfdcAccountTeam: team === void 0 ? current.sfdcAccountTeam : team === "on"
       } },
       "selection.json"
     );
@@ -32484,6 +32708,7 @@ var init_run = __esm({
     init_schedule();
     init_sfdc();
     init_sfdc_contacts();
+    init_sfdc_team();
     init_specreq();
     init_match();
     init_store();
@@ -32503,6 +32728,7 @@ var init_run = __esm({
   ttobak-mcp intake links channels
   ttobak-mcp intake links select [--channel <id>=<label>]... [--noninteractive]
   ttobak-mcp intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
+    [--sfdc-account-team on|off]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake login
   ttobak-mcp intake status`;
@@ -33645,7 +33871,7 @@ async function report(args, environment, store) {
     cancelled();
     if (!api || !me) throw new ReportError("TTOBAK_LOGIN_REQUIRED");
     const alias2 = me.email.split("@")[0] ?? "";
-    if (!ALIAS2.test(alias2)) throw new ReportError("TTOBAK_LOGIN_REQUIRED", "the signed-in alias could not be read");
+    if (!ALIAS3.test(alias2)) throw new ReportError("TTOBAK_LOGIN_REQUIRED", "the signed-in alias could not be read");
     const accounts = await customers(api);
     cancelled();
     if (!accounts.length) throw new ReportError("REPORT_NO_SFDC", "no synced SFDC assignments");
@@ -33819,7 +34045,7 @@ async function runReport(args, environment) {
     return 2;
   }
 }
-var UNAVAILABLE, REPORT_TIMEOUT_MS, MAX_HIGHLIGHTS_FILE_BYTES, ALIAS2, ID2, MAX_MISSING_SOURCES, USAGE2, CHANNEL, MAX_EXCLUDED_CHANNELS, namePattern, DEFAULT_PARTNER_DOMAINS, STRUCTURAL_KEYS;
+var UNAVAILABLE, REPORT_TIMEOUT_MS, MAX_HIGHLIGHTS_FILE_BYTES, ALIAS3, ID2, MAX_MISSING_SOURCES, USAGE2, CHANNEL, MAX_EXCLUDED_CHANNELS, namePattern, DEFAULT_PARTNER_DOMAINS, STRUCTURAL_KEYS;
 var init_run2 = __esm({
   "src/report/run.ts"() {
     "use strict";
@@ -33836,7 +34062,7 @@ var init_run2 = __esm({
     UNAVAILABLE = ["failed", "needs-auth", "disabled"];
     REPORT_TIMEOUT_MS = 45 * 60 * 1e3;
     MAX_HIGHLIGHTS_FILE_BYTES = 64 * 1024;
-    ALIAS2 = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+    ALIAS3 = /^[a-z0-9][a-z0-9._-]{0,63}$/;
     ID2 = /^[A-Za-z0-9]{15,18}$/;
     MAX_MISSING_SOURCES = 20;
     USAGE2 = `Usage:

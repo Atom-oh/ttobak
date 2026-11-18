@@ -177,6 +177,7 @@ intake setup [--yes] [--noninteractive] [--accept-unknown-sensitivity] [--skip <
   [--schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM]
 intake run [--dry-run] [--noninteractive] [--only calendar,sfdc,links]
 intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
+    [--sfdc-account-team on|off]
 intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
 intake login
 ```
@@ -225,7 +226,7 @@ selections stay saved and no schedule is installed.
 
 `intake run` runs the selected connectors in order, calendar (with its task
 step), SFDC, then Slack links, with one shared TTOBAK sign-in. The JSON line is
-`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts, sfdcContacts?},
+`{ok, results: {calendar: {result, counts, tasks?}, sfdc: {result, counts, sfdcContacts?, sfdcAccountTeam?},
 links: {result, channels, links, uploaded}}}`. Links run by default only when
 Slack is selected and at least one channel is chosen; `--only links` with no
 channel succeeds without opening a Slack session. When some channels fail,
@@ -255,7 +256,7 @@ never opens a browser; the LaunchAgent uses it.
 | `intake run ...` | Runs every selected sync connector; see [Quick start](#quick-start-ttobak-mcp-intake-setup-then-ttobak-mcp-intake-run). |
 | `intake links channels` | Lists the user's non-archived Slack channels through the selected Slack server (`list_my_channels` only) as `{ok:true, channels:[{id,name}]}`. It prints IDs and names to stdout for the local Mac app and nowhere else. `NOT_SELECTED` without a Slack selection. It does not take the run lock. |
 | `intake links select [--channel <id>=<label>]... [--noninteractive]` | Makes the selection equal the given channels (at most 20; label 1-100 characters, split at the first `=`, so a label containing `=` is `INVALID_ARGUMENT`). Registers one TTOBAK source per new channel (label only), deletes the sources of removed channels, and prints `{ok:true, channels:[{id,label}], relabelFailed?}`, where `relabelFailed` is the number of channels that kept their old label (never their IDs). No `--channel` clears the selection. A removed channel loses its cursor, so selecting it again is a first run. A `links.disabled` flag set by `intake setup` is kept. It needs a TTOBAK sign-in (none when nothing is stored or chosen) and holds the run lock. |
-| `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
+| `intake options [--calendar-responses <csv>] [--sfdc-contacts on\|off] [--sfdc-account-team on\|off]` | Stores the given [sync options](#sync-options) and prints `{ok, options:{calendarResponses, sfdcContacts, sfdcAccountTeam}}`; with no flags it only prints them. An unknown value exits 2 with `INVALID_ARGUMENT`. |
 
 `run`, `setup`, `select`, `options`, `calendar` and `sfdc` hold a single-run lock, `~/.ttobak/intake/run.lock`
 (`<pid> <random token>`, the same `IntakeStore.lock` as the per-connector locks).
@@ -282,6 +283,9 @@ is kept. Absent fields mean the defaults; the first selection stores them.
   stop syncing silently nor mass-remove synced events.
 - `sfdcContacts`: default on. Off skips the [contacts step](#sfdc-contacts-step)
   with result `disabled`, which is not a failure.
+- `sfdcAccountTeam`: default on. Off skips the
+  [account-team step](#sfdc-account-team-step) with result `disabled`. The Mac
+  Settings page has no toggle for it yet; the CLI flag sets it.
 
 An event whose response is not selected is excluded like a private one: it is
 not sent, and a tracked copy is removed on the next real run. Dry runs report
@@ -767,6 +771,34 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
 - **Privacy.** SFDC and TTOBAK emails are compared in memory only and cleared
   before the request is built. No email or phone is written to a request body,
   stdout, stderr, the status file or a ledger.
+
+### SFDC account-team step
+
+After the contacts step, the same session runs `sfdc-account-team`
+(`mcp-server/src/intake/sfdc-team.ts`): `get_team_members {memberType:
+"Account"}` for every account of the SFDC assignment snapshot just planned
+(registry and activity). It feeds SA dashboard onboarding (ADR-023).
+
+- **Fields.** Only alias (lower-cased), name, title, `teamMemberRole` and
+  `all_Team_Roles__c` leave the parser. Email, user ID, access levels and
+  created date are never copied. The owner's own row is skipped.
+- **Cap.** At most 100 members per account are sent, AM, TAM and SA first
+  (`skippedCap` counts the rest).
+- **Delivery.** The revisioned `sfdc-account-team` source, with its own ledger
+  in `sfdc/<sourceId>/<scope>/sfdc-account-team.json`; members of an account
+  that left the snapshot are removed. An account whose read failed or did not
+  start within the 8-minute budget keeps its stored members (`failedAccounts`,
+  `skippedBudget`).
+- **Failures.** A missing `get_team_members` records `SCHEMA_CHANGED`; failed
+  accounts give `PARTIAL_FAILURE`. Neither changes the SFDC result; `intake run`
+  reports them as a partial failure. Midway expiry ends the step and the run.
+- **Status.** `status.json` key `sfdcAccountTeam` holds only `lastRunAt`,
+  `lastSuccessAt`, `result` and `counts`: `accounts`, `fetched`, `upserts`,
+  `removals`, `unchanged`, `skippedCap`, `skippedInvalid`, `failedAccounts`,
+  `skippedBudget`.
+- **Lost ledger.** Without a ledger the step cannot see server rows of accounts
+  that already left the snapshot; those rows stay until the account returns.
+  The server reads team rows only for currently assigned accounts.
 
 ## Slack links connector
 
