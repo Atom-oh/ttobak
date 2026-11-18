@@ -29748,7 +29748,7 @@ function applyForgottenTeamAccounts(store, state, sourceId, scope) {
   const accounts = Array.isArray(recorded?.accounts) ? recorded.accounts.filter((id) => typeof id === "string") : [];
   if (!accounts.length) return;
   const removed = new Set(accounts);
-  state.ledger = Object.fromEntries(Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(":")))));
+  state.ledger = Object.fromEntries(Object.entries(state.ledger).map(([id, fp]) => [id, removed.has(id.slice(0, id.indexOf(":"))) ? "" : fp]));
   store.write(state, "sfdc", sourceId, scope, `${SOURCE}.json`);
   store.write({ version: 1, accounts: [] }, ...forgottenTeamPath(sourceId, scope));
 }
@@ -29827,8 +29827,8 @@ async function runSfdcTeam(options2) {
   const state = options2.scope ? loadSfdcState(store, SOURCE, sourceId, options2.scope) : null;
   if (!dryRun && state) {
     if (state.reconcileRequired && !options2.reconcile) throw new IntakeError("TTOBAK_CONFLICT", "source revision conflict; run with --reconcile");
-    applyForgottenTeamAccounts(store, state, sourceId, options2.scope);
     if (state.pending) await send2(options2.api, store, state);
+    applyForgottenTeamAccounts(store, state, sourceId, options2.scope);
     if (options2.reconcile || state.revision === null) {
       state.revision = (await serverRevisions(options2.api))[SOURCE];
       if (options2.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map((id) => [id, ""]));

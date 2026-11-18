@@ -80,18 +80,20 @@ export function rotatedAccounts(ids: string[], after: string | null): string[] {
 }
 
 /**
- * Applies the accounts recorded when an assignment removal was acknowledged:
- * the server deleted their team rows, so their ledger rows go too and a
- * returning account is resent. Runs before a pending batch is resent, so
- * rows that batch recreates land in the ledger and are removed by the next
- * plan if the account stays away.
+ * Applies the accounts recorded when an assignment removal was acknowledged.
+ * The server deletes their team rows (best effort), so their ledger rows keep
+ * their IDs with a blank fingerprint, like a reconcile: a returning account is
+ * resent in full, and an absent one gets explicit removes, which also heal a
+ * server-side delete that failed. Runs after a pending batch is resent, so a
+ * replayed receipt cannot restore the old fingerprints.
  */
 export function applyForgottenTeamAccounts(store: IntakeStore, state: SfdcState, sourceId: string, scope: string): void {
   const recorded = store.read<ForgottenTeamAccounts>(...forgottenTeamPath(sourceId, scope));
   const accounts = Array.isArray(recorded?.accounts) ? recorded.accounts.filter(id => typeof id === 'string') : [];
   if (!accounts.length) return;
   const removed = new Set(accounts);
-  state.ledger = Object.fromEntries(Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(':')))));
+  state.ledger = Object.fromEntries(Object.entries(state.ledger)
+    .map(([id, fp]) => [id, removed.has(id.slice(0, id.indexOf(':'))) ? '' : fp]));
   store.write(state, 'sfdc', sourceId, scope, `${SOURCE}.json`);
   store.write({ version: 1, accounts: [] } satisfies ForgottenTeamAccounts, ...forgottenTeamPath(sourceId, scope));
 }
@@ -178,9 +180,9 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
   const state = options.scope ? loadSfdcState(store, SOURCE, sourceId, options.scope) : null;
   if (!dryRun && state) {
     if (state.reconcileRequired && !options.reconcile) throw new IntakeError('TTOBAK_CONFLICT', 'source revision conflict; run with --reconcile');
-    // Forget server-deleted accounts first, then resend: see applyForgottenTeamAccounts.
-    applyForgottenTeamAccounts(store, state, sourceId, options.scope!);
     if (state.pending) await send(options.api!, store, state);
+    // After the resend: see applyForgottenTeamAccounts.
+    applyForgottenTeamAccounts(store, state, sourceId, options.scope!);
     if (options.reconcile || state.revision === null) {
       state.revision = (await serverRevisions(options.api!))[SOURCE];
       if (options.reconcile) state.ledger = Object.fromEntries(Object.keys(state.ledger).map(id => [id, '']));

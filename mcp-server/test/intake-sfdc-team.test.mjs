@@ -232,3 +232,34 @@ test('a pending batch resent after the forget lands in the ledger and is removed
   assert.deepEqual(api.calls.at(-2).mutations.map(m => m.op), ['upsert'], 'the identical pending batch is resent');
   assert.deepEqual(api.calls.at(-1).mutations, [{ op: 'remove', externalId: '001B:b1' }]);
 });
+
+test('a replayed receipt cannot hide a returning account', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  const realSync = api.syncPerformance;
+  let lose = true;
+  const receipts = new Map();
+  // The first upsert is applied but its response is lost; the retry replays the stored receipt.
+  api.syncPerformance = async (source, body) => {
+    if (receipts.has(body.batchId)) return receipts.get(body.batchId);
+    const receipt = await realSync(source, body);
+    receipts.set(body.batchId, receipt);
+    if (lose) { lose = false; throw new Error('socket hang up'); }
+    return receipt;
+  };
+  const teams = { '001B': [[member('b1')]] };
+  await assert.rejects(runSfdcTeam(base(store, teamSession(teams), api, ['001B'])));
+  recordForgotten(store, ['001B']);
+  // The server deleted 001B's rows; 001B is assigned again before any team pass completed.
+  const back = await runSfdcTeam(base(store, teamSession(teams), api, ['001B']));
+  assert.equal(back.counts.upserts, 1, 'the member is resent, not counted unchanged');
+});
+
+test('an absent forgotten account gets explicit removes', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  await runSfdcTeam(base(store, teamSession({ '001B': [[member('b1'), member('b2')]] }), api, ['001B']));
+  recordForgotten(store, ['001B']);
+  const away = await runSfdcTeam(base(store, teamSession({}), api, []));
+  assert.equal(away.counts.removals, 2, 'removes also heal a server-side delete that failed');
+});
