@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { accountApi, ApiError } from '@/lib/api';
 import { roleLabel } from '@/lib/accountPeople';
@@ -257,7 +258,7 @@ function FocusPicker({ options, focus, onChoose }: { options: FocusOption[]; foc
         role="combobox" aria-expanded={open} aria-controls="focus-picker-list"
         onChange={e => { setQuery(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 120)}
-        onKeyDown={e => { if (e.key === 'Enter' && matches[0]) { e.preventDefault(); pick(matches[0]); } if (e.key === 'Escape') setOpen(false); }}
+        onKeyDown={e => { if (e.key === 'Enter' && !isImeKey(e) && matches[0]) { e.preventDefault(); pick(matches[0]); } if (e.key === 'Escape') setOpen(false); }}
         className="w-full rounded-lg border border-border-subtle bg-surface py-1.5 pl-8 pr-3 text-sm text-text-main placeholder:text-text-secondary focus:outline-2 focus:outline-primary" />
       {open && matches.length > 0 && <ul id="focus-picker-list" role="listbox"
         className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-border-subtle bg-surface py-1 shadow-lg">

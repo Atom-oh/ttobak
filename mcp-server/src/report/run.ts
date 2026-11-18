@@ -11,7 +11,7 @@ import { IntakeError } from '../intake/errors.js';
 import { signIn, type IntakeEnvironment, type Selection } from '../intake/run.js';
 import { IntakeStore } from '../intake/store.js';
 import { MIN_CLAUDE_VERSION, SAFE_PATH, claudeArgs, claudeProjectDir, claudeVersion, findClaude, findSkill, homePythonPrefix,
-  reportEnv, reportMcpConfig, reportSettings, runClaude, sandboxSupported, versionAtLeast } from './claude.js';
+  reportEnv, reportMcpConfig, reportModel, reportSettings, runClaude, sandboxSupported, versionAtLeast } from './claude.js';
 import { ReportError, reportCode } from './errors.js';
 import { reportPrompt } from './prompt.js';
 import { REPORT_JSON_SCHEMA, periodFor, validateHighlights, validateReport, type Highlights, type Period } from './schema.js';
@@ -222,7 +222,7 @@ async function report(args: string[], environment: ReportEnvironment, store: Int
     const argv = claudeArgs({
       prompt: reportPrompt({ skillDir, outDir, alias, period, customersFile, ...(highlights ? { highlights } : {}),
         excludedChannels: options.excluded }),
-      schema: REPORT_JSON_SCHEMA, mcpConfigPath, settingsPath, skillDir, workDir,
+      schema: REPORT_JSON_SCHEMA, mcpConfigPath, settingsPath, skillDir, workDir, model: reportModel(environment.home, environment.env),
       allowedTools: allowedTools({ skillDir, outDir, readDirs: [skillDir, workDir, sessionDir], servers: mcp.present }),
     });
     cancelled();

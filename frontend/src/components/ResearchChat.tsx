@@ -1,5 +1,7 @@
 'use client';
 
+import { fitToContent } from '@/lib/fieldSizing';
+import { isImeKey } from '@/lib/ime';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { safeMarkdownUrl } from '@/lib/markdownUrlTransform';
@@ -44,7 +46,7 @@ function SubPageInput({ onSubmit, disabled }: { onSubmit: (topic: string) => voi
         value={topic}
         onChange={(e) => setTopic(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') handleSubmit();
+          if (e.key === 'Enter' && !isImeKey(e)) handleSubmit();
           if (e.key === 'Escape') { setOpen(false); setTopic(''); }
         }}
         disabled={disabled}
@@ -203,15 +205,6 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }
   };
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const autoResize = () => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 150) + 'px';
-  };
-
   const si = statusIndicator[status] || statusIndicator.planning;
   const inputDisabled = status === 'running' || status === 'approved';
   const isFullWidth = ['planning', 'running', 'approved'].includes(status);
@@ -305,9 +298,8 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       <div className="p-4 border-t border-white/10">
         <div className="flex items-end gap-2">
           <textarea
-            ref={textareaRef}
             value={input}
-            onChange={(e) => { setInput(e.target.value); autoResize(); }}
+            onChange={(e) => { setInput(e.target.value); fitToContent(e.target, 150); }}
             disabled={inputDisabled}
             rows={1}
             placeholder={
@@ -315,7 +307,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
                 : status === 'approved' ? '리서치 시작 대기 중...'
                 : '질문이나 수정사항을 입력하세요... (Enter로 줄바꿈)'
             }
-            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-text-main placeholder:text-text-muted/60 focus:outline-none focus:border-primary/50 disabled:opacity-50 resize-none overflow-hidden"
+            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-text-main placeholder:text-text-muted/60 focus:outline-none focus:border-primary/50 disabled:opacity-50 resize-none field-sizing-content max-h-[150px] overflow-y-auto"
           />
           <button
             onClick={handleSend}

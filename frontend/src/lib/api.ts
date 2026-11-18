@@ -527,21 +527,15 @@ async function askQA(request: {
   const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
   const fetchJob = async (method: 'GET' | 'POST'): Promise<QAJob> => {
     assertRequestUser(userId);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.min(20_000, Math.max(1, end - Date.now())));
-    try {
-      const value = await apiFetch<QAJob>(
-        method === 'POST' ? '/api/qa/jobs' : `/api/qa/jobs/${encodeURIComponent(jobId)}`,
-        { method, body: method === 'POST' ? body : undefined, cache: 'no-store',
-          signal: controller.signal, expectedUserId: userId }
-      );
-      if (value?.jobId !== jobId || !['queued', 'running', 'succeeded', 'failed'].includes(value.status)) {
-        throw new QAJobError(502, 'QA_JOB_PROTOCOL_ERROR', 'Invalid QA job response.', jobId);
-      }
-      return value;
-    } finally {
-      clearTimeout(timer);
+    const value = await apiFetch<QAJob>(
+      method === 'POST' ? '/api/qa/jobs' : `/api/qa/jobs/${encodeURIComponent(jobId)}`,
+      { method, body: method === 'POST' ? body : undefined, cache: 'no-store',
+        signal: AbortSignal.timeout(Math.min(20_000, Math.max(1, end - Date.now()))), expectedUserId: userId }
+    );
+    if (value?.jobId !== jobId || !['queued', 'running', 'succeeded', 'failed'].includes(value.status)) {
+      throw new QAJobError(502, 'QA_JOB_PROTOCOL_ERROR', 'Invalid QA job response.', jobId);
     }
+    return value;
   };
   const failure = (error: unknown): QAJobError => error instanceof QAJobError ? error : new QAJobError(
     error instanceof ApiError ? error.status : 503,

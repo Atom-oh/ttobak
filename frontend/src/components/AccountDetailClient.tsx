@@ -368,7 +368,7 @@ export function AccountDetailContent({ accountId, onParentUpdated }: {
     for (const oppty of signalsState.data?.opportunities ?? []) names[oppty.projectId] = oppty.name;
     return names;
   }, [flowState.data, signalsState.data]);
-  const meetings = [...(meetingsState.data?.meetings ?? [])].sort((left, right) => {
+  const meetings = (meetingsState.data?.meetings ?? []).toSorted((left, right) => {
     const leftDate = Date.parse(left.date);
     const rightDate = Date.parse(right.date);
     return (Number.isFinite(rightDate) ? rightDate : -Infinity) - (Number.isFinite(leftDate) ? leftDate : -Infinity)

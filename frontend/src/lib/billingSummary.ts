@@ -152,7 +152,7 @@ const signalValue = (r: Row): number | null => finite(r.source === 'cur' ? r.run
 export function topSignals(tagRows: unknown[] | null, curRows: unknown[] | null, accountId: string): BillingSummaryItem[] {
   const rows = [...rowsOf(tagRows, accountId), ...rowsOf(curRows, accountId)].filter((r) => text(r.tag_value));
   const sorted = rows.every((r) => signalValue(r) !== null)
-    ? rows.slice().sort((a, b) => (signalValue(b) as number) - (signalValue(a) as number))
+    ? rows.toSorted((a, b) => (signalValue(b) as number) - (signalValue(a) as number))
     : rows;
   return sorted.slice(0, 3).map((r, i) => ({
     key: `${text(r.source) || 'cot'}|${text(r.tag_key)}|${text(r.tag_value)}|${i}`,

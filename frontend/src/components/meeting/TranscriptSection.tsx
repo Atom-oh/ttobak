@@ -1,5 +1,6 @@
 'use client';
 
+import { fitToContent } from '@/lib/fieldSizing';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import type { TranscriptQuality, TranscriptSegment } from '@/types/meeting';
 import { SPEAKER_COLORS } from '@/lib/speakerColors';
@@ -66,8 +67,7 @@ function EditableText({ text, onSave }: { text: string; onSave?: (text: string) 
   useEffect(() => {
     if (editing && textareaRef.current) {
       textareaRef.current.focus();
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+      fitToContent(textareaRef.current);
     }
   }, [editing]);
 
@@ -93,12 +93,11 @@ function EditableText({ text, onSave }: { text: string; onSave?: (text: string) 
       value={value}
       onChange={(e) => {
         setValue(e.target.value);
-        e.target.style.height = 'auto';
-        e.target.style.height = e.target.scrollHeight + 'px';
+        fitToContent(e.target);
       }}
       onBlur={handleSave}
       onKeyDown={(e) => { if (e.key === 'Escape') { setValue(text); setEditing(false); } }}
-      className="w-full text-[15px] leading-relaxed text-slate-700 dark:text-gray-300 bg-white dark:bg-surface-lowest border border-primary/20 rounded-lg px-2 py-1 resize-none focus:outline-none focus:ring-1 focus:ring-primary/40"
+      className="w-full field-sizing-content text-[15px] leading-relaxed text-slate-700 dark:text-gray-300 bg-white dark:bg-surface-lowest border border-primary/20 rounded-lg px-2 py-1 resize-none focus:outline-none focus:ring-1 focus:ring-primary/40"
     />
   );
 }

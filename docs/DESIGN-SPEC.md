@@ -41,10 +41,21 @@ that equal an icon name (currently `event`) are listed in the scanner's
 
 `useTheme` owns interactive theme toggling and watches the root class. Its fixed
 initial dark value matches static prerendering; mount-time synchronization is
-intentional hydration handling. `layout.tsx` applies the pre-hydration preference.
+intentional hydration handling. `layout.tsx` applies the pre-hydration preference
+to both the `.dark` class and `<meta name="color-scheme">` (`light dark` when
+nothing is stored); `globals.css` maps that meta to the root `color-scheme`, so
+native scrollbars, form controls and the canvas follow the theme. Dark scrollbars
+use `scrollbar-color`/`scrollbar-width`, with `::-webkit-scrollbar` only under
+`@supports not (scrollbar-color: auto)` for older WebKit.
 Mermaid/Shiki consume JS theme values through the hook; keep Mermaid's explicit
 light/dark palettes aligned when changing CSS tokens. Purely styled components
 use CSS variants.
+
+Custom Enter handlers on text fields must skip IME composition keys through
+`isImeKey` (`lib/ime.ts`), which checks `isComposing` and Safari's
+`keyCode === 229`; otherwise Hangul input submits half-composed text. Growing
+textareas use `field-sizing-content`; `fitToContent` (`lib/fieldSizing.ts`) measures
+`scrollHeight` only where `field-sizing` is unsupported.
 
 ## Workspace sizing
 
