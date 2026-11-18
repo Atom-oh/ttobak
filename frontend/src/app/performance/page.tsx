@@ -7,6 +7,9 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { GoalsEditor } from '@/components/performance/GoalsEditor';
 import { MappingQueue } from '@/components/performance/MappingQueue';
 import { MissedList } from '@/components/performance/MissedList';
+import { OnboardingList } from '@/components/performance/OnboardingList';
+import { OnboardingPanel } from '@/components/performance/OnboardingPanel';
+import { ONBOARDING_COPY, type OnboardingSummary } from '@/lib/onboarding';
 import { IntakeRunControl } from '@/components/performance/IntakeRunControl';
 import { ReportTab } from '@/components/performance/ReportTab';
 import { REPORT_COPY } from '@/lib/performanceReport';
@@ -43,6 +46,9 @@ export default function PerformancePage() {
   const [accountsResult, setAccountsResult] = useState<AccountListResult<AccountSummary> | null>(null);
   const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [year] = useState(seoulYear);
+  const [onboardingResult, setOnboardingResult] = useState<{ key: string; data?: OnboardingSummary; error?: string } | null>(null);
+  // The invite step for one SFDC account; it opens after a customer is created or from the onboarding list.
+  const [inviting, setInviting] = useState<{ sfdcAccountId: string; name: string } | null>(null);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace('/');
@@ -81,6 +87,16 @@ export default function PerformancePage() {
     return () => controller.abort();
   }, [userId, membershipRevision, reloadKey]);
 
+  useEffect(() => {
+    if (!userId) return;
+    const controller = new AbortController();
+    const key = `${userId}:${membershipRevision}:${reloadKey}`;
+    performanceApi.onboarding({ signal: controller.signal, expectedUserId: userId })
+      .then(data => setOnboardingResult({ key, data }))
+      .catch(() => { if (!controller.signal.aborted) setOnboardingResult({ key, error: ONBOARDING_COPY.loadFailed }); });
+    return () => controller.abort();
+  }, [userId, membershipRevision, reloadKey]);
+
   // Every result is bound to the signed-in user and the membership revision: grants that
   // materialize in a later bootstrap pass refetch the missed list and the queue too.
   const currentMissed = missedResult?.key === `${userId}:${membershipRevision}:${period}:${reloadKey}` ? missedResult : null;
@@ -94,6 +110,11 @@ export default function PerformancePage() {
   const accounts = accountList.accounts;
   const accountNames = useMemo(() => accountList.status === 'error' ? null : new Map(accounts.map(account => [account.accountId, account.name])), [accountList.status, accounts]);
   const retryAccounts = () => setAccountsAttempt(attempt => attempt + 1);
+  const ownOnboarding = onboardingResult?.key.startsWith(`${userId}:`) ? onboardingResult : null;
+  const onboarding = ownOnboarding?.data ?? null;
+  const onboardingError = ownOnboarding?.key === `${userId}:${membershipRevision}:${reloadKey}` ? ownOnboarding.error ?? null : null;
+  const closeInvite = useCallback(() => setInviting(null), []);
+  const afterInvite = useCallback(() => setReloadKey(key => key + 1), []);
   // A finished local intake run reloads every list on the page.
   const reloadAfterIntake = useCallback(() => setReloadKey(key => key + 1), []);
 
@@ -181,8 +202,21 @@ export default function PerformancePage() {
               </div>
             )
               : mappings ? <MappingQueue items={mappings.items} truncated={mappings.truncated} accounts={accounts} accountsStatus={accountList.status}
-                onRetryAccounts={retryAccounts} userId={userId} onSaved={() => setReloadKey(key => key + 1)} />
+                onRetryAccounts={retryAccounts} userId={userId} onSaved={() => setReloadKey(key => key + 1)}
+                onCreated={(sfdcAccountId, name) => { setReloadKey(key => key + 1); setInviting({ sfdcAccountId, name }); }} />
                 : <div className="flex justify-center py-8"><Spinner /></div>}
+          </section>
+
+          <section className={cardClass} aria-labelledby="perf-onboarding">
+            <h3 id="perf-onboarding" className={headingClass}>{ONBOARDING_COPY.title}</h3>
+            <p className="mt-1 mb-3 text-sm text-slate-500 dark:text-text-muted">{ONBOARDING_COPY.description}</p>
+            {onboardingError ? (
+              <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-600 dark:text-red-400">
+                <span>{onboardingError}</span>
+                <button type="button" onClick={() => setReloadKey(key => key + 1)} className="font-semibold text-primary hover:underline">{ONBOARDING_COPY.retry}</button>
+              </div>
+            ) : onboarding ? <OnboardingList summary={onboarding} onInvite={(sfdcAccountId, name) => setInviting({ sfdcAccountId, name })} />
+              : <div className="flex justify-center py-8"><Spinner /></div>}
           </section>
 
           <section aria-label="데이터 수집 상태" className="space-y-1 text-xs text-slate-500 dark:text-text-muted">
@@ -200,6 +234,8 @@ export default function PerformancePage() {
           </div>
         </div>
       </div>
+      {inviting && <OnboardingPanel key={inviting.sfdcAccountId} sfdcAccountId={inviting.sfdcAccountId} title={inviting.name}
+        userId={userId} onClose={closeInvite} onInvited={afterInvite} />}
     </AppLayout>
   );
 }
