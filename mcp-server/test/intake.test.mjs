@@ -593,10 +593,11 @@ test('sfdc tasks never carry description', async t => {
   assert.equal(tasks['00TXX0000000001AAA'].type, 'Workshops');
   const stateDir = join(home, '.ttobak', 'intake', 'sfdc');
   const stateFiles = allFiles(stateDir).map(path => path.slice(stateDir.length + 1)).sort();
-  assert.equal(stateFiles.length, 3);
+  assert.equal(stateFiles.length, 4);
   assert.match(stateFiles[0], /^[0-9a-f-]{36}\/c{32}\/sfdc-account-team\.json$/);
-  assert.match(stateFiles[1], /^[0-9a-f-]{36}\/c{32}\/sfdc-assignments\.json$/);
-  assert.match(stateFiles[2], /^[0-9a-f-]{36}\/c{32}\/sfdc-tasks\.json$/);
+  assert.match(stateFiles[1], /^[0-9a-f-]{36}\/c{32}\/sfdc-account-team\.resume\.json$/);
+  assert.match(stateFiles[2], /^[0-9a-f-]{36}\/c{32}\/sfdc-assignments\.json$/);
+  assert.match(stateFiles[3], /^[0-9a-f-]{36}\/c{32}\/sfdc-tasks\.json$/);
   const outputs = JSON.stringify(api.calls) + lines.join('\n') +
     allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
   assert.ok(!outputs.includes(CANARY), 'description, comments and host env never leave the parser');
@@ -627,6 +628,7 @@ test('sfdc snapshot removes vanished assignments', async t => {
   assert.equal(assignments.body.complete, true);
   assert.deepEqual(tasks.body.mutations, [{ op: 'remove', externalId: '00TXX00000000T1AAA' }]);
   assert.deepEqual(second.revisions, { 'sfdc-assignments': 2, 'sfdc-tasks': 2 });
+  assert.deepEqual(second.removedAssignmentIds, ['001XX0000000B1AAA', '001XX0000000C1AAA'], 'the team step forgets these');
 
   // A role change from activity to registry is an upsert, not an unchanged row.
   const third = await runSfdc({ ...base, source: sentralData({

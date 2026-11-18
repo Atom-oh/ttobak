@@ -491,6 +491,8 @@ export interface SfdcRunResult {
   assignmentIds: string[];
   /** The owner's SFDC alias. */
   ownerAlias: string;
+  /** Assignment IDs this run removed (delivered; empty on a dry run). */
+  removedAssignmentIds: string[];
 }
 
 export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
@@ -536,7 +538,7 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
   const plan = planSfdc(registry, tasks, { 'sfdc-assignments': assignmentState.ledger, 'sfdc-tasks': taskState.ledger }, now);
   const revisions = () => ({ 'sfdc-assignments': assignmentState.revision, 'sfdc-tasks': taskState.revision });
   const snapshot = { assignmentIds: plannedAssignmentIds(registry, tasks, now), ownerAlias: personal.alias };
-  if (dryRun) return { counts: plan.counts, revisions: revisions(), ...snapshot };
+  if (dryRun) return { counts: plan.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: [] };
   // The server rejects growth past this cap, so an oversized snapshot could never converge.
   if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
     throw new IntakeError('ASSIGNMENT_CAP_EXCEEDED', `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
@@ -544,7 +546,7 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
 
   await deliver(options.api!, store, assignmentState, plan.assignments);
   await deliver(options.api!, store, taskState, plan.tasks);
-  return { counts: plan.counts, revisions: revisions(), ...snapshot };
+  return { counts: plan.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: plan.assignments.remove };
 }
 
 /** The account IDs `planSfdc` stores as assignments: registry entries plus in-window task accounts. */

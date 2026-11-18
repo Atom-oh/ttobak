@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_TEAM_PER_ACCOUNT, parseTeamMembers, runSfdcTeam } from '../dist/intake/sfdc-team.js';
+import { MAX_TEAM_PER_ACCOUNT, forgetRemovedAccounts, parseTeamMembers, runSfdcTeam } from '../dist/intake/sfdc-team.js';
 import { IntakeStore } from '../dist/intake/store.js';
 import { IntakeError } from '../dist/intake/errors.js';
 
@@ -156,4 +156,41 @@ test('dry run sends nothing', async t => {
   const result = await runSfdcTeam(base(store, teamSession({ '001A': [[member('a1')]] }), undefined, ['001A'], { dryRun: true, scope: undefined }));
   assert.equal(result.counts.upserts, 1);
   assert.deepEqual(api.calls, []);
+});
+
+test('budget-skipped accounts go first next run, and a full pass clears the resume point', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]], '001C': [[member('c1')]] };
+  let now = 0;
+  const slow = () => {
+    const session = teamSession(teams);
+    const call = session.call;
+    session.call = async (tool, args) => { now += 5 * 60_000; return call(tool, args); };
+    return session;
+  };
+  const first = slow();
+  const one = await runSfdcTeam(base(store, first, api, ['001A', '001B', '001C'], { clock: () => now }));
+  assert.deepEqual(first.calls.map(call => call.id), ['001A', '001B']);
+  assert.equal(one.counts.skippedBudget, 1);
+  now = 0;
+  const second = slow();
+  await runSfdcTeam(base(store, second, api, ['001A', '001B', '001C'], { clock: () => now }));
+  assert.deepEqual(second.calls.map(call => call.id), ['001C', '001A'], 'the skipped account is read first');
+  const third = teamSession(teams);
+  const full = await runSfdcTeam(base(store, third, api, ['001A', '001B', '001C']));
+  assert.equal(full.counts.skippedBudget, 0);
+  assert.deepEqual(store.read('sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.resume.json'), { version: 1, after: null });
+});
+
+test('forgetting a removed account makes its return resend the members', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]] };
+  await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B']));
+  // The assignment sync removed 001B (the server deleted its team rows); the team step did not run.
+  forgetRemovedAccounts(store, SOURCE_ID, SCOPE, ['001B']);
+  const back = await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B']));
+  assert.equal(back.counts.upserts, 1);
+  assert.deepEqual(api.calls.at(-1).mutations.map(m => m.teamMember?.alias), ['b1']);
 });

@@ -61,6 +61,40 @@ export interface SfdcTeamRunOptions {
 
 export interface SfdcTeamRunResult { result: 'ok' | IntakeCode; counts: SfdcTeamCounts }
 
+interface TeamResumePoint { version: 1; after: string | null }
+
+function resumePath(sourceId: string, scope: string): string[] {
+  return ['sfdc', sourceId, scope, `${SOURCE}.resume.json`];
+}
+
+/**
+ * Account IDs in order, rotated to start after the stored resume point, so
+ * accounts the time budget skipped last run go first and every account is
+ * reached in turn.
+ */
+export function rotatedAccounts(ids: string[], after: string | null): string[] {
+  const sorted = [...new Set(ids)].filter(id => ACCOUNT.test(id)).sort();
+  if (after === null) return sorted;
+  const start = sorted.findIndex(id => id > after);
+  return start <= 0 ? sorted : [...sorted.slice(start), ...sorted.slice(0, start)];
+}
+
+/**
+ * Forgets the team-ledger rows of accounts the assignment sync just removed:
+ * the server deletes their team rows with the assignment, so a later return
+ * of the account must resend its members. Runs whether or not the team step
+ * is on.
+ */
+export function forgetRemovedAccounts(store: IntakeStore, sourceId: string, scope: string, removedAccountIds: string[]): void {
+  if (!removedAccountIds.length) return;
+  const state = loadSfdcState(store, SOURCE, sourceId, scope);
+  const removed = new Set(removedAccountIds);
+  const kept = Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(':'))));
+  if (kept.length === Object.keys(state.ledger).length) return;
+  state.ledger = Object.fromEntries(kept);
+  store.write(state, 'sfdc', sourceId, scope, `${SOURCE}.json`);
+}
+
 /** Core role order of the backend `MapSFDCTeamRole`: AM, TAM, SA, then everyone else. */
 export function teamRoleRank(teamMemberRole: string, allTeamRoles: string): number {
   const role = teamMemberRole.trim();
@@ -158,7 +192,15 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
   const failures: IntakeCode[] = [];
   const clock = options.clock ?? Date.now;
   const started = clock();
-  for (const accountId of [...new Set(options.accountIds)].filter(id => ACCOUNT.test(id)).sort()) {
+  let after: string | null = null;
+  if (options.scope) {
+    try {
+      const point = store.read<TeamResumePoint>(...resumePath(sourceId, options.scope));
+      after = typeof point?.after === 'string' ? point.after : null;
+    } catch { after = null; }
+  }
+  let last: string | null = null;
+  for (const accountId of rotatedAccounts(options.accountIds, after)) {
     if (clock() - started > SFDC_TEAM_BUDGET_MS) {
       kept.add(accountId);
       counts.skippedBudget++;
@@ -187,6 +229,7 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
       continue;
     }
     counts.accounts++;
+    last = accountId;
     counts.skippedCap += parsed.skippedCap;
     counts.skippedInvalid += parsed.skippedInvalid;
     for (const member of parsed.members) rows.set(`${accountId}:${member.alias}`, member);
@@ -196,7 +239,12 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
   counts.upserts = planned.upserts;
   counts.removals = planned.removals;
   counts.unchanged = planned.unchanged;
-  if (!dryRun && state) await deliver(options.api!, store, state, planned.plan);
+  if (!dryRun && state) {
+    await deliver(options.api!, store, state, planned.plan);
+    // A finished pass clears the resume point; a budget-limited one records where it stopped.
+    const point: TeamResumePoint = { version: 1, after: counts.skippedBudget ? last : null };
+    store.write(point, ...resumePath(sourceId, options.scope!));
+  }
   const result: 'ok' | IntakeCode = failures.length === 0 ? 'ok'
     : failures.every(code => code === failures[0]) && counts.accounts === 0 ? failures[0] : 'PARTIAL_FAILURE';
   return { result, counts };

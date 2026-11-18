@@ -29143,13 +29143,13 @@ async function runSfdc(options2) {
   const plan2 = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
   const revisions = () => ({ "sfdc-assignments": assignmentState.revision, "sfdc-tasks": taskState.revision });
   const snapshot = { assignmentIds: plannedAssignmentIds(registry3, tasks, now), ownerAlias: personal.alias };
-  if (dryRun) return { counts: plan2.counts, revisions: revisions(), ...snapshot };
+  if (dryRun) return { counts: plan2.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: [] };
   if (plan2.counts.assignments.fetched > MAX_ASSIGNMENTS) {
     throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan2.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
   }
   await deliver(options2.api, store, assignmentState, plan2.assignments);
   await deliver(options2.api, store, taskState, plan2.tasks);
-  return { counts: plan2.counts, revisions: revisions(), ...snapshot };
+  return { counts: plan2.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: plan2.assignments.remove };
 }
 function plannedAssignmentIds(registry3, tasks, now) {
   const { earliest, latest } = taskWindow(now);
@@ -29722,6 +29722,24 @@ var init_sfdc_contacts = __esm({
 });
 
 // src/intake/sfdc-team.ts
+function resumePath2(sourceId, scope) {
+  return ["sfdc", sourceId, scope, `${SOURCE}.resume.json`];
+}
+function rotatedAccounts(ids, after) {
+  const sorted = [...new Set(ids)].filter((id) => ACCOUNT.test(id)).sort();
+  if (after === null) return sorted;
+  const start = sorted.findIndex((id) => id > after);
+  return start <= 0 ? sorted : [...sorted.slice(start), ...sorted.slice(0, start)];
+}
+function forgetRemovedAccounts(store, sourceId, scope, removedAccountIds) {
+  if (!removedAccountIds.length) return;
+  const state = loadSfdcState(store, SOURCE, sourceId, scope);
+  const removed = new Set(removedAccountIds);
+  const kept = Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(":"))));
+  if (kept.length === Object.keys(state.ledger).length) return;
+  state.ledger = Object.fromEntries(kept);
+  store.write(state, "sfdc", sourceId, scope, `${SOURCE}.json`);
+}
 function teamRoleRank(teamMemberRole, allTeamRoles) {
   const role = teamMemberRole.trim();
   if (role === "Account Manager") {
@@ -29811,7 +29829,17 @@ async function runSfdcTeam(options2) {
   const failures = [];
   const clock = options2.clock ?? Date.now;
   const started = clock();
-  for (const accountId of [...new Set(options2.accountIds)].filter((id) => ACCOUNT.test(id)).sort()) {
+  let after = null;
+  if (options2.scope) {
+    try {
+      const point = store.read(...resumePath2(sourceId, options2.scope));
+      after = typeof point?.after === "string" ? point.after : null;
+    } catch {
+      after = null;
+    }
+  }
+  let last = null;
+  for (const accountId of rotatedAccounts(options2.accountIds, after)) {
     if (clock() - started > SFDC_TEAM_BUDGET_MS) {
       kept.add(accountId);
       counts.skippedBudget++;
@@ -29839,6 +29867,7 @@ async function runSfdcTeam(options2) {
       continue;
     }
     counts.accounts++;
+    last = accountId;
     counts.skippedCap += parsed.skippedCap;
     counts.skippedInvalid += parsed.skippedInvalid;
     for (const member of parsed.members) rows.set(`${accountId}:${member.alias}`, member);
@@ -29847,7 +29876,11 @@ async function runSfdcTeam(options2) {
   counts.upserts = planned.upserts;
   counts.removals = planned.removals;
   counts.unchanged = planned.unchanged;
-  if (!dryRun && state) await deliver(options2.api, store, state, planned.plan);
+  if (!dryRun && state) {
+    await deliver(options2.api, store, state, planned.plan);
+    const point = { version: 1, after: counts.skippedBudget ? last : null };
+    store.write(point, ...resumePath2(sourceId, options2.scope));
+  }
   const result = failures.length === 0 ? "ok" : failures.every((code) => code === failures[0]) && counts.accounts === 0 ? failures[0] : "PARTIAL_FAILURE";
   return { result, counts };
 }
@@ -32283,6 +32316,12 @@ async function sfdcRun(options2, environment, store, signedIn) {
       reconcile: options2.reconcile === true,
       source
     });
+    if (!dryRun && scope) {
+      try {
+        forgetRemovedAccounts(store, selected.sourceId, scope, result.removedAssignmentIds);
+      } catch {
+      }
+    }
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
     writeStatus({
       lastRunAt: startedAt.toISOString(),
@@ -32305,7 +32344,7 @@ async function sfdcRun(options2, environment, store, signedIn) {
         await active.requireTool(SFDC_CONTACTS_TOOL);
       }
     ) : void 0;
-    const sfdcAccountTeam = api ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
+    const sfdcAccountTeam = api && sfdcContacts?.result !== "AUTH_EXPIRED_MIDWAY" ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
       await active.requireTool(SFDC_TEAM_TOOL);
       return runSfdcTeam({
         session: source,

@@ -20,7 +20,7 @@ import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
 import { SFDC_CONTACTS_TOOL, SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
 import { runSfdcContacts, type SfdcContactCounts } from './sfdc-contacts.js';
-import { SFDC_TEAM_TOOL, runSfdcTeam, type SfdcTeamCounts } from './sfdc-team.js';
+import { SFDC_TEAM_TOOL, forgetRemovedAccounts, runSfdcTeam, type SfdcTeamCounts } from './sfdc-team.js';
 import { resolveMe } from './specreq.js';
 import { DEFAULT_OWN_DOMAINS } from './match.js';
 import { IntakeStore } from './store.js';
@@ -604,6 +604,10 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     const result = await runSfdc({
       store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options.reconcile === true, source,
     });
+    // The server deleted the team rows of removed assignments; the team ledger forgets them too.
+    if (!dryRun && scope) {
+      try { forgetRemovedAccounts(store, selected.sourceId, scope, result.removedAssignmentIds); } catch { /* the next reconcile resends */ }
+    }
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
     writeStatus({ lastRunAt: startedAt.toISOString(), result: 'ok', dryRun, counts: result.counts,
       revisions: result.revisions, ...(scope ? { scope } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) });
@@ -612,7 +616,8 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now(),
       contactsOn, async () => { await active.requireTool(SFDC_CONTACTS_TOOL); }) : undefined;
     // The account-team step follows on the same session; like contacts, its failures never change the SFDC result.
-    const sfdcAccountTeam = api ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
+    // Midway expired during contacts: the team step would only fail the same way.
+    const sfdcAccountTeam = api && sfdcContacts?.result !== 'AUTH_EXPIRED_MIDWAY' ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
       await active.requireTool(SFDC_TEAM_TOOL);
       return runSfdcTeam({ session: source, api, store, sourceId: selected.sourceId, ...(scope ? { scope } : {}), dryRun,
         reconcile: options.reconcile === true, accountIds: result.assignmentIds, ownerAlias: result.ownerAlias });

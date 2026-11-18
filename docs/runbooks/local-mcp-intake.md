@@ -788,7 +788,12 @@ After the contacts step, the same session runs `sfdc-account-team`
   in `sfdc/<sourceId>/<scope>/sfdc-account-team.json`; members of an account
   that left the snapshot are removed. An account whose read failed or did not
   start within the 8-minute budget keeps its stored members (`failedAccounts`,
-  `skippedBudget`).
+  `skippedBudget`). A budget-limited pass stores where it stopped
+  (`sfdc-account-team.resume.json`, an SFDC account ID only) and the next run
+  starts after it, so every account is reached in turn; a full pass clears it.
+- **Removed assignments.** The server deletes the team rows of an assignment
+  the SFDC sync removes; the same run drops that account from the team ledger,
+  even with the step off, so a returning account is resent.
 - **Failures.** A missing `get_team_members` records `SCHEMA_CHANGED`; failed
   accounts give `PARTIAL_FAILURE`. Neither changes the SFDC result; `intake run`
   reports them as a partial failure. Midway expiry ends the step and the run.
@@ -796,9 +801,9 @@ After the contacts step, the same session runs `sfdc-account-team`
   `lastSuccessAt`, `result` and `counts`: `accounts`, `fetched`, `upserts`,
   `removals`, `unchanged`, `skippedCap`, `skippedInvalid`, `failedAccounts`,
   `skippedBudget`.
-- **Lost ledger.** Without a ledger the step cannot see server rows of accounts
-  that already left the snapshot; those rows stay until the account returns.
-  The server reads team rows only for currently assigned accounts.
+- **Lost ledger.** Without a ledger the step cannot remove members who left a
+  still-assigned account's team; there is no team-listing route to reconcile
+  against. Removed assignments are still cleaned up by the server.
 
 ## Slack links connector
 
