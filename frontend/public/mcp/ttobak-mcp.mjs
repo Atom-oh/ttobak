@@ -33007,7 +33007,8 @@ var init_claude = __esm({
       "ANTHROPIC_MODEL",
       "ANTHROPIC_DEFAULT_OPUS_MODEL",
       "ANTHROPIC_DEFAULT_SONNET_MODEL",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL"
     ];
     ENV_VALUE = /^[\x20-\x7e]{1,512}$/;
     MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,199}$/;

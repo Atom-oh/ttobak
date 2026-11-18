@@ -838,7 +838,9 @@ Prerequisites:
   `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
 - The model is `--model` from `TTOBAK_REPORT_MODEL`, else the settings `model`;
   a settings `env.ANTHROPIC_MODEL` alone is carried without a flag; otherwise
-  `fable`, never the CLI default. Only plain model names are passed.
+  `fable`, never the CLI default. A `--model` value must be a plain model name.
+  `ANTHROPIC_DEFAULT_FABLE_MODEL` is carried with the other alias mappings, so
+  a Bedrock or gateway install resolves `fable` to a model it can invoke.
 - The prompt names the one Bash form the allowlist admits:
   `python3 -I <skill>/scripts/<name> <args>`, absolute, without `cd`, `&&`,
   pipes or redirection. A run that tried another form and gave up reported

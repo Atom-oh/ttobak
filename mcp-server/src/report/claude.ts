@@ -120,7 +120,7 @@ export function reportMcpConfig(home: string): { config: { mcpServers: Record<st
 /** Model-auth keys carried over from the user's `~/.claude/settings.json` `env`. */
 export const AUTH_ENV_KEYS = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'AWS_PROFILE', 'AWS_REGION',
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL'] as const;
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL'] as const;
 
 const ENV_VALUE = /^[\x20-\x7e]{1,512}$/;
 

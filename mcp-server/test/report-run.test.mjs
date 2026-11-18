@@ -692,6 +692,14 @@ test('report_model_follows_the_owner_setting_else_fable', async t => {
   // A value that is not a plain model name is ignored.
   assert.deepEqual(await modelOf({ model: '--dangerously-skip-permissions' }), { flag: 'fable', envModel: undefined });
   assert.deepEqual(await modelOf({}, { TTOBAK_REPORT_MODEL: 'a b' }), { flag: 'fable', envModel: undefined });
+  // A Bedrock or gateway install maps the fable alias to a model it can invoke: that mapping is carried.
+  const ctx = setup(t);
+  writeFileSync(join(ctx.home, '.claude', 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: '1',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'us.anthropic.claude-fable-5-2-v1:0' } }));
+  assert.equal(await ctx.run(), 0);
+  const { argv, env: childEnv } = ctx.recorded();
+  assert.equal(argv[argv.indexOf('--model') + 1], 'fable');
+  assert.equal(childEnv.ANTHROPIC_DEFAULT_FABLE_MODEL, 'us.anthropic.claude-fable-5-2-v1:0');
 });
 
 test('prompt_names_the_exact_script_command_form', async t => {
