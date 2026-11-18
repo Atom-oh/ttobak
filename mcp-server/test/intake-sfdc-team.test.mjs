@@ -194,3 +194,36 @@ test('forgetting a removed account makes its return resend the members', async t
   assert.equal(back.counts.upserts, 1);
   assert.deepEqual(api.calls.at(-1).mutations.map(m => m.teamMember?.alias), ['b1']);
 });
+
+test('failed accounts advance the resume point too', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  let now = 0;
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]], '001C': [[member('c1')]], '001D': [[member('d1')]] };
+  const timeouts = { '001A': new Error('timeout'), '001B': new Error('timeout') };
+  const session = teamSession(teams, { fail: timeouts });
+  const call = session.call;
+  session.call = async (tool, args) => { now += 5 * 60_000; return call(tool, args); };
+  const first = await runSfdcTeam(base(store, session, api, ['001A', '001B', '001C', '001D'], { clock: () => now }));
+  assert.deepEqual([first.counts.failedAccounts, first.counts.skippedBudget], [2, 2]);
+  now = 0;
+  const next = teamSession(teams);
+  await runSfdcTeam(base(store, next, api, ['001A', '001B', '001C', '001D']));
+  assert.equal(next.calls[0].id, '001C', 'the next run starts after the last attempted account');
+});
+
+test('forgetting a removed account also drops it from a pending batch receipt', async t => {
+  const store = tempStore(t);
+  const flaky = teamApi();
+  const realSync = flaky.syncPerformance;
+  let fail = true;
+  flaky.syncPerformance = async (source, body) => {
+    if (fail) { fail = false; throw new Error('socket hang up'); }
+    return realSync(source, body);
+  };
+  await assert.rejects(runSfdcTeam(base(store, teamSession({ '001B': [[member('b1')]] }), flaky, ['001B'])));
+  forgetRemovedAccounts(store, SOURCE_ID, SCOPE, ['001B']);
+  const state = store.read('sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.json');
+  assert.deepEqual(state.pending.set, {});
+  assert.equal(state.pending.body.mutations.length, 1, 'the pending body is resent unchanged');
+});

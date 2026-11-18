@@ -89,9 +89,14 @@ export function forgetRemovedAccounts(store: IntakeStore, sourceId: string, scop
   if (!removedAccountIds.length) return;
   const state = loadSfdcState(store, SOURCE, sourceId, scope);
   const removed = new Set(removedAccountIds);
-  const kept = Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(':'))));
-  if (kept.length === Object.keys(state.ledger).length) return;
+  const live = ([id]: [string, unknown]) => !removed.has(id.slice(0, id.indexOf(':')));
+  const kept = Object.entries(state.ledger).filter(live);
+  // A pending batch is resent unchanged, but its receipt must not re-add rows the server deleted.
+  const pending = state.pending;
+  const pendingSet = pending ? Object.entries(pending.set).filter(live) : [];
+  if (kept.length === Object.keys(state.ledger).length && (!pending || pendingSet.length === Object.keys(pending.set).length)) return;
   state.ledger = Object.fromEntries(kept);
+  if (pending) state.pending = { ...pending, set: Object.fromEntries(pendingSet) };
   store.write(state, 'sfdc', sourceId, scope, `${SOURCE}.json`);
 }
 
@@ -206,6 +211,9 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
       counts.skippedBudget++;
       continue;
     }
+    // Every attempted account advances the resume point, failed ones too, so a
+    // run of timeouts cannot pin the rotation to the same prefix.
+    last = accountId;
     let records: Record<string, unknown>[];
     try {
       records = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: 'Account', id: accountId });
@@ -229,7 +237,6 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
       continue;
     }
     counts.accounts++;
-    last = accountId;
     counts.skippedCap += parsed.skippedCap;
     counts.skippedInvalid += parsed.skippedInvalid;
     for (const member of parsed.members) rows.set(`${accountId}:${member.alias}`, member);
