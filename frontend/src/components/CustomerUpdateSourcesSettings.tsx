@@ -65,6 +65,8 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Enter in a field submits the form again while the first add is pending.
+    if (adding) return;
     const invalid = validateSourceForm(url, label);
     if (invalid) {
       setError(invalid);
@@ -221,7 +223,8 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
         )}
       </AstryxScope>
 
-      <SlackLinkSourcesSettings onSaved={load} />
+      {/* Mounted after the first list load, as before, so a Slack save cannot race it. */}
+      {!loading && <SlackLinkSourcesSettings onSaved={load} />}
     </VStack>
   );
 }
