@@ -223,14 +223,6 @@ body {
 /* ═══════════════════════════════════════════════
    Scrollbar
    ═══════════════════════════════════════════════ */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-
-.no-scrollbar {
-  scrollbar-width: none;
-}
-
 .dark {
   --scrollbar-thumb: rgb(255 255 255 / 0.25);
   --scrollbar-track: rgb(255 255 255 / 0.02);
@@ -261,6 +253,15 @@ body {
     background: var(--scrollbar-thumb);
     border-radius: 10px;
   }
+}
+
+/* After the .dark rules above: same specificity, so the later rule wins. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* ═══════════════════════════════════════════════
