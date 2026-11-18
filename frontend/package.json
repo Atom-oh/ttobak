@@ -16,8 +16,11 @@
     "guide:build": "node scripts/build-user-guide.mjs"
   },
   "dependencies": {
+    "@astryxdesign/core": "0.7.16",
+    "@astryxdesign/theme-neutral": "0.7.16",
     "@aws-sdk/client-transcribe-streaming": "^3.1027.0",
     "@aws-sdk/credential-providers": "^3.1027.0",
+    "@stylexjs/stylex": "0.19.2",
     "@tiptap/extension-image": "^3.20.0",
     "@tiptap/pm": "^3.20.0",
     "@tiptap/react": "^3.20.0",
@@ -44,6 +47,7 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "@astryxdesign/cli": "0.7.16",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.2",
