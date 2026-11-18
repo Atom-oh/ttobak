@@ -29735,9 +29735,13 @@ function forgetRemovedAccounts(store, sourceId, scope, removedAccountIds) {
   if (!removedAccountIds.length) return;
   const state = loadSfdcState(store, SOURCE, sourceId, scope);
   const removed = new Set(removedAccountIds);
-  const kept = Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(":"))));
-  if (kept.length === Object.keys(state.ledger).length) return;
+  const live = ([id]) => !removed.has(id.slice(0, id.indexOf(":")));
+  const kept = Object.entries(state.ledger).filter(live);
+  const pending = state.pending;
+  const pendingSet = pending ? Object.entries(pending.set).filter(live) : [];
+  if (kept.length === Object.keys(state.ledger).length && (!pending || pendingSet.length === Object.keys(pending.set).length)) return;
   state.ledger = Object.fromEntries(kept);
+  if (pending) state.pending = { ...pending, set: Object.fromEntries(pendingSet) };
   store.write(state, "sfdc", sourceId, scope, `${SOURCE}.json`);
 }
 function teamRoleRank(teamMemberRole, allTeamRoles) {
@@ -29845,6 +29849,7 @@ async function runSfdcTeam(options2) {
       counts.skippedBudget++;
       continue;
     }
+    last = accountId;
     let records2;
     try {
       records2 = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: "Account", id: accountId });
@@ -29867,7 +29872,6 @@ async function runSfdcTeam(options2) {
       continue;
     }
     counts.accounts++;
-    last = accountId;
     counts.skippedCap += parsed.skippedCap;
     counts.skippedInvalid += parsed.skippedInvalid;
     for (const member of parsed.members) rows.set(`${accountId}:${member.alias}`, member);
