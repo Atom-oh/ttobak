@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiError, dictionaryApi } from '@/lib/api';
 import {
@@ -260,7 +261,7 @@ function PersonalDictionary() {
               value={newDisplayAs}
               onChange={(e) => setNewDisplayAs(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && !isImeKey(e)) {
                   e.preventDefault();
                   handleAdd();
                 }
@@ -278,7 +279,7 @@ function PersonalDictionary() {
               value={newHeardAs}
               onChange={(e) => setNewHeardAs(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && !isImeKey(e)) {
                   e.preventDefault();
                   handleAdd();
                 }

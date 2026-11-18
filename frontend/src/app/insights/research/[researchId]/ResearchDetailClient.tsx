@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { confirmDialog, alertDialog } from '@/lib/dialog';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
@@ -379,7 +380,7 @@ export default function ResearchDetailPage() {
                           value={titleDraft}
                           onChange={(e) => setTitleDraft(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') saveTitle();
+                            if (e.key === 'Enter' && !isImeKey(e)) saveTitle();
                             if (e.key === 'Escape') cancelEditTitle();
                           }}
                           disabled={savingTitle}

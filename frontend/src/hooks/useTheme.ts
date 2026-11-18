@@ -51,9 +51,12 @@ export function useTheme() {
   const toggle = useCallback(() => {
     const root = document.documentElement;
     const next = !root.classList.contains('dark');
+    const theme: Theme = next ? 'dark' : 'light';
     root.classList.toggle('dark', next);
-    localStorage.setItem('theme', next ? 'dark' : 'light');
-    setTheme(next ? 'dark' : 'light');
+    // Native UI follows this meta through globals.css's color-scheme rule.
+    document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')?.setAttribute('content', theme);
+    localStorage.setItem('theme', theme);
+    setTheme(theme);
   }, []);
 
   return { theme, isDark: theme === 'dark', toggle };

@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { useEffect, useRef, useState } from 'react';
 import { checkUserName, MAX_USER_NAME_LENGTH } from '@/lib/userName';
 
@@ -89,7 +90,7 @@ export function UserNameEditor({ name, placeholder = '-', onSave, label, size = 
           value={draft}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void save(); }
+            if (e.key === 'Enter' && !isImeKey(e)) { e.preventDefault(); void save(); }
             if (e.key === 'Escape') { e.preventDefault(); cancel(); }
           }}
           maxLength={MAX_USER_NAME_LENGTH * 2}

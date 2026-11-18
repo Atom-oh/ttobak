@@ -70,7 +70,7 @@ function createWikilinkExtension() {
 
             const draw = () => {
               if (!el) return;
-              el.innerHTML = '';
+              el.replaceChildren();
               items.forEach((item, i) => {
                 const row = document.createElement('div');
                 row.textContent = item;

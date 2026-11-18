@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { confirmDialog } from '@/lib/dialog';
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
@@ -275,7 +276,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit, canRemoveAliases = f
                 value={keywordInput}
                 onChange={(e) => setKeywordInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !isImeKey(e)) {
                     e.preventDefault();
                     addKeyword();
                   }
@@ -331,7 +332,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit, canRemoveAliases = f
                 value={aliasInput}
                 onChange={(e) => setAliasInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !isImeKey(e)) {
                     e.preventDefault();
                     addAlias();
                   }
@@ -400,7 +401,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit, canRemoveAliases = f
                 value={customServiceInput}
                 onChange={(e) => setCustomServiceInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !isImeKey(e)) {
                     e.preventDefault();
                     addCustomService();
                   }
