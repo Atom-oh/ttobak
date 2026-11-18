@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 )
@@ -307,5 +308,73 @@ func TestListSourcesIncludesTeam(test *testing.T) {
 	list, err := performanceTestService(&performanceStoreFake{}, nil).ListSources(test.Context(), "owner")
 	if err != nil || len(list.Sources) != 3 || list.Sources[2].Source != model.PerformanceSourceSFDCAccountTeam {
 		test.Fatalf("sources %+v %v", list, err)
+	}
+}
+
+func TestOnboardingInheritedReaderIsUnreadable(test *testing.T) {
+	accounts := &inheritedAccountsFake{}
+	detail, err := performanceTestService(onboardingStore(), accounts).GetOnboarding(test.Context(), "owner", "001A")
+	if err != nil {
+		test.Fatal(err)
+	}
+	if detail.AccountReadable || detail.AccountID != "" {
+		test.Fatalf("an ancestor-only reader cannot invite: %+v", detail)
+	}
+	for _, member := range detail.Members {
+		if member.Status != model.OnboardingStatusUnknown {
+			test.Fatalf("status must be unknown: %+v", member)
+		}
+	}
+}
+
+// inheritedAccountsFake reads acc1 only through an ancestor grant.
+type inheritedAccountsFake struct{}
+
+func (inheritedAccountsFake) GetAccount(_ context.Context, _, accountID string) (*model.AccountResponse, error) {
+	return &model.AccountResponse{AccountID: accountID, InheritedFromAccountID: "parent", Members: []model.AccountMemberDTO{{Email: "dhlee@amazon.com"}}}, nil
+}
+
+func TestInviteOnboardingStopsAtTimeBudget(test *testing.T) {
+	store := onboardingStore()
+	accounts := &onboardingAccountsFake{members: map[string][]model.AccountMemberDTO{"acc1": nil}}
+	svc := performanceTestService(store, accounts)
+	clock := svc.now()
+	svc.now = func() time.Time { return clock }
+	// Each AddMember takes 8 seconds: the third item would start after 16 seconds.
+	slow := &clockedInviter{onboardingAccountsFake: accounts, advance: func() { clock = clock.Add(8 * time.Second) }}
+	svc.accounts = slow
+	response, err := svc.InviteOnboarding(test.Context(), "owner", "001A", model.OnboardingInviteRequest{Items: []model.OnboardingInviteItem{
+		{Alias: "dhlee", Role: model.RoleAM}, {Alias: "atam", Role: model.RoleTAM}, {Alias: "zsa", Role: model.RoleSA},
+	}})
+	if err != nil {
+		test.Fatal(err)
+	}
+	if len(accounts.added) != 2 || response.Results[2].Outcome != model.OnboardingInviteNotAttempted || response.Results[1].Outcome != model.OnboardingInviteAdded {
+		test.Fatalf("budget: added=%d results=%+v", len(accounts.added), response.Results)
+	}
+}
+
+type clockedInviter struct {
+	*onboardingAccountsFake
+	advance func()
+}
+
+func (inviter *clockedInviter) AddMember(ctx context.Context, requester, accountID string, req *model.AddMemberRequest) (*model.AccountMemberDTO, error) {
+	inviter.advance()
+	return inviter.onboardingAccountsFake.AddMember(ctx, requester, accountID, req)
+}
+
+func TestRemovedAssignmentDeletesTeam(test *testing.T) {
+	store := &performanceStoreFake{}
+	svc := performanceTestService(store, nil)
+	request := model.PerformanceSyncRequest{BatchID: onboardingTestBatch, Complete: false, Mutations: []model.PerformanceMutation{
+		{Op: "remove", ExternalID: "001A"},
+		{Op: "upsert", Assignment: &model.SFDCAssignment{SFDCAccountID: "001B", Name: "B"}},
+	}}
+	if _, err := svc.Sync(test.Context(), "owner", model.PerformanceSourceSFDCAssignments, request); err != nil {
+		test.Fatal(err)
+	}
+	if len(store.teamDeleted) != 1 || store.teamDeleted[0] != "001A" {
+		test.Fatalf("removed assignment must delete its team: %v", store.teamDeleted)
 	}
 }

@@ -36,7 +36,7 @@ contacts below.
   | Slack | per channel/account/month counts, thread counts, permalinks, channel names | message bodies |
   | SFDC assignments | account ID, account name, role (registry `assignmentSource` or `activity`) | none |
   | SFDC Tasks | ID, date, account, type/category, subject, status, linked SpecReq ID | description, comments |
-  | SFDC account team | account ID, member alias (lower-case), name, title, `teamMemberRole`, `allTeamRoles`; at most 100 per account; refreshed by each sync and removed when the account leaves the assignment snapshot | email, phone, SFDC user ID, access levels, created date |
+  | SFDC account team | account ID, member alias (lower-case), name, title, `teamMemberRole`, `allTeamRoles`; at most 100 per account; refreshed by each Mac team step, and deleted by the server with its invite records when the assignment sync removes the account | email, phone, SFDC user ID, access levels, created date |
   | Onboarding invites | SFDC account ID, alias, TTOBAK Account ID, role, sent time; 30-day TTL, matching pending-invite expiry | email (derived as `alias@amazon.com`, never stored) |
   | SFDC opportunities | ID, name, stage, close date, SA-on-team flag, amount band | exact amounts, contact details |
   | SpecReq | ID, title, state, complexity, type, customer, created/closed dates | body, comments |
