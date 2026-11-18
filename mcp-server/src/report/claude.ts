@@ -155,6 +155,30 @@ export function reportEnv(home: string, env: NodeJS.ProcessEnv): Record<string, 
   return result;
 }
 
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,199}$/;
+/** The run's model when nothing else names one: the CLI default would be Sonnet. */
+export const DEFAULT_REPORT_MODEL = 'fable';
+
+/**
+ * `--model` of a run, or undefined when the carried ANTHROPIC_MODEL decides.
+ * User settings are not a setting source of the run, so their `model` is read
+ * here. Order: the app's TTOBAK_REPORT_MODEL, the settings `model`, the
+ * settings env ANTHROPIC_MODEL (no flag), then Fable. Only plain model names.
+ */
+export function reportModel(home: string, env: NodeJS.ProcessEnv): string | undefined {
+  if (env.TTOBAK_REPORT_MODEL && MODEL.test(env.TTOBAK_REPORT_MODEL)) return env.TTOBAK_REPORT_MODEL;
+  try {
+    const path = join(home, '.claude', 'settings.json');
+    if (statSync(path).size <= MAX_CONFIG_BYTES) {
+      const settings = JSON.parse(readFileSync(path, 'utf8')) as { model?: unknown; env?: Record<string, unknown> };
+      if (typeof settings?.model === 'string' && MODEL.test(settings.model)) return settings.model;
+      const carried = settings?.env && typeof settings.env === 'object' ? settings.env.ANTHROPIC_MODEL : undefined;
+      if (typeof carried === 'string' && ENV_VALUE.test(carried)) return undefined;
+    }
+  } catch { /* no user settings */ }
+  return DEFAULT_REPORT_MODEL;
+}
+
 /**
  * Lowest Claude Code version whose bundled settings schema was checked to
  * have every sandbox key `reportSettings` relies on (`sandbox.enabled`,
@@ -270,7 +294,7 @@ export function sandboxSupported(platform: NodeJS.Platform = process.platform, p
 }
 
 export interface ClaudeArgs { prompt: string; schema: object; mcpConfigPath: string; settingsPath: string; allowedTools: string[]; skillDir: string;
-  workDir: string }
+  workDir: string; model?: string }
 
 /**
  * Headless, read-only argv. No user settings (their allow rules would admit
@@ -293,6 +317,7 @@ export function claudeArgs(options: ClaudeArgs): string[] {
     '--disallowedTools', deniedTools(options.skillDir, options.workDir).join(','),
     '--add-dir', options.skillDir,
     '--disable-slash-commands',
+    ...(options.model ? ['--model', options.model] : []),
   ];
 }
 
