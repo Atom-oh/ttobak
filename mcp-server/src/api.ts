@@ -210,7 +210,7 @@ export type DocumentInput = {
   path?: string;
 };
 
-export const PERFORMANCE_SOURCES = ['sfdc-assignments', 'sfdc-tasks'] as const;
+export const PERFORMANCE_SOURCES = ['sfdc-assignments', 'sfdc-tasks', 'sfdc-account-team'] as const;
 export type PerformanceSource = typeof PERFORMANCE_SOURCES[number];
 const MAX_PERFORMANCE_API_BYTES = 14_000;
 const MAX_PERFORMANCE_MAPPINGS_BYTES = 2_000_000;

@@ -489,7 +489,7 @@ function writeSentral(home, mode = 'ok') {
 function performanceApi({ fail = [], revisions = {}, assignments = [] } = {}) {
   const calls = [];
   const mappingReads = [];
-  const revision = { 'sfdc-assignments': 0, 'sfdc-tasks': 0, ...revisions };
+  const revision = { 'sfdc-assignments': 0, 'sfdc-tasks': 0, 'sfdc-account-team': 0, ...revisions };
   const held = new Map(assignments.map(id => [id, { sfdcAccountId: id, name: 'Server only', role: 'REGISTRY' }]));
   return {
     calls,
@@ -574,7 +574,11 @@ test('sfdc tasks never carry description', async t => {
   environment.api = api;
   assert.equal(await runIntake(['sfdc', '--noninteractive'], environment), 0, lines.at(-1));
   assert.deepEqual(api.calls.map(call => [call.source, call.body.complete, call.body.mutations.length]),
-    [['sfdc-assignments', true, 2], ['sfdc-tasks', true, 3]]);
+    [['sfdc-assignments', true, 2], ['sfdc-tasks', true, 3], ['sfdc-account-team', true, 1]]);
+  // The account-team step sends only the stored fields: no email, user ID, access level or the owner's row.
+  assert.deepEqual(api.calls[2].body.mutations, [{ op: 'upsert', teamMember: { sfdcAccountId: '001XX000000001AAA',
+    alias: 'synam', name: 'Synthetic AM', title: 'Account Manager', teamMemberRole: 'Account Manager', allTeamRoles: 'Account Manager' } }]);
+  assert.ok(!JSON.stringify(api.calls).includes(CANARY));
   const assignments = Object.fromEntries(api.calls[0].body.mutations.map(m => [m.assignment.sfdcAccountId, m.assignment]));
   assert.deepEqual(assignments['001XX000000001AAA'], { sfdcAccountId: '001XX000000001AAA', name: 'Example Corp.', role: 'REGISTRY' });
   assert.deepEqual(assignments['001XX000000002AAA'], { sfdcAccountId: '001XX000000002AAA', name: 'Example Two', role: 'activity' });
@@ -589,9 +593,10 @@ test('sfdc tasks never carry description', async t => {
   assert.equal(tasks['00TXX0000000001AAA'].type, 'Workshops');
   const stateDir = join(home, '.ttobak', 'intake', 'sfdc');
   const stateFiles = allFiles(stateDir).map(path => path.slice(stateDir.length + 1)).sort();
-  assert.equal(stateFiles.length, 2);
-  assert.match(stateFiles[0], /^[0-9a-f-]{36}\/c{32}\/sfdc-assignments\.json$/);
-  assert.match(stateFiles[1], /^[0-9a-f-]{36}\/c{32}\/sfdc-tasks\.json$/);
+  assert.equal(stateFiles.length, 3);
+  assert.match(stateFiles[0], /^[0-9a-f-]{36}\/c{32}\/sfdc-account-team\.json$/);
+  assert.match(stateFiles[1], /^[0-9a-f-]{36}\/c{32}\/sfdc-assignments\.json$/);
+  assert.match(stateFiles[2], /^[0-9a-f-]{36}\/c{32}\/sfdc-tasks\.json$/);
   const outputs = JSON.stringify(api.calls) + lines.join('\n') +
     allFiles(join(home, '.ttobak')).map(path => readFileSync(path, 'utf8')).join('\n');
   assert.ok(!outputs.includes(CANARY), 'description, comments and host env never leave the parser');
@@ -599,8 +604,8 @@ test('sfdc tasks never carry description', async t => {
 
   // A re-run converges: no mutations, one complete batch per source.
   assert.equal(await runIntake(['sfdc', '--noninteractive'], environment), 0);
-  assert.deepEqual(api.calls.slice(2).map(call => [call.source, call.body.complete, call.body.mutations.length]),
-    [['sfdc-assignments', true, 0], ['sfdc-tasks', true, 0]]);
+  assert.deepEqual(api.calls.slice(3).map(call => [call.source, call.body.complete, call.body.mutations.length]),
+    [['sfdc-assignments', true, 0], ['sfdc-tasks', true, 0], ['sfdc-account-team', true, 0]]);
 });
 
 test('sfdc snapshot removes vanished assignments', async t => {

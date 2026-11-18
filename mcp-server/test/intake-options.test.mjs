@@ -84,7 +84,7 @@ test('default_responses_exclude_no_response', async t => {
   assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], env), 0, lines.at(-1));
   const path = join(home, '.ttobak', 'intake', 'selection.json');
   const stored = JSON.parse(readFileSync(path, 'utf8'));
-  assert.deepEqual(stored.options, { calendarResponses: ['accept', 'organizer', 'tentative'], sfdcContacts: true });
+  assert.deepEqual(stored.options, { calendarResponses: ['accept', 'organizer', 'tentative'], sfdcContacts: true, sfdcAccountTeam: true });
   delete stored.options;
   writeFileSync(path, JSON.stringify(stored));
   assert.equal(await runIntake(['calendar', '--dry-run'], env), 0, lines.at(-1));
@@ -233,26 +233,26 @@ test('intake_options_reads_and_writes', async t => {
   const env = cliEnvironment(home, lines);
   const last = () => JSON.parse(lines.at(-1));
   assert.equal(await runIntake(['options'], env), 0);
-  assert.deepEqual(last(), { ok: true, options: { calendarResponses: ['accept', 'organizer', 'tentative'], sfdcContacts: true } });
+  assert.deepEqual(last(), { ok: true, options: { calendarResponses: ['accept', 'organizer', 'tentative'], sfdcContacts: true, sfdcAccountTeam: true } });
   // A choice made before any connector is selected is stored and survives the selection.
   assert.equal(await runIntake(['options', '--calendar-responses', 'organizer', '--sfdc-contacts', 'off'], env), 0, lines.at(-1));
-  assert.deepEqual(last().options, { calendarResponses: ['organizer'], sfdcContacts: false });
+  assert.deepEqual(last().options, { calendarResponses: ['organizer'], sfdcContacts: false, sfdcAccountTeam: true });
   assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], env), 0, lines.at(-1));
   assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'sentral'], env), 0, lines.at(-1));
   assert.equal(await runIntake(['options'], env), 0);
-  assert.deepEqual(last().options, { calendarResponses: ['organizer'], sfdcContacts: false });
+  assert.deepEqual(last().options, { calendarResponses: ['organizer'], sfdcContacts: false, sfdcAccountTeam: true });
   // One flag keeps the other value.
   assert.equal(await runIntake(['options', '--sfdc-contacts', 'on'], env), 0);
-  assert.deepEqual(last().options, { calendarResponses: ['organizer'], sfdcContacts: true });
+  assert.deepEqual(last().options, { calendarResponses: ['organizer'], sfdcContacts: true, sfdcAccountTeam: true });
   assert.equal(await runIntake(['options', '--calendar-responses', 'none,accept,accept', '--sfdc-contacts', 'off'], env), 0,
     lines.at(-1));
-  assert.deepEqual(last().options, { calendarResponses: ['accept', 'none'], sfdcContacts: false });
+  assert.deepEqual(last().options, { calendarResponses: ['accept', 'none'], sfdcContacts: false, sfdcAccountTeam: true });
   const stored = JSON.parse(readFileSync(join(home, '.ttobak', 'intake', 'selection.json'), 'utf8'));
-  assert.deepEqual(stored.options, { calendarResponses: ['accept', 'none'], sfdcContacts: false });
+  assert.deepEqual(stored.options, { calendarResponses: ['accept', 'none'], sfdcContacts: false, sfdcAccountTeam: true });
   assert.equal(stored.calendar.responses, undefined);
   assert.equal(stored.sfdc.contacts, undefined);
   assert.equal(await runIntake(['options'], env), 0);
-  assert.deepEqual(last().options, { calendarResponses: ['accept', 'none'], sfdcContacts: false });
+  assert.deepEqual(last().options, { calendarResponses: ['accept', 'none'], sfdcContacts: false, sfdcAccountTeam: true });
   // An empty set is allowed.
   assert.equal(await runIntake(['options', '--calendar-responses', ''], env), 0, lines.at(-1));
   assert.deepEqual(last().options.calendarResponses, []);
@@ -260,7 +260,7 @@ test('intake_options_reads_and_writes', async t => {
   assert.equal(await runIntake(['select', 'calendar', '--host', 'claude', '--server', 'outlook'], env), 0);
   assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'sentral'], env), 0);
   assert.equal(await runIntake(['options'], env), 0);
-  assert.deepEqual(last().options, { calendarResponses: [], sfdcContacts: false });
+  assert.deepEqual(last().options, { calendarResponses: [], sfdcContacts: false, sfdcAccountTeam: true });
 
   for (const bad of [['--calendar-responses', 'accept,decline'], ['--calendar-responses', 'Accept'],
     ['--sfdc-contacts', 'yes'], ['--bogus'], ['--sfdc-contacts']]) {
@@ -303,4 +303,59 @@ test('sfdc_contacts_off_skips_step', async t => {
   assert.deepEqual(contactCalls.slice(before), ['mappings'], 'no contact read or write');
   assert.equal(await runIntake(['status'], env), 0);
   assert.equal(last().status.sfdcContacts.result, 'disabled');
+});
+
+/** Hosts whose fake sentral server runs with FAKE_SENTRAL_TEAM=`team`. */
+function writeTeamHosts(home, team) {
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: {
+    sentral: { command: process.execPath, args: [SENTRAL], env: { FAKE_SENTRAL_TEAM: team } } } }));
+}
+
+function teamStepApi(sources) {
+  return {
+    async performanceSources() { return { sources: ['sfdc-assignments', 'sfdc-tasks', 'sfdc-account-team'].map(source => ({ source, revision: 0 })) }; },
+    async performanceMappings() { return { items: [], truncated: false }; },
+    async listAccountContacts() { return { contacts: [], nextCursor: null }; },
+    async syncSfdcContacts() { return {}; },
+    async syncPerformance(source, body) {
+      sources.push(source);
+      return { revision: body.expectedRevision + 1, completed: body.complete,
+        upserted: body.mutations.filter(m => m.op === 'upsert').length,
+        removed: body.mutations.filter(m => m.op === 'remove').length };
+    },
+  };
+}
+
+test('team step failure keeps sync ok', async t => {
+  const home = tempHome(t);
+  writeTeamHosts(home, 'missing');
+  const lines = [];
+  const sources = [];
+  const env = cliEnvironment(home, lines, teamStepApi(sources));
+  const last = () => JSON.parse(lines.at(-1));
+  assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'sentral'], env), 0, lines.at(-1));
+  assert.equal(await runIntake(['run', '--noninteractive'], env), 2, lines.at(-1));
+  const output = last();
+  assert.equal(output.code, 'PARTIAL_FAILURE');
+  assert.equal(output.results.sfdc.result, 'ok', 'the SFDC sync itself succeeded');
+  assert.deepEqual(output.results.sfdc.sfdcAccountTeam, { result: 'SCHEMA_CHANGED' });
+  assert.ok(!sources.includes('sfdc-account-team'));
+  assert.equal(await runIntake(['status'], env), 0);
+  assert.equal(last().status.sfdcAccountTeam.result, 'SCHEMA_CHANGED');
+});
+
+test('sfdc_account_team_off_skips_step', async t => {
+  const home = tempHome(t);
+  writeTeamHosts(home, 'ok');
+  const lines = [];
+  const sources = [];
+  const env = cliEnvironment(home, lines, teamStepApi(sources));
+  const last = () => JSON.parse(lines.at(-1));
+  assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'sentral'], env), 0, lines.at(-1));
+  assert.equal(await runIntake(['options', '--sfdc-account-team', 'maybe'], env), 2);
+  assert.equal(await runIntake(['options', '--sfdc-account-team', 'off'], env), 0);
+  assert.equal(last().options.sfdcAccountTeam, false);
+  assert.equal(await runIntake(['run', '--noninteractive'], env), 0, lines.at(-1));
+  assert.deepEqual(last().results.sfdc.sfdcAccountTeam, { result: 'disabled' });
+  assert.ok(!sources.includes('sfdc-account-team'));
 });

@@ -1,7 +1,8 @@
 // Synthetic stand-in for a local aws-sentral-mcp server. It mirrors only the
-// recorded result shapes of four read tools; every ID, name, email and phone is synthetic.
+// recorded result shapes of five read tools; every ID, name, email and phone is synthetic.
 // FAKE_SENTRAL_MODE: ok | auth (second task page fails) | schema (search_tasks changed).
 // FAKE_SENTRAL_CONTACTS: ok | page2-error (second contact page fails) | page2-auth (it reports Midway expiry) | missing (no search_contacts tool).
+// FAKE_SENTRAL_TEAM: ok | missing (no get_team_members tool) | error (every team read fails).
 // FAKE_SENTRAL_REGISTRY: single | mixed (adds a Partner L14 record and an older sales version).
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -10,6 +11,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 const mode = process.env.FAKE_SENTRAL_MODE || 'ok';
 const registryMode = process.env.FAKE_SENTRAL_REGISTRY || 'single';
 const contactsMode = process.env.FAKE_SENTRAL_CONTACTS || 'ok';
+const teamMode = process.env.FAKE_SENTRAL_TEAM || 'ok';
 const CANARY = 'SECRET-CANARY-7f3a9c';
 const ALIAS = 'testalias';
 const OWNER = '005XX0000000001AAA';
@@ -27,6 +29,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       : object({ condition: { type: 'object' }, limit: { type: 'number' }, after: { type: 'string' } }) },
     ...(contactsMode === 'missing' ? [] : [{ name: 'search_contacts', description: 'synthetic', inputSchema: object({ condition: { type: 'object' },
       limit: { type: 'number' }, after: { type: 'string' }, queryTerm: { type: 'string' } }) }]),
+    ...(teamMode === 'missing' ? [] : [{ name: 'get_team_members', description: 'synthetic', inputSchema: object({
+      memberType: { type: 'string' }, id: { type: 'string' }, limit: { type: 'number' }, after: { type: 'string' } }) }]),
   ],
 }));
 
@@ -133,6 +137,20 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
       }
       return wrap({ resultRecords: CONTACT_PAGES[index], totalCount: '6', hasNextPage: index === 0,
         cursor: index === 0 ? 'contacts-2' : null });
+    }
+    case 'get_team_members': {
+      if (args.memberType !== 'Account' || typeof args.id !== 'string' || args.limit !== 500 || 'after' in args) {
+        return fail('unexpected team arguments');
+      }
+      if (teamMode === 'error') return fail('temporary team failure');
+      const members = args.id === '001XX000000001AAA' ? [
+        { id: '01MXX0000000T01', userId: '005XX0000000T01', user: { name: 'Synthetic AM', alias: 'SynAm',
+          email: `${CANARY}@example.invalid`, title: 'Account Manager' }, teamMemberRole: 'Account Manager',
+          createdDate: '2022-01-01T00:00:00.000Z', all_Team_Roles__c: 'Account Manager', accountAccessLevel: 'Edit', opportunityAccessLevel: 'Edit' },
+        { id: '01MXX0000000T02', userId: OWNER, user: { name: 'Test User', alias: ALIAS, email: 'owner@example.invalid', title: 'SA' },
+          teamMemberRole: 'Solutions Architect', all_Team_Roles__c: 'Solutions Architect', accountAccessLevel: 'Edit' },
+      ] : [];
+      return wrap({ resultRecords: members, totalCount: String(members.length), hasNextPage: false, cursor: null });
     }
     default:
       return fail('unknown tool');
