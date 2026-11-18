@@ -1,5 +1,6 @@
 'use client';
 
+import { isImeKey } from '@/lib/ime';
 import { Suspense, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { UserGuideButton } from '@/components/layout/UserGuideButton';
@@ -111,7 +112,7 @@ function HeaderSearch() {
         onKeyDown={(event) => {
           // isComposing: the Enter that commits a Hangul/IME composition
           // must not fire a search with a half-composed query.
-          if (event.nativeEvent.isComposing || event.key !== 'Enter') return;
+          if (isImeKey(event) || event.key !== 'Enter') return;
           if (onHome) {
             pushHome(value, 'replace');
           } else if (value.trim()) {

@@ -128,6 +128,8 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
                 </label>
                 <input
                   id="forgot-email"
+                  autoComplete="username"
+                  spellCheck={false}
                   type="email"
                   required
                   value={email}
@@ -155,6 +157,8 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
                 </label>
                 <input
                   id="forgot-code"
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
                   type="text"
                   required
                   value={code}
@@ -169,6 +173,7 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
                 </label>
                 <input
                   id="forgot-new-password"
+                  autoComplete="new-password"
                   type="password"
                   required
                   value={newPassword}
@@ -183,6 +188,7 @@ export function ForgotPasswordForm({ onClose }: ForgotPasswordFormProps) {
                 </label>
                 <input
                   id="forgot-confirm-password"
+                  autoComplete="new-password"
                   type="password"
                   required
                   value={confirmNewPassword}

@@ -3,6 +3,9 @@
 // read-only rule is enforced by the CLI allowlist, not by this text.
 
 import type { Highlights, Period } from './schema.js';
+import { SKILL_SCRIPTS } from './tools.js';
+
+const SCRIPTS = SKILL_SCRIPTS.join(', ');
 
 export interface PromptInput {
   skillDir: string;
@@ -25,7 +28,8 @@ export function reportPrompt(input: PromptInput): string {
     '2. "진행 순서"의 5. 작성(HTML 템플릿)과 6. 게시(Artifact), report-structure.md의 "게시"는 하지 않는다. 그 대신 결과를 주어진 JSON 스키마에 맞는 JSON 객체 하나로 반환한다. JSON 앞뒤에 설명을 붙이지 않는다.',
     '3. 하위 에이전트는 쓸 수 없다. SKILL.md가 Outlook과 Slack을 하위 에이전트에 맡기라고 해도 직접 조회하고, 큰 결과는 저장된 파일을 스크립트로 집계해 집계 값만 남긴다. 원문은 옮기지 않는다.',
     `4. Bash는 샌드박스에서만 돈다. 네트워크가 없고 출력 폴더 \`${input.outDir}\`에만 쓸 수 있다. 파일 쓰기(Write)도 이 폴더 안에서만 된다.`,
-    '5. "시작 전에 정할 것"은 아래 실행 정보로 이미 정해졌다. 사용자에게 묻지 않는다. "자주 하는 실수"에서 사용자에게 물으라고 한 경우(말한 프로젝트가 데이터에 없음)는 묻지 말고 찾은 범위와 가장 가까운 기록을 actions에 적는다.',
+    `5. Bash로는 스킬 스크립트만 실행할 수 있고, 반드시 \`python3 -I ${input.skillDir}/scripts/<이름> <인자>\` 형태의 명령 하나로 부른다(예: \`python3 -I ${input.skillDir}/scripts/calendar_count.py --help\`). 스크립트는 ${SCRIPTS}이다. 경로는 절대경로로 쓰고 cd, &&, |, ;, 리디렉션(>, 2>&1), 환경 변수 접두사를 붙이지 않는다. 이 형태가 아닌 명령은 거부된다. 거부되면 그 스크립트를 건너뛰지 말고 이 형태로 다시 부른다.`,
+    '6. "시작 전에 정할 것"은 아래 실행 정보로 이미 정해졌다. 사용자에게 묻지 않는다. "자주 하는 실수"에서 사용자에게 물으라고 한 경우(말한 프로젝트가 데이터에 없음)는 묻지 말고 찾은 범위와 가장 가까운 기록을 actions에 적는다.',
     '',
     '실행 정보:',
     `- alias: ${input.alias}`,

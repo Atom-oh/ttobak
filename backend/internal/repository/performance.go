@@ -533,6 +533,56 @@ func (r *DynamoDBRepository) ListPerformanceTeam(ctx context.Context, userID, sf
 	return team, nil
 }
 
+// performanceTeamDeleteRetries bounds retries of unprocessed batch deletes.
+const performanceTeamDeleteRetries = 5
+
+// DeletePerformanceTeamAccount removes every stored team and invite row of one
+// SFDC account, used when the account leaves the owner's assignments. A
+// missing row is not an error.
+func (r *DynamoDBRepository) DeletePerformanceTeamAccount(ctx context.Context, userID, sfdcAccountID string) error {
+	if !model.ValidPerformanceTeamAccountID(sfdcAccountID) {
+		return ErrInvalidPerformanceInput
+	}
+	projection := expression.NamesList(expression.Name("PK"), expression.Name("SK"))
+	var keys []map[string]types.AttributeValue
+	for _, prefix := range []string{model.PerformanceTeamAccountPrefix(sfdcAccountID), model.PerformanceInviteAccountPrefix(sfdcAccountID)} {
+		items, err := r.queryPerformanceRowsProjected(ctx, userID, prefix, 0, &projection)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			keys = append(keys, map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]})
+		}
+	}
+	for start := 0; start < len(keys); start += 25 {
+		end := min(start+25, len(keys))
+		requests := make([]types.WriteRequest, 0, end-start)
+		for _, key := range keys[start:end] {
+			requests = append(requests, types.WriteRequest{DeleteRequest: &types.DeleteRequest{Key: key}})
+		}
+		input := &dynamodb.BatchWriteItemInput{RequestItems: map[string][]types.WriteRequest{r.tableName: requests}}
+		for attempt := 0; ; attempt++ {
+			result, err := r.client.BatchWriteItem(ctx, input)
+			if err != nil {
+				return fmt.Errorf("delete performance team rows: %w", err)
+			}
+			if len(result.UnprocessedItems) == 0 {
+				break
+			}
+			if attempt == performanceTeamDeleteRetries {
+				return fmt.Errorf("delete performance team rows: unprocessed after %d retries", performanceTeamDeleteRetries)
+			}
+			input = &dynamodb.BatchWriteItemInput{RequestItems: result.UnprocessedItems}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(50<<attempt) * time.Millisecond):
+			}
+		}
+	}
+	return nil
+}
+
 // performanceInviteTTL matches the platform's 30-day pending-invite expiry.
 const performanceInviteTTL = 30 * 24 * time.Hour
 

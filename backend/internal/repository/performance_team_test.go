@@ -149,3 +149,45 @@ func TestPerformanceInviteRecord(test *testing.T) {
 		test.Fatalf("expired invites must be skipped: %+v %v", invites, err)
 	}
 }
+
+func TestDeletePerformanceTeamAccount(test *testing.T) {
+	var deleted []string
+	queries := 0
+	repo := summarySDKRepo(func(request *http.Request) (*http.Response, error) {
+		body := performanceBody(test, request)
+		switch performanceTarget(request) {
+		case "Query":
+			queries++
+			prefix := ""
+			for _, value := range body["ExpressionAttributeValues"].(map[string]any) {
+				if s, _ := value.(map[string]any)["S"].(string); strings.HasPrefix(s, "PERF") {
+					prefix = s
+				}
+			}
+			rows := make([]string, 0, 30)
+			count := map[string]int{"PERFTEAM#001A#": 30, "PERFINVITE#001A#": 2}[prefix]
+			for i := 0; i < count; i++ {
+				rows = append(rows, `{"PK":{"S":"USER#owner"},"SK":{"S":"`+prefix+`u`+strings.Repeat("x", i+1)+`"}}`)
+			}
+			return summaryHTTPResponse(200, `{"Items":[`+strings.Join(rows, ",")+`]}`, nil), nil
+		case "BatchWriteItem":
+			for _, requests := range body["RequestItems"].(map[string]any) {
+				for _, item := range requests.([]any) {
+					deleted = append(deleted, item.(map[string]any)["DeleteRequest"].(map[string]any)["Key"].(map[string]any)["SK"].(map[string]any)["S"].(string))
+				}
+			}
+			return summaryHTTPResponse(200, `{"UnprocessedItems":{}}`, nil), nil
+		}
+		test.Fatalf("unexpected %s", performanceTarget(request))
+		return nil, nil
+	})
+	if err := repo.DeletePerformanceTeamAccount(test.Context(), "owner", "001A"); err != nil {
+		test.Fatal(err)
+	}
+	if queries != 2 || len(deleted) != 32 || !strings.HasPrefix(deleted[31], "PERFINVITE#001A#") {
+		test.Fatalf("queries=%d deleted=%d", queries, len(deleted))
+	}
+	if err := repo.DeletePerformanceTeamAccount(test.Context(), "owner", "0#1"); !errors.Is(err, ErrInvalidPerformanceInput) {
+		test.Fatalf("bad id: %v", err)
+	}
+}

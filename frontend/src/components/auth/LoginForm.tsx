@@ -98,6 +98,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
               </span>
               <input
                 id="new-password"
+                autoComplete="new-password"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -121,6 +122,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
               </span>
               <input
                 id="confirm-new-password"
+                autoComplete="new-password"
                 type="password"
                 value={confirmNewPassword}
                 onChange={(e) => setConfirmNewPassword(e.target.value)}
@@ -172,6 +174,8 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
             </span>
             <input
               id="login-email"
+              autoComplete="username"
+              spellCheck={false}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -207,6 +211,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
             </span>
             <input
               id="login-password"
+              autoComplete="current-password"
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}

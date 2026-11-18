@@ -11,7 +11,7 @@ function load(name, globals = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   });
   const exports = {};
-  vm.runInNewContext(outputText, { exports, Date, setTimeout, clearTimeout, AbortController, ...globals });
+  vm.runInNewContext(outputText, { exports, Date, setTimeout, clearTimeout, AbortController, AbortSignal, ...globals });
   return exports;
 }
 
@@ -173,7 +173,7 @@ test('automatic policy reaches both HTTP transports and manual asks keep their e
     };
     const { qaApi } = load('api', {
       require: id => { assert.ok(id in deps, id); return deps[id]; },
-      atob, crypto: webcrypto, URLSearchParams, TextEncoder, TextDecoder, AbortController,
+      atob, crypto: webcrypto, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
       process: { env: {} },
       fetch: async (url, init) => {
         if (init.method === 'POST') requests.push({ url, body: JSON.parse(init.body) });

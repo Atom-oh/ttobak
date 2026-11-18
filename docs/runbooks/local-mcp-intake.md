@@ -868,6 +868,15 @@ Prerequisites:
   either logged in (`claude`, then `/login`) or Bedrock through the `env` of
   `~/.claude/settings.json` (only the model-auth keys are carried over;
   `TTOBAK_REPORT_USE_BEDROCK=1|0` and `TTOBAK_REPORT_AWS_PROFILE` override them).
+- The model is `--model` from `TTOBAK_REPORT_MODEL`, else the settings `model`;
+  a settings `env.ANTHROPIC_MODEL` alone is carried without a flag; otherwise
+  `fable`, never the CLI default. A `--model` value must be a plain model name.
+  `ANTHROPIC_DEFAULT_FABLE_MODEL` is carried with the other alias mappings, so
+  a Bedrock or gateway install resolves `fable` to a model it can invoke.
+- The prompt names the one Bash form the allowlist admits:
+  `python3 -I <skill>/scripts/<name> <args>`, absolute, without `cd`, `&&`,
+  pipes or redirection. A run that tried another form and gave up reported
+  every script-based count as a missing source.
 - The skill is the internal-mcp-setup v1.4.0 layout or later (v1.5.0 is the
   reviewed allowlist), installed at
   `~/.claude/skills/sa-performance-report` (or in a plugin cache). A copy without
@@ -1014,7 +1023,8 @@ Sandbox and CLI:
 - [ ] A denied write really fails, proving Bash ran sandboxed (the init event
   has no sandbox field).
 - [ ] The rule forms parse and do not fail startup: the comma-joined,
-  space-containing `Bash(...)` list and `Read`/`Glob`/`Grep`/`Write(//abs/**)`.
+  space-containing `Bash(...)` list and `Read`/`Glob`/`Grep`/`Edit(//abs/**)`. A headless `Write(//abs/**)` allow
+  rule never matches (Claude Code 2.1.323): file writes are scoped by `Edit(...)`.
 - [ ] The session folder name matches `claudeProjectDir(<tmp>/work)` and tool
   results land in its `tool-results/`.
 - [ ] A Keychain login works with only HOME, PATH, LANG, USER, LOGNAME and the
