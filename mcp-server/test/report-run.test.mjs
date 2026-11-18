@@ -134,8 +134,9 @@ test('run_args_exclude_user_settings_and_writes', async t => {
       [ctx.skillDir, cwd, session].map(dir => `${tool}(/${dir}/**)`).sort());
   }
   // Writes only in work/out/: work/ itself is the project settings root of the run.
-  assert.deepEqual(allowed.filter(rule => rule.startsWith('Write')), [`Write(/${cwd}/out/**)`]);
-  assert.ok(!allowed.some(rule => rule.startsWith('Edit') || rule.startsWith('MultiEdit')));
+  // The CLI scopes file writes (Write, Edit, MultiEdit) by Edit(...) rules only; a Write(path) allow rule never matches.
+  assert.deepEqual(allowed.filter(rule => rule.startsWith('Edit')), [`Edit(/${cwd}/out/**)`]);
+  assert.ok(!allowed.some(rule => rule.startsWith('Write') || rule.startsWith('MultiEdit')));
   const denied = value('--disallowedTools').split(',');
   for (const tool of ['Write', 'Edit', 'MultiEdit']) assert.ok(denied.includes(`${tool}(/${cwd}/.claude/**)`), tool);
   const prompt = value('-p');

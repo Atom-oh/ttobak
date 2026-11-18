@@ -32556,7 +32556,7 @@ function allowedTools(options2) {
   for (const directory of options2.readDirs) {
     for (const tool of ["Read", "Glob", "Grep"]) rules.push(`${tool}(/${directory}/**)`);
   }
-  rules.push(`Write(/${options2.outDir}/**)`);
+  rules.push(`Edit(/${options2.outDir}/**)`);
   for (const script of SKILL_SCRIPTS) rules.push(`Bash(python3 -I ${options2.skillDir}/scripts/${script}:*)`);
   for (const server of REPORT_SERVERS) {
     if (!options2.servers.includes(server)) continue;
