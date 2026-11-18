@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_TEAM_PER_ACCOUNT, forgetRemovedAccounts, parseTeamMembers, runSfdcTeam } from '../dist/intake/sfdc-team.js';
+import { MAX_TEAM_PER_ACCOUNT, parseTeamMembers, runSfdcTeam } from '../dist/intake/sfdc-team.js';
 import { IntakeStore } from '../dist/intake/store.js';
 import { IntakeError } from '../dist/intake/errors.js';
 
@@ -183,18 +183,6 @@ test('budget-skipped accounts go first next run, and a full pass clears the resu
   assert.deepEqual(store.read('sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.resume.json'), { version: 1, after: null });
 });
 
-test('forgetting a removed account makes its return resend the members', async t => {
-  const store = tempStore(t);
-  const api = teamApi();
-  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]] };
-  await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B']));
-  // The assignment sync removed 001B (the server deleted its team rows); the team step did not run.
-  forgetRemovedAccounts(store, SOURCE_ID, SCOPE, ['001B']);
-  const back = await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B']));
-  assert.equal(back.counts.upserts, 1);
-  assert.deepEqual(api.calls.at(-1).mutations.map(m => m.teamMember?.alias), ['b1']);
-});
-
 test('failed accounts advance the resume point too', async t => {
   const store = tempStore(t);
   const api = teamApi();
@@ -212,18 +200,35 @@ test('failed accounts advance the resume point too', async t => {
   assert.equal(next.calls[0].id, '001C', 'the next run starts after the last attempted account');
 });
 
-test('forgetting a removed account also drops it from a pending batch receipt', async t => {
+/** What the assignment receipt records when the server deleted an account's team. */
+const recordForgotten = (store, accounts) => store.write({ version: 1, accounts }, 'sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.forget.json');
+
+test('a forgotten account is resent when it returns', async t => {
   const store = tempStore(t);
-  const flaky = teamApi();
-  const realSync = flaky.syncPerformance;
+  const api = teamApi();
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]] };
+  await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B']));
+  // The assignment sync removed 001B (the server deleted its team rows) and it came back before any team pass.
+  recordForgotten(store, ['001B']);
+  const back = await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B']));
+  assert.equal(back.counts.upserts, 1);
+  assert.deepEqual(api.calls.at(-1).mutations.map(m => m.teamMember?.alias), ['b1']);
+  assert.deepEqual(store.read('sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.forget.json'), { version: 1, accounts: [] });
+});
+
+test('a pending batch resent after the forget lands in the ledger and is removed next', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  const realSync = api.syncPerformance;
   let fail = true;
-  flaky.syncPerformance = async (source, body) => {
+  api.syncPerformance = async (source, body) => {
     if (fail) { fail = false; throw new Error('socket hang up'); }
     return realSync(source, body);
   };
-  await assert.rejects(runSfdcTeam(base(store, teamSession({ '001B': [[member('b1')]] }), flaky, ['001B'])));
-  forgetRemovedAccounts(store, SOURCE_ID, SCOPE, ['001B']);
-  const state = store.read('sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.json');
-  assert.deepEqual(state.pending.set, {});
-  assert.equal(state.pending.body.mutations.length, 1, 'the pending body is resent unchanged');
+  await assert.rejects(runSfdcTeam(base(store, teamSession({ '001B': [[member('b1')]] }), api, ['001B'])));
+  recordForgotten(store, ['001B']);
+  // 001B is no longer assigned: the resent upsert recreates the row, and this run's plan removes it.
+  await runSfdcTeam(base(store, teamSession({}), api, []));
+  assert.deepEqual(api.calls.at(-2).mutations.map(m => m.op), ['upsert'], 'the identical pending batch is resent');
+  assert.deepEqual(api.calls.at(-1).mutations, [{ op: 'remove', externalId: '001B:b1' }]);
 });

@@ -405,11 +405,31 @@ export async function send(api: TtobakApi, store: IntakeStore, state: SfdcState)
     throw new IntakeError('TTOBAK_UNAVAILABLE', `${state.source} sync receipt invalid; the identical batch will be retried`);
   }
   const removed = new Set(pending.remove);
+  // The server deletes the account team of a removed assignment when this receipt
+  // is issued; record that before the ledger moves on, so the team step forgets
+  // those rows even if a later step of this run fails.
+  if (state.source === 'sfdc-assignments' && pending.remove.length) {
+    recordForgottenTeamAccounts(store, state.sourceId, state.scope, pending.remove);
+  }
   state.ledger = Object.fromEntries([...Object.entries(state.ledger).filter(([id]) => !removed.has(id)),
     ...Object.entries(pending.set)]);
   state.revision = revision;
   state.pending = null;
   store.write(state, ...statePath(state));
+}
+
+/** Accounts whose team rows the server deleted and the team ledger has not yet forgotten. */
+export interface ForgottenTeamAccounts { version: 1; accounts: string[] }
+
+export function forgottenTeamPath(sourceId: string, scope: string): string[] {
+  return ['sfdc', sourceId, scope, 'sfdc-account-team.forget.json'];
+}
+
+function recordForgottenTeamAccounts(store: IntakeStore, sourceId: string, scope: string, accounts: string[]): void {
+  const current = store.read<ForgottenTeamAccounts>(...forgottenTeamPath(sourceId, scope));
+  const known = Array.isArray(current?.accounts) ? current.accounts.filter(id => typeof id === 'string') : [];
+  const next: ForgottenTeamAccounts = { version: 1, accounts: [...new Set([...known, ...accounts])].sort() };
+  store.write(next, ...forgottenTeamPath(sourceId, scope));
 }
 
 export async function serverRevisions(api: TtobakApi): Promise<Record<PerformanceSource, number>> {
@@ -491,8 +511,6 @@ export interface SfdcRunResult {
   assignmentIds: string[];
   /** The owner's SFDC alias. */
   ownerAlias: string;
-  /** Assignment IDs this run removed (delivered; empty on a dry run). */
-  removedAssignmentIds: string[];
 }
 
 export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
@@ -538,7 +556,7 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
   const plan = planSfdc(registry, tasks, { 'sfdc-assignments': assignmentState.ledger, 'sfdc-tasks': taskState.ledger }, now);
   const revisions = () => ({ 'sfdc-assignments': assignmentState.revision, 'sfdc-tasks': taskState.revision });
   const snapshot = { assignmentIds: plannedAssignmentIds(registry, tasks, now), ownerAlias: personal.alias };
-  if (dryRun) return { counts: plan.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: [] };
+  if (dryRun) return { counts: plan.counts, revisions: revisions(), ...snapshot };
   // The server rejects growth past this cap, so an oversized snapshot could never converge.
   if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
     throw new IntakeError('ASSIGNMENT_CAP_EXCEEDED', `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
@@ -546,7 +564,7 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
 
   await deliver(options.api!, store, assignmentState, plan.assignments);
   await deliver(options.api!, store, taskState, plan.tasks);
-  return { counts: plan.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: plan.assignments.remove };
+  return { counts: plan.counts, revisions: revisions(), ...snapshot };
 }
 
 /** The account IDs `planSfdc` stores as assignments: registry entries plus in-window task accounts. */

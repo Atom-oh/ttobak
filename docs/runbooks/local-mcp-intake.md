@@ -792,8 +792,11 @@ After the contacts step, the same session runs `sfdc-account-team`
   (`sfdc-account-team.resume.json`, an SFDC account ID only) and the next run
   starts after it, so every account is reached in turn; a full pass clears it.
 - **Removed assignments.** The server deletes the team rows of an assignment
-  the SFDC sync removes; the same run drops that account from the team ledger,
-  even with the step off, so a returning account is resent.
+  the SFDC sync removes. When that removal's receipt arrives, the adapter
+  records the account in `sfdc-account-team.forget.json` (account IDs only),
+  so a later failure in the same run cannot lose it. The next team step first
+  drops those accounts from its ledger, then resends any pending batch, so a
+  returning account is resent and a recreated row is removed by the next plan.
 - **Failures.** A missing `get_team_members` records `SCHEMA_CHANGED`; failed
   accounts give `PARTIAL_FAILURE`. Neither changes the SFDC result; `intake run`
   reports them as a partial failure. Midway expiry ends the step and the run.

@@ -8,8 +8,8 @@
 import type { TtobakApi } from '../api.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import {
-  deliver, fingerprint, loadSfdcState, parseFailed, readAll, record, send, serverRevisions, text,
-  type Ledger, type Mutation, type SFDCTeamMember, type SfdcSource, type SourcePlan,
+  deliver, fingerprint, forgottenTeamPath, loadSfdcState, parseFailed, readAll, record, send, serverRevisions, text,
+  type ForgottenTeamAccounts, type Ledger, type Mutation, type SFDCTeamMember, type SfdcSource, type SfdcState, type SourcePlan,
 } from './sfdc.js';
 import type { ToolExpectation } from './mcp-client.js';
 import type { IntakeStore } from './store.js';
@@ -80,24 +80,20 @@ export function rotatedAccounts(ids: string[], after: string | null): string[] {
 }
 
 /**
- * Forgets the team-ledger rows of accounts the assignment sync just removed:
- * the server deletes their team rows with the assignment, so a later return
- * of the account must resend its members. Runs whether or not the team step
- * is on.
+ * Applies the accounts recorded when an assignment removal was acknowledged:
+ * the server deleted their team rows, so their ledger rows go too and a
+ * returning account is resent. Runs before a pending batch is resent, so
+ * rows that batch recreates land in the ledger and are removed by the next
+ * plan if the account stays away.
  */
-export function forgetRemovedAccounts(store: IntakeStore, sourceId: string, scope: string, removedAccountIds: string[]): void {
-  if (!removedAccountIds.length) return;
-  const state = loadSfdcState(store, SOURCE, sourceId, scope);
-  const removed = new Set(removedAccountIds);
-  const live = ([id]: [string, unknown]) => !removed.has(id.slice(0, id.indexOf(':')));
-  const kept = Object.entries(state.ledger).filter(live);
-  // A pending batch is resent unchanged, but its receipt must not re-add rows the server deleted.
-  const pending = state.pending;
-  const pendingSet = pending ? Object.entries(pending.set).filter(live) : [];
-  if (kept.length === Object.keys(state.ledger).length && (!pending || pendingSet.length === Object.keys(pending.set).length)) return;
-  state.ledger = Object.fromEntries(kept);
-  if (pending) state.pending = { ...pending, set: Object.fromEntries(pendingSet) };
+export function applyForgottenTeamAccounts(store: IntakeStore, state: SfdcState, sourceId: string, scope: string): void {
+  const recorded = store.read<ForgottenTeamAccounts>(...forgottenTeamPath(sourceId, scope));
+  const accounts = Array.isArray(recorded?.accounts) ? recorded.accounts.filter(id => typeof id === 'string') : [];
+  if (!accounts.length) return;
+  const removed = new Set(accounts);
+  state.ledger = Object.fromEntries(Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(':')))));
   store.write(state, 'sfdc', sourceId, scope, `${SOURCE}.json`);
+  store.write({ version: 1, accounts: [] } satisfies ForgottenTeamAccounts, ...forgottenTeamPath(sourceId, scope));
 }
 
 /** Core role order of the backend `MapSFDCTeamRole`: AM, TAM, SA, then everyone else. */
@@ -182,6 +178,8 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
   const state = options.scope ? loadSfdcState(store, SOURCE, sourceId, options.scope) : null;
   if (!dryRun && state) {
     if (state.reconcileRequired && !options.reconcile) throw new IntakeError('TTOBAK_CONFLICT', 'source revision conflict; run with --reconcile');
+    // Forget server-deleted accounts first, then resend: see applyForgottenTeamAccounts.
+    applyForgottenTeamAccounts(store, state, sourceId, options.scope!);
     if (state.pending) await send(options.api!, store, state);
     if (options.reconcile || state.revision === null) {
       state.revision = (await serverRevisions(options.api!))[SOURCE];

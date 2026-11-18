@@ -29035,6 +29035,9 @@ async function send2(api, store, state) {
     throw new IntakeError("TTOBAK_UNAVAILABLE", `${state.source} sync receipt invalid; the identical batch will be retried`);
   }
   const removed = new Set(pending.remove);
+  if (state.source === "sfdc-assignments" && pending.remove.length) {
+    recordForgottenTeamAccounts(store, state.sourceId, state.scope, pending.remove);
+  }
   state.ledger = Object.fromEntries([
     ...Object.entries(state.ledger).filter(([id]) => !removed.has(id)),
     ...Object.entries(pending.set)
@@ -29042,6 +29045,15 @@ async function send2(api, store, state) {
   state.revision = revision;
   state.pending = null;
   store.write(state, ...statePath2(state));
+}
+function forgottenTeamPath(sourceId, scope) {
+  return ["sfdc", sourceId, scope, "sfdc-account-team.forget.json"];
+}
+function recordForgottenTeamAccounts(store, sourceId, scope, accounts) {
+  const current = store.read(...forgottenTeamPath(sourceId, scope));
+  const known = Array.isArray(current?.accounts) ? current.accounts.filter((id) => typeof id === "string") : [];
+  const next = { version: 1, accounts: [.../* @__PURE__ */ new Set([...known, ...accounts])].sort() };
+  store.write(next, ...forgottenTeamPath(sourceId, scope));
 }
 async function serverRevisions(api) {
   let value;
@@ -29143,13 +29155,13 @@ async function runSfdc(options2) {
   const plan2 = planSfdc(registry3, tasks, { "sfdc-assignments": assignmentState.ledger, "sfdc-tasks": taskState.ledger }, now);
   const revisions = () => ({ "sfdc-assignments": assignmentState.revision, "sfdc-tasks": taskState.revision });
   const snapshot = { assignmentIds: plannedAssignmentIds(registry3, tasks, now), ownerAlias: personal.alias };
-  if (dryRun) return { counts: plan2.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: [] };
+  if (dryRun) return { counts: plan2.counts, revisions: revisions(), ...snapshot };
   if (plan2.counts.assignments.fetched > MAX_ASSIGNMENTS) {
     throw new IntakeError("ASSIGNMENT_CAP_EXCEEDED", `${plan2.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
   }
   await deliver(options2.api, store, assignmentState, plan2.assignments);
   await deliver(options2.api, store, taskState, plan2.tasks);
-  return { counts: plan2.counts, revisions: revisions(), ...snapshot, removedAssignmentIds: plan2.assignments.remove };
+  return { counts: plan2.counts, revisions: revisions(), ...snapshot };
 }
 function plannedAssignmentIds(registry3, tasks, now) {
   const { earliest, latest } = taskWindow(now);
@@ -29731,18 +29743,14 @@ function rotatedAccounts(ids, after) {
   const start = sorted.findIndex((id) => id > after);
   return start <= 0 ? sorted : [...sorted.slice(start), ...sorted.slice(0, start)];
 }
-function forgetRemovedAccounts(store, sourceId, scope, removedAccountIds) {
-  if (!removedAccountIds.length) return;
-  const state = loadSfdcState(store, SOURCE, sourceId, scope);
-  const removed = new Set(removedAccountIds);
-  const live = ([id]) => !removed.has(id.slice(0, id.indexOf(":")));
-  const kept = Object.entries(state.ledger).filter(live);
-  const pending = state.pending;
-  const pendingSet = pending ? Object.entries(pending.set).filter(live) : [];
-  if (kept.length === Object.keys(state.ledger).length && (!pending || pendingSet.length === Object.keys(pending.set).length)) return;
-  state.ledger = Object.fromEntries(kept);
-  if (pending) state.pending = { ...pending, set: Object.fromEntries(pendingSet) };
+function applyForgottenTeamAccounts(store, state, sourceId, scope) {
+  const recorded = store.read(...forgottenTeamPath(sourceId, scope));
+  const accounts = Array.isArray(recorded?.accounts) ? recorded.accounts.filter((id) => typeof id === "string") : [];
+  if (!accounts.length) return;
+  const removed = new Set(accounts);
+  state.ledger = Object.fromEntries(Object.entries(state.ledger).filter(([id]) => !removed.has(id.slice(0, id.indexOf(":")))));
   store.write(state, "sfdc", sourceId, scope, `${SOURCE}.json`);
+  store.write({ version: 1, accounts: [] }, ...forgottenTeamPath(sourceId, scope));
 }
 function teamRoleRank(teamMemberRole, allTeamRoles) {
   const role = teamMemberRole.trim();
@@ -29819,6 +29827,7 @@ async function runSfdcTeam(options2) {
   const state = options2.scope ? loadSfdcState(store, SOURCE, sourceId, options2.scope) : null;
   if (!dryRun && state) {
     if (state.reconcileRequired && !options2.reconcile) throw new IntakeError("TTOBAK_CONFLICT", "source revision conflict; run with --reconcile");
+    applyForgottenTeamAccounts(store, state, sourceId, options2.scope);
     if (state.pending) await send2(options2.api, store, state);
     if (options2.reconcile || state.revision === null) {
       state.revision = (await serverRevisions(options2.api))[SOURCE];
@@ -32320,12 +32329,6 @@ async function sfdcRun(options2, environment, store, signedIn) {
       reconcile: options2.reconcile === true,
       source
     });
-    if (!dryRun && scope) {
-      try {
-        forgetRemovedAccounts(store, selected.sourceId, scope, result.removedAssignmentIds);
-      } catch {
-      }
-    }
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
     writeStatus({
       lastRunAt: startedAt.toISOString(),

@@ -20,7 +20,7 @@ import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
 import { SFDC_CONTACTS_TOOL, SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
 import { runSfdcContacts, type SfdcContactCounts } from './sfdc-contacts.js';
-import { SFDC_TEAM_TOOL, forgetRemovedAccounts, runSfdcTeam, type SfdcTeamCounts } from './sfdc-team.js';
+import { SFDC_TEAM_TOOL, runSfdcTeam, type SfdcTeamCounts } from './sfdc-team.js';
 import { resolveMe } from './specreq.js';
 import { DEFAULT_OWN_DOMAINS } from './match.js';
 import { IntakeStore } from './store.js';
@@ -604,10 +604,6 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     const result = await runSfdc({
       store, api, sourceId: selected.sourceId, scope, now: startedAt, dryRun, reconcile: options.reconcile === true, source,
     });
-    // The server deleted the team rows of removed assignments; the team ledger forgets them too.
-    if (!dryRun && scope) {
-      try { forgetRemovedAccounts(store, selected.sourceId, scope, result.removedAssignmentIds); } catch { /* the next reconcile resends */ }
-    }
     const lastSuccessAt = dryRun ? previous?.lastSuccessAt : startedAt.toISOString();
     writeStatus({ lastRunAt: startedAt.toISOString(), result: 'ok', dryRun, counts: result.counts,
       revisions: result.revisions, ...(scope ? { scope } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) });

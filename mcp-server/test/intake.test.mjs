@@ -628,7 +628,9 @@ test('sfdc snapshot removes vanished assignments', async t => {
   assert.equal(assignments.body.complete, true);
   assert.deepEqual(tasks.body.mutations, [{ op: 'remove', externalId: '00TXX00000000T1AAA' }]);
   assert.deepEqual(second.revisions, { 'sfdc-assignments': 2, 'sfdc-tasks': 2 });
-  assert.deepEqual(second.removedAssignmentIds, ['001XX0000000B1AAA', '001XX0000000C1AAA'], 'the team step forgets these');
+  // The acknowledged removals are recorded for the team step at receipt time.
+  assert.deepEqual(base.store.read('sfdc', SFDC_SOURCE_ID, SCOPE_A, 'sfdc-account-team.forget.json'),
+    { version: 1, accounts: ['001XX0000000B1AAA', '001XX0000000C1AAA'] });
 
   // A role change from activity to registry is an upsert, not an unchanged row.
   const third = await runSfdc({ ...base, source: sentralData({
