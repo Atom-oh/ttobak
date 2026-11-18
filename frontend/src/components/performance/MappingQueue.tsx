@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { accountApi, ApiError, performanceApi } from '@/lib/api';
 import { accountCreationAttempt } from '@/lib/accountCreation';
 import { ONBOARDING_COPY } from '@/lib/onboarding';
@@ -27,16 +27,23 @@ function placeholder(status: AccountsStatus, hasOptions: boolean): string {
  * caller as Owner, then maps it manually. A retry after an unknown outcome
  * replays the same requestId, so it never creates a second Account.
  */
-function CreateCustomerButton({ item, userId, disabled, onCreated, onReload }: {
+function CreateCustomerButton({ item, userId, disabled, busy, setBusy, onCreated, onReload }: {
   item: PerformanceMappingItem;
   userId: string;
   disabled: boolean;
+  /** Owned by the row, which keeps its select and save disabled while a creation runs. */
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
   onCreated: (sfdcAccountId: string, name: string) => void;
   /** Reloads the account list so a created but unmapped Account can be selected. */
   onReload: () => void;
 }) {
   const attempt = useRef<ReturnType<typeof accountCreationAttempt> | null>(null);
-  const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const name = (item.name || item.sfdcAccountId).trim();
 
@@ -53,6 +60,8 @@ function CreateCustomerButton({ item, userId, disabled, onCreated, onReload }: {
       setBusy(false);
       return;
     }
+    // A row that went away (its assignment was mapped or removed meanwhile) must not be overwritten.
+    if (!mounted.current) return;
     try {
       await performanceApi.putMapping(item.sfdcAccountId, accountId, { expectedUserId: userId });
     } catch {
@@ -90,6 +99,7 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved, on
   const current = item.mapped && !item.manual && !reason ? item.accountId ?? '' : '';
   const [accountId, setAccountId] = useState(current);
   const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectId = `mapping-${item.sfdcAccountId}`;
 
@@ -114,16 +124,17 @@ function MappingRow({ item, reason, options, accountsStatus, userId, onSaved, on
         <span className="text-xs text-slate-500 dark:text-text-muted">{item.role ? `${item.role} · ` : ''}{item.sfdcAccountId}</span>
       </div>
       <div className="flex min-w-0 flex-wrap gap-2">
-        <select id={selectId} value={accountId} onChange={event => setAccountId(event.target.value)} disabled={saving || accountsStatus !== 'ready' || !options.length}
+        <select id={selectId} value={accountId} onChange={event => setAccountId(event.target.value)} disabled={saving || creating || accountsStatus !== 'ready' || !options.length}
           className="w-full min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-50 dark:border-white/10 dark:bg-surface-lowest dark:text-text-secondary">
           <option value="">{placeholder(accountsStatus, options.length > 0)}</option>
           {options.map(option => <option key={option.accountId} value={option.accountId}>{option.path}</option>)}
         </select>
-        <button type="button" onClick={save} disabled={saving || accountsStatus !== 'ready' || !accountId}
+        <button type="button" onClick={save} disabled={saving || creating || accountsStatus !== 'ready' || !accountId}
           className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-40">
           {saving ? '저장 중…' : !current ? '연결' : accountId === current ? '확인' : '변경'}
         </button>
-        {onCreated && !item.mapped && !item.reason && <CreateCustomerButton item={item} userId={userId} disabled={saving} onCreated={onCreated} onReload={onSaved} />}
+        {onCreated && !item.mapped && !item.reason && <CreateCustomerButton item={item} userId={userId} disabled={saving} busy={creating} setBusy={setCreating}
+          onCreated={onCreated} onReload={onSaved} />}
       </div>
       {reason && <p className="text-xs text-amber-700 dark:text-amber-400">{reason}</p>}
       {error && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{error}</p>}

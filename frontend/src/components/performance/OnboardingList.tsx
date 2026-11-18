@@ -7,7 +7,7 @@ export function OnboardingList({ summary, onInvite }: {
   summary: OnboardingSummary;
   onInvite: (sfdcAccountId: string, name: string) => void;
 }) {
-  if (!summary.items.length) {
+  if (!summary.items.length && !summary.truncated) {
     return <p className="rounded-lg bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:bg-white/5 dark:text-text-muted">{ONBOARDING_COPY.empty}</p>;
   }
   return (
