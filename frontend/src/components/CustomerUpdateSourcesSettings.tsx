@@ -13,13 +13,24 @@ import {
   type UpdateSourceKind,
 } from '@/lib/customerUpdates';
 import { SlackLinkSourcesSettings } from './SlackLinkSourcesSettings';
+import { AstryxScope } from './astryx/AstryxScope';
+import { Badge } from '@astryxdesign/core/Badge';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { Card } from '@astryxdesign/core/Card';
+import { Center } from '@astryxdesign/core/Center';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
+import { Field } from '@astryxdesign/core/Field';
+import { FormLayout } from '@astryxdesign/core/FormLayout';
+import { HStack } from '@astryxdesign/core/HStack';
+import { List, ListItem } from '@astryxdesign/core/List';
+import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
+import { Spinner } from '@astryxdesign/core/Spinner';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { VStack } from '@astryxdesign/core/VStack';
 
 type AddableKind = Exclude<UpdateSourceKind, 'slack'>;
 const ADDABLE_KINDS: AddableKind[] = ['rss', 'site', 'youtube'];
-
-const INPUT_CLASS =
-  'w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400';
-const LABEL_CLASS = 'block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1';
 
 export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
   const [sources, setSources] = useState<UpdateSource[]>([]);
@@ -54,6 +65,8 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Enter in a field submits the form again while the first add is pending.
+    if (adding) return;
     const invalid = validateSourceForm(url, label);
     if (invalid) {
       setError(invalid);
@@ -104,135 +117,114 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      {error && (
-        <div role="alert" className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
-          {error}
-        </div>
-      )}
+    <VStack gap={6}>
+      <AstryxScope>
+        {loading ? (
+          <Center padding={10}>
+            <Spinner size="xl" />
+          </Center>
+        ) : (
+          <VStack gap={6}>
+            {error && <Banner status="error" title={error} />}
 
-      {sources.length === 0 ? (
-        <div className="glass-panel rounded-xl p-6 text-center">
-          <p className="text-sm text-slate-500 dark:text-text-muted">{COPY['settings.sources.empty']}</p>
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {sources.map((source) => {
-            const isSlack = source.kind === 'slack';
-            const active = source.status === 'active';
-            const busy = busyId === source.sourceId;
-            return (
-              <li key={source.sourceId} className="glass-panel rounded-xl p-4 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary rounded-md">
-                      {SOURCE_KIND_LABELS[source.kind]}
-                    </span>
-                    <span className="text-sm font-semibold text-slate-900 dark:text-text-main break-all">{source.label}</span>
-                    <span
-                      className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                        active
-                          ? 'bg-green-100 text-green-700 dark:bg-primary/10 dark:text-primary'
-                          : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted'
-                      }`}
-                    >
-                      {active ? COPY['settings.sources.statusActive'] : COPY['settings.sources.statusDisabled']}
-                    </span>
-                  </div>
-                  {isSlack && (
-                    <p className="text-xs text-slate-400 dark:text-text-muted mt-1">{COPY['settings.sources.slackHint']}</p>
-                  )}
-                </div>
-                {/* A Slack source cannot be paused here, but it can be deleted (for example one
-                    left by another Mac); the Mac registers a still-selected channel again on save. */}
-                <div className="flex shrink-0 items-center gap-1">
-                  {!isSlack && (
-                    <button
-                      type="button"
-                      onClick={() => handleToggle(source)}
-                      disabled={busy}
-                      className="px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
-                    >
-                      {active ? COPY['settings.sources.pause'] : COPY['settings.sources.resume']}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(source)}
-                    disabled={busy}
-                    className="px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40"
+            {sources.length === 0 ? (
+              <EmptyState title={COPY['settings.sources.empty']} isCompact />
+            ) : (
+              <Card padding={0}>
+                <List hasDividers>
+                  {sources.map((source) => {
+                    const isSlack = source.kind === 'slack';
+                    const active = source.status === 'active';
+                    const busy = busyId === source.sourceId;
+                    return (
+                      <ListItem
+                        key={source.sourceId}
+                        label={source.label}
+                        description={isSlack ? COPY['settings.sources.slackHint'] : undefined}
+                        startContent={<Badge label={SOURCE_KIND_LABELS[source.kind]} variant="purple" />}
+                        endContent={
+                          // A Slack source cannot be paused here, but it can be deleted (for example one
+                          // left by another Mac); the Mac registers a still-selected channel again on save.
+                          <HStack gap={1}>
+                            {!active && <Badge label={COPY['settings.sources.statusDisabled']} />}
+                            {!isSlack && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                label={active ? COPY['settings.sources.pause'] : COPY['settings.sources.resume']}
+                                isDisabled={busy}
+                                onClick={() => handleToggle(source)}
+                              />
+                            )}
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              label={COPY['settings.sources.delete']}
+                              isDisabled={busy}
+                              onClick={() => handleDelete(source)}
+                            />
+                          </HStack>
+                        }
+                      />
+                    );
+                  })}
+                </List>
+              </Card>
+            )}
+
+            <form onSubmit={handleAdd}>
+              <FormLayout>
+                <TextInput
+                  type="url"
+                  label={COPY['settings.sources.urlLabel']}
+                  value={url}
+                  onChange={onUrlChange}
+                  placeholder={COPY['settings.sources.urlPlaceholder']}
+                />
+                <TextInput
+                  label={COPY['settings.sources.labelLabel']}
+                  value={label}
+                  onChange={setLabel}
+                  placeholder={COPY['settings.sources.labelPlaceholder']}
+                />
+                {/* A segmented control, not Selector: Selector's dropdown needs CSS anchor
+                    positioning (Safari 26), which older macOS app WebViews lack. */}
+                <Field
+                  label={COPY['settings.sources.kindLabel']}
+                  inputID="cu-source-kind"
+                  labelID="cu-source-kind-label"
+                  isGroupLabel
+                  description={COPY['settings.sources.backfillHelp']}
+                >
+                  <SegmentedControl
+                    label={COPY['settings.sources.kindLabel']}
+                    value={kind}
+                    onChange={(value) => {
+                      setKind(value as AddableKind);
+                      setKindTouched(true);
+                    }}
                   >
-                    {COPY['settings.sources.delete']}
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    {ADDABLE_KINDS.map((k) => (
+                      <SegmentedControlItem key={k} value={k} label={SOURCE_KIND_LABELS[k]} />
+                    ))}
+                  </SegmentedControl>
+                </Field>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  label={adding ? COPY['settings.sources.adding'] : COPY['settings.sources.add']}
+                  isLoading={adding}
+                  isDisabled={!url.trim() || !label.trim()}
+                />
+              </FormLayout>
+            </form>
+          </VStack>
+        )}
+      </AstryxScope>
 
-      <form onSubmit={handleAdd} className="space-y-4">
-        <div>
-          <label htmlFor="cu-source-url" className={LABEL_CLASS}>{COPY['settings.sources.urlLabel']}</label>
-          <input
-            id="cu-source-url"
-            type="url"
-            value={url}
-            onChange={(e) => onUrlChange(e.target.value)}
-            placeholder={COPY['settings.sources.urlPlaceholder']}
-            className={INPUT_CLASS}
-          />
-        </div>
-        <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
-          <div>
-            <label htmlFor="cu-source-label" className={LABEL_CLASS}>{COPY['settings.sources.labelLabel']}</label>
-            <input
-              id="cu-source-label"
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder={COPY['settings.sources.labelPlaceholder']}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="cu-source-kind" className={LABEL_CLASS}>{COPY['settings.sources.kindLabel']}</label>
-            <select
-              id="cu-source-kind"
-              value={kind}
-              onChange={(e) => {
-                setKind(e.target.value as AddableKind);
-                setKindTouched(true);
-              }}
-              className={INPUT_CLASS}
-            >
-              {ADDABLE_KINDS.map((k) => (
-                <option key={k} value={k}>{SOURCE_KIND_LABELS[k]}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <p className="text-xs text-slate-400 dark:text-text-muted">{COPY['settings.sources.backfillHelp']}</p>
-        <button
-          type="submit"
-          disabled={adding || !url.trim() || !label.trim()}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
-        >
-          <span className="material-symbols-outlined text-lg" aria-hidden="true">add</span>
-          {adding ? COPY['settings.sources.adding'] : COPY['settings.sources.add']}
-        </button>
-      </form>
-
-      <SlackLinkSourcesSettings onSaved={load} />
-    </div>
+      {/* Mounted after the first list load, as before, so a Slack save cannot race it. */}
+      {!loading && <SlackLinkSourcesSettings onSaved={load} />}
+    </VStack>
   );
 }
