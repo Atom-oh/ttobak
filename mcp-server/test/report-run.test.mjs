@@ -671,3 +671,47 @@ test('a missing-source note naming an excluded channel is rejected', async t => 
   assert.equal(ctx.output().code, 'REPORT_EXCLUDED_CHANNEL');
   assert.equal(ctx.puts.length, 0);
 });
+
+test('report_model_follows_the_owner_setting_else_fable', async t => {
+  const modelOf = async (settings, env = {}) => {
+    const ctx = setup(t, {}, { env });
+    writeFileSync(join(ctx.home, '.claude', 'settings.json'), JSON.stringify(settings));
+    assert.equal(await ctx.run(), 0);
+    const { argv, env: childEnv } = ctx.recorded();
+    return { flag: argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : null, envModel: childEnv.ANTHROPIC_MODEL };
+  };
+  // The owner's `model` setting (user settings are not a setting source of the run).
+  assert.deepEqual(await modelOf({ model: 'fable' }), { flag: 'fable', envModel: undefined });
+  // Nothing set: Fable, not the CLI default.
+  assert.deepEqual(await modelOf({}), { flag: 'fable', envModel: undefined });
+  // ANTHROPIC_MODEL in the settings env is carried as is.
+  assert.deepEqual(await modelOf({ env: { ANTHROPIC_MODEL: 'opus' } }), { flag: null, envModel: 'opus' });
+  // The app's choice wins over both.
+  assert.deepEqual(await modelOf({ model: 'sonnet' }, { TTOBAK_REPORT_MODEL: 'claude-fable-5-2' }),
+    { flag: 'claude-fable-5-2', envModel: undefined });
+  // A value that is not a plain model name is ignored.
+  assert.deepEqual(await modelOf({ model: '--dangerously-skip-permissions' }), { flag: 'fable', envModel: undefined });
+  assert.deepEqual(await modelOf({}, { TTOBAK_REPORT_MODEL: 'a b' }), { flag: 'fable', envModel: undefined });
+  // A Bedrock or gateway install maps the fable alias to a model it can invoke: that mapping is carried.
+  const ctx = setup(t);
+  writeFileSync(join(ctx.home, '.claude', 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: '1',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'us.anthropic.claude-fable-5-2-v1:0' } }));
+  assert.equal(await ctx.run(), 0);
+  const { argv, env: childEnv } = ctx.recorded();
+  assert.equal(argv[argv.indexOf('--model') + 1], 'fable');
+  assert.equal(childEnv.ANTHROPIC_DEFAULT_FABLE_MODEL, 'us.anthropic.claude-fable-5-2-v1:0');
+});
+
+test('prompt_names_the_exact_script_command_form', async t => {
+  const ctx = setup(t);
+  assert.equal(await ctx.run(), 0);
+  const { argv } = ctx.recorded();
+  const prompt = argv[argv.indexOf('-p') + 1];
+  // The allowlist admits only `python3 -I <skill>/scripts/<name> ...` as one plain command.
+  assert.ok(prompt.includes(`python3 -I ${ctx.skillDir}/scripts/calendar_count.py`), prompt);
+  for (const script of ['extract_tool_json.py', 'interview_count.py', 'slack_threads.py', 'pfr_ci_summary.py']) {
+    assert.ok(prompt.includes(script), script);
+  }
+  assert.match(prompt, /cd, &&, \|, ;/);
+  assert.match(prompt, /거부되면 .*형태로 다시/);
+});

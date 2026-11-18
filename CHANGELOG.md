@@ -15,6 +15,10 @@ manifests.
 
 - MCP sign-in: Cognito now accepts local MCP callbacks on ports 9876-9879, so Claude Code, Codex or Kiro can switch to an alternate callback port when 9876 is busy. All registered callbacks stay on localhost.
 
+### Fixed
+
+- The SA performance report runs on the owner's `model` setting, else Fable (it ran on the CLI default Sonnet), and its prompt names the exact script command form, so calendar, interview, Slack thread and PFR/CI counts are no longer skipped.
+
 ## [1.1.0] - 2026-11-17
 
 ### Added

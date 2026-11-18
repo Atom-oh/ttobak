@@ -32742,6 +32742,20 @@ function reportEnv(home, env) {
   if (env.TTOBAK_REPORT_AWS_PROFILE && ENV_VALUE.test(env.TTOBAK_REPORT_AWS_PROFILE)) result.AWS_PROFILE = env.TTOBAK_REPORT_AWS_PROFILE;
   return result;
 }
+function reportModel(home, env) {
+  if (env.TTOBAK_REPORT_MODEL && MODEL.test(env.TTOBAK_REPORT_MODEL)) return env.TTOBAK_REPORT_MODEL;
+  try {
+    const path2 = join10(home, ".claude", "settings.json");
+    if (statSync3(path2).size <= MAX_CONFIG_BYTES) {
+      const settings = JSON.parse(readFileSync7(path2, "utf8"));
+      if (typeof settings?.model === "string" && MODEL.test(settings.model)) return settings.model;
+      const carried = settings?.env && typeof settings.env === "object" ? settings.env.ANTHROPIC_MODEL : void 0;
+      if (typeof carried === "string" && ENV_VALUE.test(carried)) return void 0;
+    }
+  } catch {
+  }
+  return DEFAULT_REPORT_MODEL;
+}
 function claudeVersion(bin, env, signal) {
   return new Promise((resolve4) => {
     if (signal?.aborted) {
@@ -32845,7 +32859,8 @@ function claudeArgs(options2) {
     deniedTools(options2.skillDir, options2.workDir).join(","),
     "--add-dir",
     options2.skillDir,
-    "--disable-slash-commands"
+    "--disable-slash-commands",
+    ...options2.model ? ["--model", options2.model] : []
   ];
 }
 function textOf(value) {
@@ -32968,7 +32983,7 @@ function runClaude(bin, args, options2) {
     });
   });
 }
-var SKILL, MAX_CONFIG_BYTES, MAX_LINE_BYTES, MAX_STDERR_BYTES2, KILL_GRACE_MS, ABORT_KILL_GRACE_MS, SAFE_PATH, TOOL_NAME, SKILL_LAYOUT, AUTH_ENV_KEYS, ENV_VALUE, MIN_CLAUDE_VERSION, VERSION_TIMEOUT_MS, PYTHON_MANAGERS, SANDBOX_FAILURE, AUTH_FAILURE;
+var SKILL, MAX_CONFIG_BYTES, MAX_LINE_BYTES, MAX_STDERR_BYTES2, KILL_GRACE_MS, ABORT_KILL_GRACE_MS, SAFE_PATH, TOOL_NAME, SKILL_LAYOUT, AUTH_ENV_KEYS, ENV_VALUE, MODEL, DEFAULT_REPORT_MODEL, MIN_CLAUDE_VERSION, VERSION_TIMEOUT_MS, PYTHON_MANAGERS, SANDBOX_FAILURE, AUTH_FAILURE;
 var init_claude = __esm({
   "src/report/claude.ts"() {
     "use strict";
@@ -32992,9 +33007,12 @@ var init_claude = __esm({
       "ANTHROPIC_MODEL",
       "ANTHROPIC_DEFAULT_OPUS_MODEL",
       "ANTHROPIC_DEFAULT_SONNET_MODEL",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL"
     ];
     ENV_VALUE = /^[\x20-\x7e]{1,512}$/;
+    MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,199}$/;
+    DEFAULT_REPORT_MODEL = "fable";
     MIN_CLAUDE_VERSION = [2, 1, 311];
     VERSION_TIMEOUT_MS = 1e4;
     PYTHON_MANAGERS = [".pyenv", ".asdf", ".rye", ".mise", ".conda", "miniconda3", "anaconda3", "miniforge3"];
@@ -33013,7 +33031,8 @@ function reportPrompt(input) {
     '2. "\uC9C4\uD589 \uC21C\uC11C"\uC758 5. \uC791\uC131(HTML \uD15C\uD50C\uB9BF)\uACFC 6. \uAC8C\uC2DC(Artifact), report-structure.md\uC758 "\uAC8C\uC2DC"\uB294 \uD558\uC9C0 \uC54A\uB294\uB2E4. \uADF8 \uB300\uC2E0 \uACB0\uACFC\uB97C \uC8FC\uC5B4\uC9C4 JSON \uC2A4\uD0A4\uB9C8\uC5D0 \uB9DE\uB294 JSON \uAC1D\uCCB4 \uD558\uB098\uB85C \uBC18\uD658\uD55C\uB2E4. JSON \uC55E\uB4A4\uC5D0 \uC124\uBA85\uC744 \uBD99\uC774\uC9C0 \uC54A\uB294\uB2E4.',
     "3. \uD558\uC704 \uC5D0\uC774\uC804\uD2B8\uB294 \uC4F8 \uC218 \uC5C6\uB2E4. SKILL.md\uAC00 Outlook\uACFC Slack\uC744 \uD558\uC704 \uC5D0\uC774\uC804\uD2B8\uC5D0 \uB9E1\uAE30\uB77C\uACE0 \uD574\uB3C4 \uC9C1\uC811 \uC870\uD68C\uD558\uACE0, \uD070 \uACB0\uACFC\uB294 \uC800\uC7A5\uB41C \uD30C\uC77C\uC744 \uC2A4\uD06C\uB9BD\uD2B8\uB85C \uC9D1\uACC4\uD574 \uC9D1\uACC4 \uAC12\uB9CC \uB0A8\uAE34\uB2E4. \uC6D0\uBB38\uC740 \uC62E\uAE30\uC9C0 \uC54A\uB294\uB2E4.",
     `4. Bash\uB294 \uC0CC\uB4DC\uBC15\uC2A4\uC5D0\uC11C\uB9CC \uB3C8\uB2E4. \uB124\uD2B8\uC6CC\uD06C\uAC00 \uC5C6\uACE0 \uCD9C\uB825 \uD3F4\uB354 \`${input.outDir}\`\uC5D0\uB9CC \uC4F8 \uC218 \uC788\uB2E4. \uD30C\uC77C \uC4F0\uAE30(Write)\uB3C4 \uC774 \uD3F4\uB354 \uC548\uC5D0\uC11C\uB9CC \uB41C\uB2E4.`,
-    '5. "\uC2DC\uC791 \uC804\uC5D0 \uC815\uD560 \uAC83"\uC740 \uC544\uB798 \uC2E4\uD589 \uC815\uBCF4\uB85C \uC774\uBBF8 \uC815\uD574\uC84C\uB2E4. \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3B\uC9C0 \uC54A\uB294\uB2E4. "\uC790\uC8FC \uD558\uB294 \uC2E4\uC218"\uC5D0\uC11C \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3C\uC73C\uB77C\uACE0 \uD55C \uACBD\uC6B0(\uB9D0\uD55C \uD504\uB85C\uC81D\uD2B8\uAC00 \uB370\uC774\uD130\uC5D0 \uC5C6\uC74C)\uB294 \uBB3B\uC9C0 \uB9D0\uACE0 \uCC3E\uC740 \uBC94\uC704\uC640 \uAC00\uC7A5 \uAC00\uAE4C\uC6B4 \uAE30\uB85D\uC744 actions\uC5D0 \uC801\uB294\uB2E4.',
+    `5. Bash\uB85C\uB294 \uC2A4\uD0AC \uC2A4\uD06C\uB9BD\uD2B8\uB9CC \uC2E4\uD589\uD560 \uC218 \uC788\uACE0, \uBC18\uB4DC\uC2DC \`python3 -I ${input.skillDir}/scripts/<\uC774\uB984> <\uC778\uC790>\` \uD615\uD0DC\uC758 \uBA85\uB839 \uD558\uB098\uB85C \uBD80\uB978\uB2E4(\uC608: \`python3 -I ${input.skillDir}/scripts/calendar_count.py --help\`). \uC2A4\uD06C\uB9BD\uD2B8\uB294 ${SCRIPTS}\uC774\uB2E4. \uACBD\uB85C\uB294 \uC808\uB300\uACBD\uB85C\uB85C \uC4F0\uACE0 cd, &&, |, ;, \uB9AC\uB514\uB809\uC158(>, 2>&1), \uD658\uACBD \uBCC0\uC218 \uC811\uB450\uC0AC\uB97C \uBD99\uC774\uC9C0 \uC54A\uB294\uB2E4. \uC774 \uD615\uD0DC\uAC00 \uC544\uB2CC \uBA85\uB839\uC740 \uAC70\uBD80\uB41C\uB2E4. \uAC70\uBD80\uB418\uBA74 \uADF8 \uC2A4\uD06C\uB9BD\uD2B8\uB97C \uAC74\uB108\uB6F0\uC9C0 \uB9D0\uACE0 \uC774 \uD615\uD0DC\uB85C \uB2E4\uC2DC \uBD80\uB978\uB2E4.`,
+    '6. "\uC2DC\uC791 \uC804\uC5D0 \uC815\uD560 \uAC83"\uC740 \uC544\uB798 \uC2E4\uD589 \uC815\uBCF4\uB85C \uC774\uBBF8 \uC815\uD574\uC84C\uB2E4. \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3B\uC9C0 \uC54A\uB294\uB2E4. "\uC790\uC8FC \uD558\uB294 \uC2E4\uC218"\uC5D0\uC11C \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3C\uC73C\uB77C\uACE0 \uD55C \uACBD\uC6B0(\uB9D0\uD55C \uD504\uB85C\uC81D\uD2B8\uAC00 \uB370\uC774\uD130\uC5D0 \uC5C6\uC74C)\uB294 \uBB3B\uC9C0 \uB9D0\uACE0 \uCC3E\uC740 \uBC94\uC704\uC640 \uAC00\uC7A5 \uAC00\uAE4C\uC6B4 \uAE30\uB85D\uC744 actions\uC5D0 \uC801\uB294\uB2E4.',
     "",
     "\uC2E4\uD589 \uC815\uBCF4:",
     `- alias: ${input.alias}`,
@@ -33038,9 +33057,12 @@ function reportPrompt(input) {
     '- report-structure.md\uC758 "\uB123\uC9C0 \uC54A\uB294 \uAC83"\uC5D0 \uB354\uD574 \uBA54\uC77C \uBCF8\uBB38\uACFC \uCE98\uB9B0\uB354 \uBCF8\uBB38\uB3C4 \uB123\uC9C0 \uC54A\uB294\uB2E4. \uC624\uD37C\uD29C\uB2C8\uD2F0 \uAE08\uC561(\uCC38\uC5EC\uD55C \uC624\uD37C\uD29C\uB2C8\uD2F0\uB85C \uD45C\uAE30), SpecReq \uC694\uCCAD\uC790\uC640 \uD568\uAED8 \uC77C\uD55C SA\xB7AM \uC774\uB984\uC740 \uB123\uC5B4\uB3C4 \uB41C\uB2E4.'
   ].join("\n");
 }
+var SCRIPTS;
 var init_prompt = __esm({
   "src/report/prompt.ts"() {
     "use strict";
+    init_tools();
+    SCRIPTS = SKILL_SCRIPTS.join(", ");
   }
 });
 
@@ -33702,6 +33724,7 @@ async function report(args, environment, store) {
       settingsPath,
       skillDir,
       workDir,
+      model: reportModel(environment.home, environment.env),
       allowedTools: allowedTools({ skillDir, outDir, readDirs: [skillDir, workDir, sessionDir], servers: mcp.present })
     });
     cancelled();
