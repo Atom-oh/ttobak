@@ -110,7 +110,7 @@ export class McpSession {
   }
 }
 
-/** Returns the JSON payload of a tool result: structured content first, then a JSON text block. */
+/** Structured content first, then a JSON text block. */
 const MAX_NOTICE_CHARS = 8192;
 
 /**
@@ -126,7 +126,25 @@ function jsonAfterNotice(text: string): unknown {
   return undefined;
 }
 
+const ENVELOPE_KEYS = new Set(['content', 'isError', 'structuredContent', '_meta']);
+
+/** A whole CallToolResult serialized into a text block (spec-req-mcp 0.1.5 does this). */
+function isToolResultEnvelope(value: unknown): value is CallToolResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Array.isArray(record.content) && Object.keys(record).every(key => ENVELOPE_KEYS.has(key))
+    && record.content.every(item => !!item && typeof item === 'object' && typeof (item as { type?: unknown }).type === 'string');
+}
+
+/** The JSON payload of a tool result; a result nested in its text block is unwrapped once. */
 export function resultJson(result: CallToolResult, tool: string): unknown {
+  const value = payloadJson(result, tool);
+  if (!isToolResultEnvelope(value)) return value;
+  if (value.isError === true) throw new ToolResultError(`${tool} returned an error`);
+  return payloadJson(value, tool);
+}
+
+function payloadJson(result: CallToolResult, tool: string): unknown {
   if (result.structuredContent !== undefined) return result.structuredContent;
   const texts = (result.content ?? []).filter(item => item.type === 'text').map(item => item.text);
   for (const text of texts) {

@@ -28097,7 +28097,18 @@ function jsonAfterNotice(text5) {
   }
   return void 0;
 }
+function isToolResultEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record21 = value;
+  return Array.isArray(record21.content) && Object.keys(record21).every((key) => ENVELOPE_KEYS.has(key)) && record21.content.every((item2) => !!item2 && typeof item2 === "object" && typeof item2.type === "string");
+}
 function resultJson(result, tool) {
+  const value = payloadJson(result, tool);
+  if (!isToolResultEnvelope(value)) return value;
+  if (value.isError === true) throw new ToolResultError(`${tool} returned an error`);
+  return payloadJson(value, tool);
+}
+function payloadJson(result, tool) {
   if (result.structuredContent !== void 0) return result.structuredContent;
   const texts2 = (result.content ?? []).filter((item2) => item2.type === "text").map((item2) => item2.text);
   for (const text5 of texts2) {
@@ -28114,7 +28125,7 @@ function resultJson(result, tool) {
   }
   throw new IntakeError("PARSE_FAILED", `${tool} did not return JSON`);
 }
-var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, ToolResultError, McpSession, MAX_NOTICE_CHARS;
+var MAX_RESULT_BYTES2, MAX_STDERR_BYTES, AUTH_PATTERN, ToolResultError, McpSession, MAX_NOTICE_CHARS, ENVELOPE_KEYS;
 var init_mcp_client = __esm({
   "src/intake/mcp-client.ts"() {
     "use strict";
@@ -28219,6 +28230,7 @@ var init_mcp_client = __esm({
       }
     };
     MAX_NOTICE_CHARS = 8192;
+    ENVELOPE_KEYS = /* @__PURE__ */ new Set(["content", "isError", "structuredContent", "_meta"]);
   }
 });
 
@@ -29427,8 +29439,7 @@ async function readAccount(source, accountId) {
         }
       }
       if (!page2.hasNextPage) {
-        if (read.fetched < page2.totalCount) throw parseFailed("search_contacts result is incomplete");
-        read.complete = true;
+        read.complete = read.fetched >= page2.totalCount;
         break;
       }
       if (!page2.records.length) throw parseFailed("search_contacts returned an empty page with more pages");
