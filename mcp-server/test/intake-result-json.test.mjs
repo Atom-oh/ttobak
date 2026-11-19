@@ -29,3 +29,21 @@ test('listChannels reads a result that carries the notice', async () => {
   const session = { call: async () => text(`${NOTICE}${JSON.stringify(payload, null, 2)}`) };
   assert.deepEqual(await listChannels(session), [{ id: 'C0AAAAAAA1', name: 'general' }]);
 });
+
+test('a tool result nested in the text block is unwrapped once', () => {
+  // spec-req-mcp 0.1.5: the text block holds a whole CallToolResult.
+  const inner = { success: true, data: { employee_login: 'alice' } };
+  const nested = JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(inner, null, 2) }], isError: false }, null, 2);
+  assert.deepEqual(resultJson(text(nested), 't'), inner);
+  // Its structured content wins, as on the outer result.
+  assert.deepEqual(resultJson(text(JSON.stringify({ content: [], structuredContent: { a: 2 } })), 't'), { a: 2 });
+  // An inner error is an error, not data.
+  assert.throws(() => resultJson(text(JSON.stringify({ content: [{ type: 'text', text: '{"x":1}' }], isError: true })), 't'),
+    error => error.code === 'SOURCE_ERROR');
+  // Only one level, and only an envelope: other objects with a content field stay data.
+  const twice = JSON.stringify({ content: [{ type: 'text', text: nested }] });
+  assert.deepEqual(resultJson(text(twice), 't'), JSON.parse(nested));
+  assert.deepEqual(resultJson(text('{"content":"hello","title":"x"}'), 't'), { content: 'hello', title: 'x' });
+  assert.deepEqual(resultJson(text('{"content":[{"type":"text","text":"a"}],"page":2}'), 't'),
+    { content: [{ type: 'text', text: 'a' }], page: 2 });
+});
