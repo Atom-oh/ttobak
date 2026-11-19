@@ -61,8 +61,8 @@ textareas use `field-sizing-content`; `fitToContent` (`lib/fieldSizing.ts`) meas
 
 Astryx (`@astryxdesign/core`, beta, pinned exactly with its CLI) renders only
 these Settings sections, each wrapped in `components/astryx/AstryxScope`: Mac app
-install, user invitation, meeting detection, and customer update sources with
-the Mac Slack link picker. The scope imports Astryx CSS, so other routes do not
+install, user invitation, meeting detection, skill packages, customer update
+sources with the Mac Slack link picker, and AI connector permissions. The scope imports Astryx CSS, so other routes do not
 load it, passes the `useTheme` mode to `<Theme>`, and loads the shipped `ko-KR`
 catalog so built-in strings (field indicators, loading labels) are Korean. `globals.css` declares
 `@layer reset, theme, base, astryx-base, astryx-theme, components, utilities`

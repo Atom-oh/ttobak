@@ -7,9 +7,17 @@ import {
   deletePersonalSkillPackage, getSkillPackages, listOrgSkillPackageVersions, rollbackOrgSkillPackage, uploadSkillPackage,
   type SkillPackage, type SkillPackageScope, type SkillPackageView,
 } from '@/lib/skillPackages';
+import { AstryxScope } from './astryx/AstryxScope';
+import { Badge } from '@astryxdesign/core/Badge';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { Card } from '@astryxdesign/core/Card';
+import { HStack } from '@astryxdesign/core/HStack';
+import { List, ListItem } from '@astryxdesign/core/List';
+import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList';
+import { Text } from '@astryxdesign/core/Text';
+import { VStack } from '@astryxdesign/core/VStack';
 
-const buttonClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-white/10 dark:text-text-main dark:hover:bg-white/5';
-const mutedClass = 'text-xs text-slate-500 dark:text-text-muted';
 
 function errorText(err: unknown): string {
   return err instanceof ApiError ? packageErrorText(err.code, err.message) : packageErrorText('', '');
@@ -72,68 +80,78 @@ export function SkillPackageSettings({ isAdmin }: { isAdmin: boolean }) {
   return (
     <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
       <h3 className="section-header mb-4">{SKILL_PACKAGE_COPY.sectionTitle}</h3>
-      <div className="flex flex-col gap-4 text-sm text-slate-700 dark:text-text-secondary">
-        <p className={mutedClass}>Mac 앱의 [한 번에 설정]이 설치하는 스킬과 MCP 서버 목록이에요. 개인 패키지의 스킬은 같은 이름의 조직 스킬을 대신해요.</p>
-        <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1">
-          <dt className="font-semibold">{SKILL_PACKAGE_COPY.sourceOrg}</dt><dd>{packageLine(view?.org ?? null)}</dd>
-          <dt className="font-semibold">{SKILL_PACKAGE_COPY.sourcePersonal}</dt><dd>{packageLine(view?.personal ?? null)}</dd>
-        </dl>
-        {view && view.effective.skills.length > 0 && (
-          <ul className="flex flex-wrap gap-2">
-            {view.effective.skills.map(skill => (
-              <li key={skill.name} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs dark:border-white/10">
-                <span className="font-mono">{skill.name}</span>
-                {' · '}{skill.source === 'personal' ? SKILL_PACKAGE_COPY.sourcePersonal : SKILL_PACKAGE_COPY.sourceOrg}
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex flex-wrap gap-2">
+      <AstryxScope>
+        <VStack gap={4}>
+          <Text type="supporting" as="p">
+            Mac 앱의 [한 번에 설정]이 설치하는 스킬과 MCP 서버 목록이에요. 개인 패키지의 스킬은 같은 이름의 조직 스킬을 대신해요.
+          </Text>
+          <MetadataList>
+            <MetadataListItem label={SKILL_PACKAGE_COPY.sourceOrg}>{packageLine(view?.org ?? null)}</MetadataListItem>
+            <MetadataListItem label={SKILL_PACKAGE_COPY.sourcePersonal}>{packageLine(view?.personal ?? null)}</MetadataListItem>
+          </MetadataList>
+          {view && view.effective.skills.length > 0 && (
+            <HStack gap={2} wrap="wrap">
+              {view.effective.skills.map(skill => (
+                <Badge
+                  key={skill.name}
+                  variant={skill.source === 'personal' ? 'purple' : 'neutral'}
+                  label={`${skill.name} · ${skill.source === 'personal' ? SKILL_PACKAGE_COPY.sourcePersonal : SKILL_PACKAGE_COPY.sourceOrg}`}
+                />
+              ))}
+            </HStack>
+          )}
+          {/* Native file inputs stay hidden; the Astryx buttons open them. */}
           <input ref={personalInput} type="file" accept=".zip,application/zip" className="hidden" aria-label={SKILL_PACKAGE_COPY.uploadPersonal}
             onChange={() => upload('personal', personalInput.current)} />
-          <button type="button" className={buttonClass} disabled={busy} onClick={() => personalInput.current?.click()}>
-            {SKILL_PACKAGE_COPY.uploadPersonal}
-          </button>
-          {view?.personal && (
-            <button type="button" className={buttonClass} disabled={busy}
-              onClick={() => void act(deletePersonalSkillPackage, '개인 패키지를 지웠어요. 이제 조직 패키지를 써요.')}>
-              {SKILL_PACKAGE_COPY.deletePersonal}
-            </button>
-          )}
           {isAdmin && (
-            <>
-              <input ref={orgInput} type="file" accept=".zip,application/zip" className="hidden" aria-label={SKILL_PACKAGE_COPY.uploadOrg}
-                onChange={() => upload('org', orgInput.current)} />
-              <button type="button" className={buttonClass} disabled={busy} onClick={() => orgInput.current?.click()}>
-                {SKILL_PACKAGE_COPY.uploadOrg}
-              </button>
-            </>
+            <input ref={orgInput} type="file" accept=".zip,application/zip" className="hidden" aria-label={SKILL_PACKAGE_COPY.uploadOrg}
+              onChange={() => upload('org', orgInput.current)} />
           )}
-        </div>
-        {isAdmin && versions.length > 0 && (
-          <table className="w-full text-left text-sm">
-            <thead className={mutedClass}><tr><th className="py-1 font-medium">조직 버전</th><th className="py-1 font-medium">올린 시각</th><th /></tr></thead>
-            <tbody>
-              {versions.map(version => (
-                <tr key={`${version.uploadedAt}-${version.sha256}`} className="border-t border-slate-100 dark:border-white/10">
-                  <td className="py-1.5">{version.version}</td>
-                  <td className="py-1.5">{formatDate(version.uploadedAt)}</td>
-                  <td className="py-1.5 text-right">
-                    {view?.org?.sha256 === version.sha256 ? <span className={mutedClass}>사용 중</span> : (
-                      <button type="button" className={buttonClass} disabled={busy}
-                        onClick={() => void act(() => rollbackOrgSkillPackage(version.sha256), '조직 패키지를 되돌렸어요.')}>
-                        {SKILL_PACKAGE_COPY.rollback}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {message && <p role="status">{message}</p>}
-        {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      </div>
+          <HStack gap={2} wrap="wrap">
+            <Button label={SKILL_PACKAGE_COPY.uploadPersonal} isDisabled={busy} onClick={() => personalInput.current?.click()} />
+            {view?.personal && (
+              <Button
+                variant="destructive"
+                label={SKILL_PACKAGE_COPY.deletePersonal}
+                isDisabled={busy}
+                onClick={() => void act(deletePersonalSkillPackage, '개인 패키지를 지웠어요. 이제 조직 패키지를 써요.')}
+              />
+            )}
+            {isAdmin && (
+              <Button label={SKILL_PACKAGE_COPY.uploadOrg} isDisabled={busy} onClick={() => orgInput.current?.click()} />
+            )}
+          </HStack>
+          {isAdmin && versions.length > 0 && (
+            <VStack gap={2}>
+              <Text type="label">조직 버전</Text>
+              <Card padding={0}>
+                <List hasDividers>
+                  {versions.map(version => (
+                    <ListItem
+                      key={`${version.uploadedAt}-${version.sha256}`}
+                      label={version.version}
+                      description={formatDate(version.uploadedAt)}
+                      endContent={view?.org?.sha256 === version.sha256
+                        ? <Badge label="사용 중" variant="success" />
+                        : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            label={SKILL_PACKAGE_COPY.rollback}
+                            isDisabled={busy}
+                            onClick={() => void act(() => rollbackOrgSkillPackage(version.sha256), '조직 패키지를 되돌렸어요.')}
+                          />
+                        )}
+                    />
+                  ))}
+                </List>
+              </Card>
+            </VStack>
+          )}
+          {message && <div role="status"><Banner status="success" title={message} /></div>}
+          {error && <Banner status="error" title={error} role="alert" />}
+        </VStack>
+      </AstryxScope>
     </section>
   );
 }
