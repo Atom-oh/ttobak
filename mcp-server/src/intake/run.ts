@@ -116,6 +116,8 @@ export interface IntakeEnvironment {
   now: () => Date;
   zone: string;
   stdout: (line: string) => void;
+  /** Test seam: epoch ms the process started; the Mac app's run limit counts from it. */
+  processStartedAt?: number;
   /** Test seam: replaces the TTOBAK API built from the selection. */
   api?: TtobakApi;
   /** Test seam: the account scope that goes with `api`. */
@@ -576,6 +578,16 @@ async function sfdc(args: string[], environment: IntakeEnvironment, store: Intak
     reconcile: options['--reconcile'] === true }, environment, store);
 }
 
+/** The Mac app kills an intake process 20 minutes after it spawned it (`RUN_TIMEOUT`, mac-app intake_runner.rs). */
+export const APP_RUN_LIMIT_MS = 20 * 60_000;
+/** Left after the team step's last new account: its delivery, the status writes and the links connector. */
+export const TEAM_RESERVE_MS = 5 * 60_000;
+
+/** Epoch ms after which the team step starts no new account, counted from the process start. */
+export function teamDeadline(environment: Pick<IntakeEnvironment, 'processStartedAt'>): number {
+  return (environment.processStartedAt ?? performance.timeOrigin) + APP_RUN_LIMIT_MS - TEAM_RESERVE_MS;
+}
+
 /** One SFDC run; returns the result object it would print. */
 export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeEnvironment, store: IntakeStore,
   signedIn?: SignInOnce) {
@@ -616,7 +628,8 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     const sfdcAccountTeam = api && sfdcContacts?.result !== 'AUTH_EXPIRED_MIDWAY' ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
       await active.requireTool(SFDC_TEAM_TOOL);
       return runSfdcTeam({ session: source, api, store, sourceId: selected.sourceId, ...(scope ? { scope } : {}), dryRun,
-        reconcile: options.reconcile === true, accountIds: result.assignmentIds, ownerAlias: result.ownerAlias });
+        reconcile: options.reconcile === true, accountIds: result.assignmentIds, ownerAlias: result.ownerAlias,
+        deadline: teamDeadline(environment) });
     }, dryRun) : undefined;
     return { ok: true, connector: 'sfdc', dryRun, counts: result.counts, ...(sfdcContacts ? { sfdcContacts } : {}),
       ...(sfdcAccountTeam ? { sfdcAccountTeam } : {}) };

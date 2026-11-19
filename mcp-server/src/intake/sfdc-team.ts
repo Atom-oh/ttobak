@@ -18,7 +18,7 @@ export const SFDC_TEAM_TOOL: ToolExpectation = { name: 'get_team_members', prope
 
 /** Backend `PerformanceTeamMaxPerAccount`. */
 export const MAX_TEAM_PER_ACCOUNT = 100;
-/** No new account starts after this; the app kills a run at 20 minutes, and status must still be written. */
+/** No new account starts after this or after the run deadline; the app kills a run at 20 minutes, and status must still be written. */
 export const SFDC_TEAM_BUDGET_MS = 8 * 60_000;
 const SOURCE = 'sfdc-account-team' as const;
 const ALIAS = /^[a-z0-9._-]{1,64}$/;
@@ -57,6 +57,11 @@ export interface SfdcTeamRunOptions {
   ownerAlias: string;
   /** Test seam for the time budget. */
   clock?: () => number;
+  /**
+   * Epoch ms after which no new account starts, whatever the step budget left: the
+   * run's own deadline, so the steps before this one cannot push it past the app's kill.
+   */
+  deadline?: number;
 }
 
 export interface SfdcTeamRunResult { result: 'ok' | IntakeCode; counts: SfdcTeamCounts }
@@ -206,7 +211,7 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
   }
   let last: string | null = null;
   for (const accountId of rotatedAccounts(options.accountIds, after)) {
-    if (clock() - started > SFDC_TEAM_BUDGET_MS) {
+    if (clock() - started > SFDC_TEAM_BUDGET_MS || (options.deadline !== undefined && clock() >= options.deadline)) {
       kept.add(accountId);
       counts.skippedBudget++;
       continue;

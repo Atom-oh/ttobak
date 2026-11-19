@@ -29853,7 +29853,7 @@ async function runSfdcTeam(options2) {
   }
   let last = null;
   for (const accountId of rotatedAccounts(options2.accountIds, after)) {
-    if (clock() - started > SFDC_TEAM_BUDGET_MS) {
+    if (clock() - started > SFDC_TEAM_BUDGET_MS || options2.deadline !== void 0 && clock() >= options2.deadline) {
       kept.add(accountId);
       counts.skippedBudget++;
       continue;
@@ -31826,7 +31826,9 @@ var init_setup = __esm({
 // src/intake/run.ts
 var run_exports = {};
 __export(run_exports, {
+  APP_RUN_LIMIT_MS: () => APP_RUN_LIMIT_MS,
   SYNC_CONNECTORS: () => SYNC_CONNECTORS,
+  TEAM_RESERVE_MS: () => TEAM_RESERVE_MS,
   accountScope: () => accountScope,
   calendarRun: () => calendarRun,
   defaultEnvironment: () => defaultEnvironment,
@@ -31839,6 +31841,7 @@ __export(run_exports, {
   sfdcRun: () => sfdcRun,
   signIn: () => signIn,
   syncOptions: () => syncOptions,
+  teamDeadline: () => teamDeadline,
   tokenEmail: () => tokenEmail,
   ttobakConfig: () => ttobakConfig
 });
@@ -32291,6 +32294,9 @@ async function sfdc(args, environment, store) {
     reconcile: options2["--reconcile"] === true
   }, environment, store);
 }
+function teamDeadline(environment) {
+  return (environment.processStartedAt ?? performance.timeOrigin) + APP_RUN_LIMIT_MS - TEAM_RESERVE_MS;
+}
 async function sfdcRun(options2, environment, store, signedIn) {
   const { dryRun } = options2;
   const selection = store.read("selection.json");
@@ -32362,7 +32368,8 @@ async function sfdcRun(options2, environment, store, signedIn) {
         dryRun,
         reconcile: options2.reconcile === true,
         accountIds: result.assignmentIds,
-        ownerAlias: result.ownerAlias
+        ownerAlias: result.ownerAlias,
+        deadline: teamDeadline(environment)
       });
     }, dryRun) : void 0;
     return {
@@ -32738,7 +32745,7 @@ async function terminalPrompt(question) {
     reader.close();
   }
 }
-var USAGE, OWN_DOMAIN, SYNC_CONNECTORS;
+var USAGE, OWN_DOMAIN, APP_RUN_LIMIT_MS, TEAM_RESERVE_MS, SYNC_CONNECTORS;
 var init_run = __esm({
   "src/intake/run.ts"() {
     "use strict";
@@ -32779,6 +32786,8 @@ var init_run = __esm({
   ttobak-mcp intake login
   ttobak-mcp intake status`;
     OWN_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$/;
+    APP_RUN_LIMIT_MS = 20 * 6e4;
+    TEAM_RESERVE_MS = 5 * 6e4;
     SYNC_CONNECTORS = ["calendar", "sfdc", "links"];
   }
 });

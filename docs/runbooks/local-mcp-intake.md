@@ -787,8 +787,11 @@ After the contacts step, the same session runs `sfdc-account-team`
 - **Delivery.** The revisioned `sfdc-account-team` source, with its own ledger
   in `sfdc/<sourceId>/<scope>/sfdc-account-team.json`; members of an account
   that left the snapshot are removed. An account whose read failed or did not
-  start within the 8-minute budget keeps its stored members (`failedAccounts`,
-  `skippedBudget`). A budget-limited pass stores where it stopped
+  start in time keeps its stored members (`failedAccounts`, `skippedBudget`).
+  No new account starts after 8 minutes of the step (`SFDC_TEAM_BUDGET_MS`) or
+  after the run deadline, 15 minutes after the process started
+  (`teamDeadline`: the app's 20-minute kill less a 5-minute reserve for the
+  delivery, the status writes and the links connector), whichever comes first. A budget-limited pass stores where it stopped
   (`sfdc-account-team.resume.json`, an SFDC account ID only) and the next run
   starts after it, so every account is reached in turn; a full pass clears it.
 - **Removed assignments.** The server deletes the team rows of an assignment

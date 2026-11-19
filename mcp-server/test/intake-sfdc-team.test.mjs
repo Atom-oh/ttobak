@@ -263,3 +263,24 @@ test('an absent forgotten account gets explicit removes', async t => {
   const away = await runSfdcTeam(base(store, teamSession({}), api, []));
   assert.equal(away.counts.removals, 2, 'removes also heal a server-side delete that failed');
 });
+
+test('the run deadline stops new accounts before the step budget does', async t => {
+  // Earlier steps used most of the 20-minute app limit: the team step must leave the rest
+  // for its delivery, the status write and the links connector.
+  const store = tempStore(t);
+  const api = teamApi();
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]], '001C': [[member('c1')]] };
+  await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B', '001C']));
+  let now = 1_000_000;
+  const session = teamSession(teams);
+  const call = session.call;
+  session.call = async (tool, args) => { now += 60_000; return call(tool, args); };
+  // One minute per account, well inside the 8-minute budget, but the run deadline is 90 s away.
+  const result = await runSfdcTeam(base(store, session, api, ['001A', '001B', '001C'], { clock: () => now, deadline: now + 90_000 }));
+  assert.equal(result.counts.accounts, 2);
+  assert.equal(result.counts.skippedBudget, 1);
+  assert.ok(!mutations(api).some(item => item.op === 'remove'), 'kept accounts are not removed');
+  // A deadline already past starts nothing, but the step still finishes and records its status.
+  const late = await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B', '001C'], { clock: () => now, deadline: now - 1 }));
+  assert.deepEqual([late.counts.accounts, late.counts.skippedBudget, late.result], [0, 3, 'ok']);
+});

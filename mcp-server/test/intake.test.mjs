@@ -1276,3 +1276,25 @@ test('CLI: unknown meetings and a failing directory leave a successful private-o
   assert.equal(second.counts.attendeesUnavailable, 6, 'list_meetings joins nothing');
   assert.equal(second.counts.directoryUnavailable, false);
 });
+
+test('the team step stops at the run deadline derived from the process start', async t => {
+  const home = tempHome(t);
+  writeSentral(home);
+  const lines = [];
+  const environment = cliEnvironment(home, lines);
+  assert.equal(await runIntake(['select', 'sfdc', '--host', 'claude', '--server', 'aws-sentral-mcp'], environment), 0);
+  const api = performanceApi();
+  environment.api = api;
+  // The process started 16 minutes ago: within 5 minutes of the app's 20-minute kill, no account starts.
+  environment.processStartedAt = Date.now() - 16 * 60_000;
+  assert.equal(await runIntake(['sfdc', '--noninteractive'], environment), 0, lines.at(-1));
+  const team = JSON.parse(lines.at(-1)).sfdcAccountTeam;
+  assert.equal(team.result, 'ok');
+  assert.equal(team.counts.accounts, 0);
+  assert.ok(team.counts.skippedBudget > 0, JSON.stringify(team.counts));
+  assert.ok(!api.calls.some(call => call.source === 'sfdc-account-team' && call.body.mutations.length), 'nothing is upserted or removed');
+  // With a fresh process the same run reads the team.
+  environment.processStartedAt = Date.now();
+  assert.equal(await runIntake(['sfdc', '--noninteractive'], environment), 0, lines.at(-1));
+  assert.equal(JSON.parse(lines.at(-1)).sfdcAccountTeam.counts.skippedBudget, 0);
+});
