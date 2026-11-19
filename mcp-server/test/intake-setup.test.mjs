@@ -46,7 +46,7 @@ function writeHosts(home, { outlook = {}, work = {}, only, codexOutlook = false 
 function fakeApi() {
   const calls = [];
   let calendarRevision = 0;
-  const revision = { 'sfdc-assignments': 0, 'sfdc-tasks': 0 };
+  const revision = { 'sfdc-assignments': 0, 'sfdc-tasks': 0, 'sfdc-account-team': 0 };
   return {
     calls,
     async calendarSyncStatus() { return { sources: [], nextCursor: null }; },
@@ -121,7 +121,7 @@ test('setup selects known servers and verifies tools', async t => {
   assert.equal(output.dryRun.calendar.counts.upserts, 6);
   assert.equal(output.dryRun.sfdc.result, 'ok');
   assert.equal(output.synced, true, '--yes runs the first sync');
-  assert.deepEqual([...new Set(context.api.calls)], ['calendar', 'sfdc-assignments', 'sfdc-tasks']);
+  assert.deepEqual([...new Set(context.api.calls)], ['calendar', 'sfdc-assignments', 'sfdc-tasks', 'sfdc-account-team']);
   assert.equal(output.schedule, 'none');
   assert.equal(existsSync(plistPath(home)), false, 'no plist without --schedule');
   assert.equal(context.runner.calls.length, 0);
@@ -231,7 +231,7 @@ test('run runs calendar then sfdc and aggregates results', async t => {
   assert.equal(output.results.calendar.counts.upserts, 6);
   assert.equal(output.results.sfdc.result, 'ok');
   assert.equal(output.results.sfdc.counts.tasks.fetched, 4);
-  assert.deepEqual([...new Set(context.api.calls)], ['calendar', 'sfdc-assignments', 'sfdc-tasks'], 'calendar first');
+  assert.deepEqual([...new Set(context.api.calls)], ['calendar', 'sfdc-assignments', 'sfdc-tasks', 'sfdc-account-team'], 'calendar first');
 
   // --only and --dry-run narrow the run; a dry run makes no TTOBAK calls.
   const calls = context.api.calls.length;
@@ -263,7 +263,7 @@ test('run continues after a non-auth failure and exits 2 with PARTIAL_FAILURE', 
   assert.equal(output.code, 'PARTIAL_FAILURE');
   assert.equal(output.results.calendar.result, 'SCHEMA_CHANGED');
   assert.equal(output.results.sfdc.result, 'ok');
-  assert.deepEqual([...new Set(context.api.calls)], ['sfdc-assignments', 'sfdc-tasks']);
+  assert.deepEqual([...new Set(context.api.calls)], ['sfdc-assignments', 'sfdc-tasks', 'sfdc-account-team']);
 });
 
 test('run stops on AUTH_EXPIRED_MIDWAY', async t => {

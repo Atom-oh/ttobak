@@ -20,6 +20,7 @@ import { McpSession, resultJson, type ToolExpectation } from './mcp-client.js';
 import { defaultLaunchctl, installSchedule, parseSchedule, type LaunchctlRunner } from './schedule.js';
 import { SFDC_CONTACTS_TOOL, SFDC_TOOLS, runSfdc, type SfdcCounts, type SfdcSource } from './sfdc.js';
 import { runSfdcContacts, type SfdcContactCounts } from './sfdc-contacts.js';
+import { SFDC_TEAM_TOOL, runSfdcTeam, type SfdcTeamCounts } from './sfdc-team.js';
 import { resolveMe } from './specreq.js';
 import { DEFAULT_OWN_DOMAINS } from './match.js';
 import { IntakeStore } from './store.js';
@@ -54,7 +55,7 @@ export interface Selection {
    * choice made before a connector is selected is not lost. Absent fields (legacy)
    * mean the defaults: `DEFAULT_CALENDAR_RESPONSES` and contacts on.
    */
-  options?: { calendarResponses?: CalendarResponse[]; sfdcContacts?: boolean };
+  options?: { calendarResponses?: CalendarResponse[]; sfdcContacts?: boolean; sfdcAccountTeam?: boolean };
   ttobak?: { apiUrl: string; cognitoDomain: string; clientId: string; userPoolId?: string };
 }
 
@@ -97,6 +98,14 @@ export interface RunStatus {
     result: 'ok' | 'disabled' | IntakeCode;
     counts?: SfdcContactCounts;
   };
+  /** The `sfdc-account-team` step; counts only, never a member. */
+  sfdcAccountTeam?: {
+    lastRunAt: string;
+    lastSuccessAt?: string;
+    /** `disabled`: skipped because `options.sfdcAccountTeam` is off. */
+    result: 'ok' | 'disabled' | IntakeCode;
+    counts?: SfdcTeamCounts;
+  };
 }
 
 export interface LinksCounts { channels: number; links: number; uploaded: number }
@@ -107,6 +116,8 @@ export interface IntakeEnvironment {
   now: () => Date;
   zone: string;
   stdout: (line: string) => void;
+  /** Test seam: epoch ms the process started; the Mac app's run limit counts from it. */
+  processStartedAt?: number;
   /** Test seam: replaces the TTOBAK API built from the selection. */
   api?: TtobakApi;
   /** Test seam: the account scope that goes with `api`. */
@@ -169,6 +180,7 @@ const USAGE = `Usage:
   ttobak-mcp intake links channels
   ttobak-mcp intake links select [--channel <id>=<label>]... [--noninteractive]
   ttobak-mcp intake options [--calendar-responses accept,organizer,tentative,none] [--sfdc-contacts on|off]
+    [--sfdc-account-team on|off]
   ttobak-mcp intake schedule off|hourly|daily@HH:MM|twice-daily@HH:MM,HH:MM
   ttobak-mcp intake login
   ttobak-mcp intake status`;
@@ -566,6 +578,16 @@ async function sfdc(args: string[], environment: IntakeEnvironment, store: Intak
     reconcile: options['--reconcile'] === true }, environment, store);
 }
 
+/** The Mac app kills an intake process 20 minutes after it spawned it (`RUN_TIMEOUT`, mac-app intake_runner.rs). */
+export const APP_RUN_LIMIT_MS = 20 * 60_000;
+/** Left after the team step's last new account: its delivery, the status writes and the links connector. */
+export const TEAM_RESERVE_MS = 5 * 60_000;
+
+/** Epoch ms after which the team step starts no new account, counted from the process start. */
+export function teamDeadline(environment: Pick<IntakeEnvironment, 'processStartedAt'>): number {
+  return (environment.processStartedAt ?? performance.timeOrigin) + APP_RUN_LIMIT_MS - TEAM_RESERVE_MS;
+}
+
 /** One SFDC run; returns the result object it would print. */
 export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeEnvironment, store: IntakeStore,
   signedIn?: SignInOnce) {
@@ -586,9 +608,9 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     previous = store.read<RunStatus>('status.json')?.sfdc;
     let { api, scope } = await (signedIn ?? (() => signIn(selection, environment, dryRun, options.noninteractive)))();
     if (dryRun && !scope && previous?.scope && SCOPE_PATTERN.test(previous.scope)) scope = previous.scope;
-    const contactsOn = syncOptions(selection).sfdcContacts;
+    const { sfdcContacts: contactsOn, sfdcAccountTeam: teamOn } = syncOptions(selection);
     session = await openSession(environment, selected.host, selected.server, selected.pathDirs, SFDC_TOOLS,
-      contactsOn ? [SFDC_CONTACTS_TOOL] : []);
+      [...(contactsOn ? [SFDC_CONTACTS_TOOL] : []), ...(teamOn ? [SFDC_TEAM_TOOL] : [])]);
     const active = session;
     const source: SfdcSource = { call: async (tool, request) => resultJson(await active.call(tool, request), tool) };
     const result = await runSfdc({
@@ -601,7 +623,16 @@ export async function sfdcRun(options: ConnectorRunOptions, environment: IntakeE
     // SFDC result; `intake run` reports them as a partial failure.
     const sfdcContacts = api ? await sfdcContactsStep(store, source, api, scope, dryRun, environment.now(),
       contactsOn, async () => { await active.requireTool(SFDC_CONTACTS_TOOL); }) : undefined;
-    return { ok: true, connector: 'sfdc', dryRun, counts: result.counts, ...(sfdcContacts ? { sfdcContacts } : {}) };
+    // The account-team step follows on the same session; like contacts, its failures never change the SFDC result.
+    // Midway expired during contacts: the team step would only fail the same way.
+    const sfdcAccountTeam = api && sfdcContacts?.result !== 'AUTH_EXPIRED_MIDWAY' ? await sfdcTeamStep(store, environment.now(), teamOn, async () => {
+      await active.requireTool(SFDC_TEAM_TOOL);
+      return runSfdcTeam({ session: source, api, store, sourceId: selected.sourceId, ...(scope ? { scope } : {}), dryRun,
+        reconcile: options.reconcile === true, accountIds: result.assignmentIds, ownerAlias: result.ownerAlias,
+        deadline: teamDeadline(environment) });
+    }, dryRun) : undefined;
+    return { ok: true, connector: 'sfdc', dryRun, counts: result.counts, ...(sfdcContacts ? { sfdcContacts } : {}),
+      ...(sfdcAccountTeam ? { sfdcAccountTeam } : {}) };
   } catch (error) {
     const entry: NonNullable<RunStatus['sfdc']> = { ...(previous ?? {}), lastRunAt: startedAt.toISOString(),
       result: intakeCode(error), dryRun };
@@ -634,6 +665,30 @@ async function sfdcContactsStep(store: IntakeStore, source: SfdcSource, api: Tto
     const previous = status.sfdcContacts?.lastSuccessAt;
     const lastSuccessAt = step.result === 'ok' && !dryRun ? ranAt.toISOString() : previous;
     store.write({ ...status, sfdcContacts: { lastRunAt: ranAt.toISOString(), result: step.result,
+      ...(step.counts ? { counts: step.counts } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) } }, 'status.json');
+  } catch { /* the step result stands */ }
+  return step;
+}
+
+/** Runs `sfdc-account-team` and records its status entry (`lastRunAt`, `lastSuccessAt`, `result`, `counts` only). */
+async function sfdcTeamStep(store: IntakeStore, ranAt: Date, on: boolean,
+  execute: () => Promise<{ result: 'ok' | IntakeCode; counts: SfdcTeamCounts }>, dryRun: boolean,
+): Promise<{ result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcTeamCounts }> {
+  let step: { result: 'ok' | 'disabled' | IntakeCode; counts?: SfdcTeamCounts };
+  if (!on) step = { result: 'disabled' };
+  else {
+    try {
+      // A missing or changed `get_team_members` fails this step only (SCHEMA_CHANGED).
+      step = await execute();
+    } catch (error) {
+      step = { result: intakeCode(error) };
+    }
+  }
+  try {
+    const status = store.read<RunStatus>('status.json') ?? {};
+    const previous = status.sfdcAccountTeam?.lastSuccessAt;
+    const lastSuccessAt = step.result === 'ok' && !dryRun ? ranAt.toISOString() : previous;
+    store.write({ ...status, sfdcAccountTeam: { lastRunAt: ranAt.toISOString(), result: step.result,
       ...(step.counts ? { counts: step.counts } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}) } }, 'status.json');
   } catch { /* the step result stands */ }
   return step;
@@ -797,6 +852,9 @@ export async function runConnectors(options: { dryRun: boolean; noninteractive: 
       const contacts = 'sfdcContacts' in rest ? rest.sfdcContacts : undefined;
       if (contacts?.result === 'AUTH_EXPIRED_MIDWAY') { code = 'AUTH_EXPIRED_MIDWAY'; break; }
       if (contacts && contacts.result !== 'ok' && contacts.result !== 'disabled') code ??= 'PARTIAL_FAILURE';
+      const team = 'sfdcAccountTeam' in rest ? rest.sfdcAccountTeam : undefined;
+      if (team?.result === 'AUTH_EXPIRED_MIDWAY') { code = 'AUTH_EXPIRED_MIDWAY'; break; }
+      if (team && team.result !== 'ok' && team.result !== 'disabled') code ??= 'PARTIAL_FAILURE';
     } catch (error) {
       const failure = intakeCode(error);
       results[id] = { result: failure };
@@ -819,14 +877,15 @@ async function run(args: string[], environment: IntakeEnvironment, store: Intake
     ...(only ? { only } : {}) }, environment, store);
 }
 
-export interface SyncOptions { calendarResponses: CalendarResponse[]; sfdcContacts: boolean }
+export interface SyncOptions { calendarResponses: CalendarResponse[]; sfdcContacts: boolean; sfdcAccountTeam: boolean }
 
 /** The stored sync options (known names, canonical order), with the defaults for absent fields. */
 export function syncOptions(selection: Selection | null | undefined): SyncOptions {
   const stored = selection?.options?.calendarResponses;
   const calendarResponses = Array.isArray(stored)
     ? CALENDAR_RESPONSES.filter(response => stored.includes(response)) : [...DEFAULT_CALENDAR_RESPONSES];
-  return { calendarResponses, sfdcContacts: selection?.options?.sfdcContacts !== false };
+  return { calendarResponses, sfdcContacts: selection?.options?.sfdcContacts !== false,
+    sfdcAccountTeam: selection?.options?.sfdcAccountTeam !== false };
 }
 
 /**
@@ -835,9 +894,10 @@ export function syncOptions(selection: Selection | null | undefined): SyncOption
  * not selected yet, so the Settings choice applies once it is.
  */
 function options(args: string[], store: IntakeStore) {
-  const given = flags(args, { '--calendar-responses': 'value', '--sfdc-contacts': 'value' });
+  const given = flags(args, { '--calendar-responses': 'value', '--sfdc-contacts': 'value', '--sfdc-account-team': 'value' });
   const csv = given['--calendar-responses'];
   const contacts = given['--sfdc-contacts'];
+  const team = given['--sfdc-account-team'];
   let responses: CalendarResponse[] | undefined;
   if (typeof csv === 'string') {
     const parts = csv === '' ? [] : csv.split(',');
@@ -849,12 +909,16 @@ function options(args: string[], store: IntakeStore) {
   if (contacts !== undefined && contacts !== 'on' && contacts !== 'off') {
     throw new IntakeError('INVALID_ARGUMENT', '--sfdc-contacts must be on or off');
   }
+  if (team !== undefined && team !== 'on' && team !== 'off') {
+    throw new IntakeError('INVALID_ARGUMENT', '--sfdc-account-team must be on or off');
+  }
   const selection = store.read<Selection>('selection.json');
-  if (responses || contacts !== undefined) {
+  if (responses || contacts !== undefined || team !== undefined) {
     const current = syncOptions(selection);
     store.write({ ...(selection ?? {}), version: 1, options: {
       calendarResponses: responses ?? current.calendarResponses,
-      sfdcContacts: contacts === undefined ? current.sfdcContacts : contacts === 'on' } } satisfies Selection,
+      sfdcContacts: contacts === undefined ? current.sfdcContacts : contacts === 'on',
+      sfdcAccountTeam: team === undefined ? current.sfdcAccountTeam : team === 'on' } } satisfies Selection,
     'selection.json');
   }
   return { ok: true, options: syncOptions(store.read<Selection>('selection.json')) };

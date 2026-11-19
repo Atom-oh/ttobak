@@ -48,10 +48,29 @@ export interface SFDCTask {
   status: string;
 }
 
+/** Exactly the stored account-team fields (ADR-023); `alias` is lower-case. */
+export interface SFDCTeamMember {
+  sfdcAccountId: string;
+  alias: string;
+  name: string;
+  title: string;
+  teamMemberRole: string;
+  allTeamRoles: string;
+}
+
 export type Mutation =
   | { op: 'upsert'; assignment: SFDCAssignment }
   | { op: 'upsert'; task: SFDCTask }
+  | { op: 'upsert'; teamMember: SFDCTeamMember }
   | { op: 'remove'; externalId: string };
+
+/** The ledger ID of a mutation: the remove ID, SFDC account ID, task ID or `{account}:{alias}`. */
+export function mutationId(mutation: Mutation): string {
+  if (mutation.op === 'remove') return mutation.externalId;
+  if ('assignment' in mutation) return mutation.assignment.sfdcAccountId;
+  if ('task' in mutation) return mutation.task.taskId;
+  return `${mutation.teamMember.sfdcAccountId}:${mutation.teamMember.alias}`;
+}
 
 /** externalId -> fingerprint of the last delivered row. */
 export type Ledger = Record<string, string>;
@@ -217,7 +236,7 @@ export function queryLatest(now: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function fingerprint(row: SFDCAssignment | SFDCTask): string {
+export function fingerprint(row: SFDCAssignment | SFDCTask | SFDCTeamMember): string {
   return createHash('sha256').update(JSON.stringify(row)).digest('hex').slice(0, 32);
 }
 
@@ -243,8 +262,7 @@ function planSource(rows: Map<string, SFDCAssignment | SFDCTask>, key: 'assignme
     mutations.push({ op: 'remove', externalId: id });
     remove.push(id);
   }
-  const external = (mutation: Mutation) => mutation.op === 'remove' ? mutation.externalId
-    : 'assignment' in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId;
+  const external = mutationId;
   // Removals go first so no intermediate batch raises the stored count above the server's cap.
   const rank = (mutation: Mutation) => `${mutation.op === 'remove' ? 0 : 1}${external(mutation)}`;
   mutations.sort((first, second) => rank(first) < rank(second) ? -1 : rank(first) > rank(second) ? 1 : 0);
@@ -259,7 +277,7 @@ export interface SfdcPlan { assignments: SourcePlan; tasks: SourcePlan; counts: 
  * distinct account of the owner's in-window tasks (role `activity`, named
  * from the task's account); a registry entry wins.
  */
-export function planSfdc(registry: SFDCAssignment[], tasks: ParsedTask[], ledgers: Record<PerformanceSource, Ledger>,
+export function planSfdc(registry: SFDCAssignment[], tasks: ParsedTask[], ledgers: Record<'sfdc-assignments' | 'sfdc-tasks', Ledger>,
   now: Date): SfdcPlan {
   const { earliest, latest } = taskWindow(now);
   const taskRows = new Map<string, SFDCTask>();
@@ -304,7 +322,7 @@ export interface SfdcSource {
 }
 
 /** Follows `cursor` pages to the end; a capped, cursorless or short read fails. */
-async function readAll(source: SfdcSource, tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+export async function readAll(source: SfdcSource, tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>[]> {
   const records: Record<string, unknown>[] = [];
   const seen = new Set<string>();
   let after: string | undefined;
@@ -366,7 +384,7 @@ function validReceipt(receipt: unknown, body: PerformanceSyncBody): number {
   return revision;
 }
 
-async function send(api: TtobakApi, store: IntakeStore, state: SfdcState): Promise<void> {
+export async function send(api: TtobakApi, store: IntakeStore, state: SfdcState): Promise<void> {
   const pending = state.pending!;
   let receipt: unknown;
   try {
@@ -387,6 +405,12 @@ async function send(api: TtobakApi, store: IntakeStore, state: SfdcState): Promi
     throw new IntakeError('TTOBAK_UNAVAILABLE', `${state.source} sync receipt invalid; the identical batch will be retried`);
   }
   const removed = new Set(pending.remove);
+  // The server deletes the account team of a removed assignment when this receipt
+  // is issued; record that before the ledger moves on, so the team step forgets
+  // those rows even if a later step of this run fails.
+  if (state.source === 'sfdc-assignments' && pending.remove.length) {
+    recordForgottenTeamAccounts(store, state.sourceId, state.scope, pending.remove);
+  }
   state.ledger = Object.fromEntries([...Object.entries(state.ledger).filter(([id]) => !removed.has(id)),
     ...Object.entries(pending.set)]);
   state.revision = revision;
@@ -394,7 +418,21 @@ async function send(api: TtobakApi, store: IntakeStore, state: SfdcState): Promi
   store.write(state, ...statePath(state));
 }
 
-async function serverRevisions(api: TtobakApi): Promise<Record<PerformanceSource, number>> {
+/** Accounts whose team rows the server deleted and the team ledger has not yet forgotten. */
+export interface ForgottenTeamAccounts { version: 1; accounts: string[] }
+
+export function forgottenTeamPath(sourceId: string, scope: string): string[] {
+  return ['sfdc', sourceId, scope, 'sfdc-account-team.forget.json'];
+}
+
+function recordForgottenTeamAccounts(store: IntakeStore, sourceId: string, scope: string, accounts: string[]): void {
+  const current = store.read<ForgottenTeamAccounts>(...forgottenTeamPath(sourceId, scope));
+  const known = Array.isArray(current?.accounts) ? current.accounts.filter(id => typeof id === 'string') : [];
+  const next: ForgottenTeamAccounts = { version: 1, accounts: [...new Set([...known, ...accounts])].sort() };
+  store.write(next, ...forgottenTeamPath(sourceId, scope));
+}
+
+export async function serverRevisions(api: TtobakApi): Promise<Record<PerformanceSource, number>> {
   let value: unknown;
   try { value = await api.performanceSources(); } catch (error) {
     if (deliveryFailure(error).kind === 'login') throw new IntakeError('TTOBAK_LOGIN_REQUIRED');
@@ -402,12 +440,14 @@ async function serverRevisions(api: TtobakApi): Promise<Record<PerformanceSource
   }
   const sources = record(value) && Array.isArray(value.sources) ? value.sources : null;
   if (!sources) throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance source status has an unexpected shape');
-  const result = { 'sfdc-assignments': 0, 'sfdc-tasks': 0 };
+  const result = { 'sfdc-assignments': 0, 'sfdc-tasks': 0, 'sfdc-account-team': 0 };
   for (const item of sources) {
     if (!record(item) || typeof item.source !== 'string' || !Number.isSafeInteger(item.revision) || (item.revision as number) < 0) {
       throw new IntakeError('TTOBAK_UNAVAILABLE', 'performance source status has an unexpected shape');
     }
-    if (item.source === 'sfdc-assignments' || item.source === 'sfdc-tasks') result[item.source] = item.revision as number;
+    if (item.source === 'sfdc-assignments' || item.source === 'sfdc-tasks' || item.source === 'sfdc-account-team') {
+      result[item.source] = item.revision as number;
+    }
   }
   return result;
 }
@@ -433,13 +473,12 @@ async function serverAssignmentIds(api: TtobakApi): Promise<string[]> {
   });
 }
 
-async function deliver(api: TtobakApi, store: IntakeStore, state: SfdcState, plan: SourcePlan): Promise<void> {
+export async function deliver(api: TtobakApi, store: IntakeStore, state: SfdcState, plan: SourcePlan): Promise<void> {
   const groups = batches(plan.mutations);
   if (!groups.length) groups.push([]);
   for (let index = 0; index < groups.length; index++) {
     const group = groups[index];
-    const ids = new Set(group.map(mutation => mutation.op === 'remove' ? mutation.externalId
-      : 'assignment' in mutation ? mutation.assignment.sfdcAccountId : mutation.task.taskId));
+    const ids = new Set(group.map(mutationId));
     state.pending = {
       body: { batchId: randomUUID(), expectedRevision: state.revision!, complete: index === groups.length - 1,
         mutations: group as unknown as Record<string, unknown>[] },
@@ -467,7 +506,11 @@ export interface SfdcRunOptions {
 
 export interface SfdcRunResult {
   counts: SfdcCounts;
-  revisions: Record<PerformanceSource, number | null>;
+  revisions: Record<'sfdc-assignments' | 'sfdc-tasks', number | null>;
+  /** SFDC account IDs of the planned assignment snapshot, for the account-team step. */
+  assignmentIds: string[];
+  /** The owner's SFDC alias. */
+  ownerAlias: string;
 }
 
 export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
@@ -512,7 +555,8 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
   const [assignmentState, taskState] = states;
   const plan = planSfdc(registry, tasks, { 'sfdc-assignments': assignmentState.ledger, 'sfdc-tasks': taskState.ledger }, now);
   const revisions = () => ({ 'sfdc-assignments': assignmentState.revision, 'sfdc-tasks': taskState.revision });
-  if (dryRun) return { counts: plan.counts, revisions: revisions() };
+  const snapshot = { assignmentIds: plannedAssignmentIds(registry, tasks, now), ownerAlias: personal.alias };
+  if (dryRun) return { counts: plan.counts, revisions: revisions(), ...snapshot };
   // The server rejects growth past this cap, so an oversized snapshot could never converge.
   if (plan.counts.assignments.fetched > MAX_ASSIGNMENTS) {
     throw new IntakeError('ASSIGNMENT_CAP_EXCEEDED', `${plan.counts.assignments.fetched} assignments exceed ${MAX_ASSIGNMENTS}`);
@@ -520,5 +564,15 @@ export async function runSfdc(options: SfdcRunOptions): Promise<SfdcRunResult> {
 
   await deliver(options.api!, store, assignmentState, plan.assignments);
   await deliver(options.api!, store, taskState, plan.tasks);
-  return { counts: plan.counts, revisions: revisions() };
+  return { counts: plan.counts, revisions: revisions(), ...snapshot };
+}
+
+/** The account IDs `planSfdc` stores as assignments: registry entries plus in-window task accounts. */
+function plannedAssignmentIds(registry: SFDCAssignment[], tasks: ParsedTask[], now: Date): string[] {
+  const { earliest, latest } = taskWindow(now);
+  const ids = new Set(registry.map(item => item.sfdcAccountId));
+  for (const { task } of tasks) {
+    if (task.sfdcAccountId && task.activityDate >= earliest && task.activityDate <= latest) ids.add(task.sfdcAccountId);
+  }
+  return [...ids].sort();
 }
