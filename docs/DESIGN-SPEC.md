@@ -60,9 +60,11 @@ textareas use `field-sizing-content`; `fitToContent` (`lib/fieldSizing.ts`) meas
 ## Astryx pilot
 
 Astryx (`@astryxdesign/core`, beta, pinned exactly with its CLI) renders only
-Settings › Customer update sources, through `components/astryx/AstryxScope`.
-The scope imports Astryx CSS, so other routes do not load it, and passes the
-`useTheme` mode to `<Theme>`. `globals.css` declares
+these Settings sections, each wrapped in `components/astryx/AstryxScope`: Mac app
+install, user invitation, meeting detection, and customer update sources with
+the Mac Slack link picker. The scope imports Astryx CSS, so other routes do not
+load it, passes the `useTheme` mode to `<Theme>`, and loads the shipped `ko-KR`
+catalog so built-in strings (field indicators, loading labels) are Korean. `globals.css` declares
 `@layer reset, theme, base, astryx-base, astryx-theme, components, utilities`
 above the Tailwind import; moving it below inverts the cascade. Astryx's
 `tailwind-theme.css` bridge is not imported because it redefines app utility
@@ -73,10 +75,13 @@ text colors and the system font stack; `npx astryx theme build` regenerates its
 `astryx init`: it writes a managed block into `AGENTS.md`/`CLAUDE.md`.
 
 Astryx layered surfaces (Selector, menus, tooltips, popovers) need CSS anchor
-positioning (Safari 26), so the pilot uses only non-layered components; the kind
-choice is a SegmentedControl. Theme colors need `@scope` and `light-dark()`
+positioning (Safari 26), so the pilot uses only non-layered components: the kind
+choice is a SegmentedControl, no `tooltip`/`labelTooltip`/`disabledMessage` prop
+is set, and the install CodeBlock keeps the app's `CopyButton` instead of its own
+tooltip copy button. Astryx buttons disable with `aria-disabled`, so form submit
+handlers guard against a second Enter while pending. Theme colors need `@scope` and `light-dark()`
 (Safari 17.4/17.5), above the macOS app's 14.2 floor: unupdated macOS 14.2–14.4
-WebViews may render this section with default colors.
+WebViews may render these sections with default colors.
 
 ## Workspace sizing
 

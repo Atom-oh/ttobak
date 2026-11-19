@@ -6,10 +6,17 @@ import {
   SYNC_OPTIONS_COPY, errorCode, intakeCodeLabel, linkChannelList, linkChannelsOf, linkFailure, linkSelectionProblem,
   linkSelectionSettled, nextLinkDraft, visibleLinkChannels, type LinkChannel, type LinkChannelChoice,
 } from '@/lib/intake';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { CheckboxInput } from '@astryxdesign/core/CheckboxInput';
+import { Heading } from '@astryxdesign/core/Heading';
+import { HStack } from '@astryxdesign/core/HStack';
+import { StackItem } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { VStack } from '@astryxdesign/core/VStack';
 import { getIntakeState, isCommandNotFound, listLinkChannels, onIntakeFinished, selectLinkChannels, useIsMacApp } from '@/lib/tauri';
 
-const INPUT_CLASS =
-  'w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400';
 
 /** Korean text for a rejected links command: reuse the intake code copy where it exists. */
 function failureText(err: unknown, saving: boolean): string {
@@ -164,95 +171,83 @@ export function SlackLinkSourcesSettings({ onSaved }: { onSaved?: () => void | P
   const visible = visibleLinkChannels(channels, query);
 
   return (
-    <div className="space-y-4">
-      <h4 className="text-sm font-semibold text-slate-900 dark:text-text-main">{COPY['mac.links.setupLabel']}</h4>
+    <VStack gap={4}>
+      <Heading level={4}>{COPY['mac.links.setupLabel']}</Heading>
 
-      {error && (
-        <div role="alert" className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
-          {error}
-        </div>
-      )}
+      {error && <Banner status="error" title={error} role="alert" />}
 
       {chosen.length > 0 && (
-        <ul className="space-y-2">
+        <VStack gap={2}>
           {chosen.map(item => (
-            <li key={item.id} className="flex items-center gap-2">
-              <input
-                type="text"
-                aria-label={`${nameOf(item)} ${COPY['settings.sources.labelLabel']}`}
-                value={item.label}
-                onChange={event => setLabel(item.id, event.target.value)}
-                disabled={busy}
-                className={INPUT_CLASS}
-              />
-              <button
-                type="button"
-                aria-label={`${nameOf(item)} ${COPY['settings.sources.delete']}`}
+            <HStack key={item.id} gap={2} vAlign="center">
+              <StackItem size="fill">
+                <TextInput
+                  label={`${nameOf(item)} ${COPY['settings.sources.labelLabel']}`}
+                  isLabelHidden
+                  value={item.label}
+                  onChange={value => setLabel(item.id, value)}
+                  isDisabled={busy}
+                />
+              </StackItem>
+              <Button
+                size="sm"
+                variant="destructive"
+                label={`${nameOf(item)} ${COPY['settings.sources.delete']}`}
                 onClick={() => {
                   removed.current.add(item.id);
                   edit(prev => prev.filter(other => other.id !== item.id));
                 }}
-                disabled={busy}
-                className="shrink-0 px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-40"
+                isDisabled={busy}
               >
                 {COPY['settings.sources.delete']}
-              </button>
-            </li>
+              </Button>
+            </HStack>
           ))}
-        </ul>
+        </VStack>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={load}
-          disabled={busy || !ready}
-          className="px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
-        >
-          {COPY['mac.links.load']}
-        </button>
-        <button
-          type="button"
+      <HStack gap={2} wrap="wrap">
+        <Button variant="ghost" label={COPY['mac.links.load']} onClick={load} isDisabled={busy || !ready} />
+        <Button
+          variant="primary"
+          label={COPY['mac.links.save']}
           onClick={save}
-          disabled={busy || !ready || problem !== null}
-          className="px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
-        >
-          {COPY['mac.links.save']}
-        </button>
-      </div>
+          isDisabled={busy || !ready || problem !== null}
+        />
+      </HStack>
 
-      {problemText && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{problemText}</p>}
+      {problemText && <Banner status="error" title={problemText} role="alert" />}
 
       {channels && (
-        <div className="space-y-2">
-          <input
+        <VStack gap={2}>
+          <TextInput
             type="search"
-            aria-label={COPY['mac.links.search']}
+            label={COPY['mac.links.search']}
+            isLabelHidden
+            placeholder={COPY['mac.links.search']}
             value={query}
-            onChange={event => setQuery(event.target.value)}
-            disabled={busy}
-            className={INPUT_CLASS}
+            onChange={setQuery}
+            isDisabled={busy}
           />
-          <ul className="max-h-64 overflow-y-auto space-y-1">
-            {visible.rows.map(channel => (
-              <li key={channel.id}>
-                <label className="flex items-center gap-2 px-2 py-1 text-sm text-slate-700 dark:text-text-secondary rounded-lg hover:bg-slate-50 dark:hover:bg-white/5">
-                  <input
-                    type="checkbox"
-                    checked={chosen.some(item => item.id === channel.id)}
-                    onChange={event => toggle(channel, event.target.checked)}
-                    disabled={busy}
-                  />
-                  <span className="break-all">{channel.name}</span>
-                </label>
-              </li>
-            ))}
-          </ul>
-          {visible.more && <p className="text-xs text-slate-400 dark:text-text-muted">{COPY['mac.links.narrowSearch']}</p>}
-        </div>
+          {/* Native max-height scroll: ScrollableArea takes only a fixed height. */}
+          <div className="max-h-64 overflow-y-auto">
+            <VStack gap={1}>
+              {visible.rows.map(channel => (
+                <CheckboxInput
+                  key={channel.id}
+                  label={channel.name}
+                  value={chosen.some(item => item.id === channel.id)}
+                  onChange={checked => toggle(channel, checked)}
+                  isDisabled={busy}
+                />
+              ))}
+            </VStack>
+          </div>
+          {visible.more && <Text type="supporting" size="sm">{COPY['mac.links.narrowSearch']}</Text>}
+        </VStack>
       )}
 
-      <p className="text-xs text-slate-400 dark:text-text-muted">{COPY['mac.links.note']}</p>
-    </div>
+      <Text type="supporting" size="sm" as="p">{COPY['mac.links.note']}</Text>
+    </VStack>
   );
 }

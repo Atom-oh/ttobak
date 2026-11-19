@@ -118,8 +118,8 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
   };
 
   return (
-    <VStack gap={6}>
-      <AstryxScope>
+    <AstryxScope>
+      <VStack gap={6}>
         {loading ? (
           <Center padding={10}>
             <Spinner size="xl" />
@@ -221,10 +221,10 @@ export function CustomerUpdateSourcesSettings({ userId }: { userId: string }) {
             </form>
           </VStack>
         )}
-      </AstryxScope>
 
-      {/* Mounted after the first list load, as before, so a Slack save cannot race it. */}
-      {!loading && <SlackLinkSourcesSettings onSaved={load} />}
-    </VStack>
+        {/* Mounted after the first list load, as before, so a Slack save cannot race it. */}
+        {!loading && <SlackLinkSourcesSettings onSaved={load} />}
+      </VStack>
+    </AstryxScope>
   );
 }
