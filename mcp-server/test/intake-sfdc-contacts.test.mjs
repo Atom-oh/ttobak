@@ -726,3 +726,17 @@ test('auth_expired_midway_stops', async t => {
   assert.equal(output.results.sfdc.sfdcContacts.result, 'AUTH_EXPIRED_MIDWAY');
   assert.equal(api.syncs.length, 0, 'nothing is sent after Midway expires');
 });
+
+test('a last page short of totalCount is an incomplete read, not a failure', async () => {
+  // AWSentral search_contacts can end (hasNextPage false) with fewer records than totalCount.
+  const records = [contactRecord(sfdcId('003', 900), 'Kept', 'Person'), contactRecord(sfdcId('003', 901), 'Other', 'Person')];
+  const short = scriptedSource(() => ({ data: { resultRecords: records, totalCount: '5', hasNextPage: false, cursor: null } }));
+  const api = contactsApi({ mappings: [[ACCOUNT_A, 'acct-1']] });
+  const result = await runSfdcContacts({ session: short, api, dryRun: false });
+  assert.equal(result.result, 'ok');
+  assert.equal(result.counts.incomplete, 1);
+  assert.equal(result.counts.fetched, 2);
+  // Like any partial read: no departure snapshot and no links or creates inferred.
+  assert.ok(api.syncs.every(sync => !sync.body.snapshotComplete), 'no departure snapshot');
+  assert.equal(result.counts.deferredIncomplete, 2);
+});

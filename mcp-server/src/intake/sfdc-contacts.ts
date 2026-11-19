@@ -310,7 +310,8 @@ interface AccountRead {
 /**
  * Every page of one SFDC account, up to 5,000 contacts and 11 pages. An empty
  * page that claims more, or any repeated cursor, fails closed. More than 5,000
- * kept IDs (uneven pages) make the read incomplete and are cut to 5,000. Only
+ * kept IDs (uneven pages), or a last page short of totalCount, make the read
+ * incomplete; the IDs are cut to 5,000. Only
  * Midway expiry throws.
  */
 async function readAccount(source: SfdcSource, accountId: string): Promise<AccountRead> {
@@ -340,8 +341,9 @@ async function readAccount(source: SfdcSource, accountId: string): Promise<Accou
         else { read.people.push(person); read.ids.push(person.id); }
       }
       if (!page.hasNextPage) {
-        if (read.fetched < page.totalCount) throw parseFailed('search_contacts result is incomplete');
-        read.complete = true;
+        // AWSentral can end with fewer records than totalCount (records the caller cannot see):
+        // an incomplete read like the 5,000 cap, not a failure. It proves no departure.
+        read.complete = read.fetched >= page.totalCount;
         break;
       }
       if (!page.records.length) throw parseFailed('search_contacts returned an empty page with more pages');

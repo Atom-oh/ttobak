@@ -22,6 +22,7 @@ manifests.
 
 ### Fixed
 
+- Local intake: SFDC contacts no longer fail with PARSE_FAILED when AWSentral ends an account with fewer contacts than its total; that account counts as incomplete (no departure inferred) and the step succeeds.
 - Local intake reads SpecReq again: a tool result that spec-req-mcp 0.1.5 nests inside its text block is unwrapped once, so the SpecReq login check no longer fails with IDENTITY_MISMATCH.
 - The SA performance report can save small tool results in its output folder again: its write permission is an `Edit(...)` rule, the only form Claude Code applies to file writes.
 - The SA performance report runs on the owner's `model` setting, else Fable (it ran on the CLI default Sonnet), and its prompt names the exact script command form, so calendar, interview, Slack thread and PFR/CI counts are no longer skipped.
