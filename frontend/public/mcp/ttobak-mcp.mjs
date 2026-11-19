@@ -29410,8 +29410,7 @@ async function readAccount(source, accountId) {
         }
       }
       if (!page2.hasNextPage) {
-        if (read.fetched < page2.totalCount) throw parseFailed("search_contacts result is incomplete");
-        read.complete = true;
+        read.complete = read.fetched >= page2.totalCount;
         break;
       }
       if (!page2.records.length) throw parseFailed("search_contacts returned an empty page with more pages");

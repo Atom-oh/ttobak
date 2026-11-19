@@ -723,11 +723,14 @@ step: the failure is in its `sfdcContacts.result` and in `status.json`; only
   ambiguous (for example shared by two SFDC people) is not a name candidate.
   Several candidates, or several SFDC contacts for one candidate, are
   `ambiguous` and skipped this run. No match creates a contact. When the
-  Account's read is incomplete (a failed page, a cap, a truncated mapping
-  listing or more than 20 SFDC accounts), a missing person could make a match
+  Account's read is incomplete (a failed page, a cap, a last page short of
+  `totalCount`, a truncated mapping listing or more than 20 SFDC accounts), a
+  missing person could make a match
   ambiguous, so only contacts that already carry the SFDC link are filled;
   every other unsuppressed SFDC contact is `deferredIncomplete` (no email or
   name link and no create) until a complete run.
+  A short last page is not a failure: AWSentral ends some accounts with fewer
+  records than `totalCount`, so the step stays `ok` and counts `incomplete`.
 - **Batch.** One `POST /api/accounts/{id}/contacts/sfdc-sync` per Account: links
   first, then creates, each ordered by SFDC ID, at most 200 items and 512 KiB;
   the rest count as `skippedCap` and follow on later runs. Items carry only the
