@@ -2,6 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
+import { AstryxScope } from './astryx/AstryxScope';
+import { Badge } from '@astryxdesign/core/Badge';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { Card } from '@astryxdesign/core/Card';
+import { Heading } from '@astryxdesign/core/Heading';
+import { HStack } from '@astryxdesign/core/HStack';
+import { Text } from '@astryxdesign/core/Text';
+import { VStack } from '@astryxdesign/core/VStack';
 
 interface ConnectorState {
   profile: 'read' | 'write';
@@ -62,54 +71,76 @@ export function ConnectorSettings({ isAdmin }: { isAdmin: boolean }) {
     }
   }
 
-  if (loading) return <p className="text-sm text-slate-500" role="status">연결 권한 확인 중…</p>;
+  if (loading) {
+    return (
+      <AstryxScope>
+        <div role="status">
+          <Text type="supporting">연결 권한 확인 중…</Text>
+        </div>
+      </AstryxScope>
+    );
+  }
   if (!error && connectors.length === 0) return null;
   return (
-    <section className="space-y-4" aria-label="AI 연결 권한">
-      <h3 className="section-header">AI 연결 권한</h3>
-      <p className="text-sm text-slate-600 dark:text-text-muted">
-        연결된 AI는 내가 볼 수 있는 자료만 읽을 수 있습니다. 개인 메모 작성은 별도로 1시간 동안 허용할 수 있습니다.
-      </p>
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-      {notice && <p role="status" className="text-sm text-primary">{notice}</p>}
-      {connectors.map(item => {
-        const blocked = item.approval?.blocked === true;
-        const writeApproval = !blocked && !item.approval?.revoked &&
-          (item.approval?.expiresAt ?? 0) * 1000 > now && item.approval?.capabilities.includes('write');
-        const writing = item.enabled && item.maximum.includes('write') && writeApproval;
-        const controlsDisabled = busy || !stateCurrent;
-        const label = item.profile === 'read' ? '자료 읽기 연결' : '개인 메모 작성 연결';
-        const buttonClass = 'rounded-lg border border-slate-200 dark:border-white/10 px-3 py-2 text-sm disabled:opacity-40';
-        return (
-          <div key={item.clientId} className="rounded-xl border border-slate-200 dark:border-white/10 p-4 space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <h4 className="font-semibold">{label}</h4>
-              <span className="text-sm text-slate-500">
-                {!item.enabled ? '관리자에 의해 비활성화됨' : blocked ? '차단됨' : writing ? '읽기 및 개인 메모 작성 허용' : '읽기 허용'}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {blocked ? (
-                <button className={buttonClass} disabled={controlsDisabled || !item.enabled} onClick={() => change(item, 'allow_read')}>읽기 허용</button>
-              ) : (
-                <button className={buttonClass} disabled={controlsDisabled || item.policyGeneration === 0} onClick={() => change(item, 'block')}>이 연결 차단</button>
-              )}
-              {item.profile === 'write' && (
-                <button className={buttonClass} disabled={controlsDisabled || item.policyGeneration === 0 ||
-                  (!writeApproval && (!item.enabled || blocked || !item.maximum.includes('write')))}
-                  onClick={() => change(item, writeApproval ? 'revoke' : 'approve_write')}>
-                  {writeApproval ? '쓰기 허용 해제' : '개인 메모 작성 1시간 허용'}
-                </button>
-              )}
-              {isAdmin && (
-                <button className={buttonClass} disabled={controlsDisabled} onClick={() => change(item, 'toggle_client')}>
-                  {item.enabled ? '전체 사용자 연결 비활성화' : '전체 사용자 연결 활성화'}
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      })}
+    <section aria-label="AI 연결 권한">
+      <h3 className="section-header mb-4">AI 연결 권한</h3>
+      <AstryxScope>
+        <VStack gap={4}>
+          <Text type="supporting" as="p">
+            연결된 AI는 내가 볼 수 있는 자료만 읽을 수 있습니다. 개인 메모 작성은 별도로 1시간 동안 허용할 수 있습니다.
+          </Text>
+          {error && <Banner status="error" title={error} role="alert" />}
+          {notice && <div role="status"><Banner status="success" title={notice} /></div>}
+          {connectors.map(item => {
+            const blocked = item.approval?.blocked === true;
+            const writeApproval = !blocked && !item.approval?.revoked &&
+              (item.approval?.expiresAt ?? 0) * 1000 > now && item.approval?.capabilities.includes('write');
+            const writing = item.enabled && item.maximum.includes('write') && writeApproval;
+            const controlsDisabled = busy || !stateCurrent;
+            const label = item.profile === 'read' ? '자료 읽기 연결' : '개인 메모 작성 연결';
+            const status = !item.enabled
+              ? { label: '관리자에 의해 비활성화됨', variant: 'neutral' as const }
+              : blocked ? { label: '차단됨', variant: 'error' as const }
+                : writing ? { label: '읽기 및 개인 메모 작성 허용', variant: 'warning' as const }
+                  : { label: '읽기 허용', variant: 'success' as const };
+            return (
+              <Card key={item.clientId}>
+                <VStack gap={3}>
+                  <HStack gap={2} vAlign="center" wrap="wrap">
+                    <Heading level={4}>{label}</Heading>
+                    <Badge label={status.label} variant={status.variant} />
+                  </HStack>
+                  <HStack gap={2} wrap="wrap">
+                    {blocked ? (
+                      <Button label="읽기 허용" isDisabled={controlsDisabled || !item.enabled}
+                        onClick={() => change(item, 'allow_read')} />
+                    ) : (
+                      <Button label="이 연결 차단" variant="destructive" isDisabled={controlsDisabled || item.policyGeneration === 0}
+                        onClick={() => change(item, 'block')} />
+                    )}
+                    {item.profile === 'write' && (
+                      <Button
+                        label={writeApproval ? '쓰기 허용 해제' : '개인 메모 작성 1시간 허용'}
+                        isDisabled={controlsDisabled || item.policyGeneration === 0 ||
+                          (!writeApproval && (!item.enabled || blocked || !item.maximum.includes('write')))}
+                        onClick={() => change(item, writeApproval ? 'revoke' : 'approve_write')}
+                      />
+                    )}
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        label={item.enabled ? '전체 사용자 연결 비활성화' : '전체 사용자 연결 활성화'}
+                        isDisabled={controlsDisabled}
+                        onClick={() => change(item, 'toggle_client')}
+                      />
+                    )}
+                  </HStack>
+                </VStack>
+              </Card>
+            );
+          })}
+        </VStack>
+      </AstryxScope>
     </section>
   );
 }
