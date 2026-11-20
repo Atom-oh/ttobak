@@ -90,7 +90,7 @@ for that visit; they are not stored or logged, and neither is the slide text. La
 when over the same bounds, counted in the byte budget) with one more prompt
 sentence: write a word that sounds like a term as the slides spell it. For the
 light-edit check the terms are left out of both texts before the scripts are
-compared, so "엔진엑스" may become "Nginx". Accepted limits: PDF and Keynote are not
+compared, so a name heard as Korean syllables may become its Latin spelling ("Nginx"). Accepted limits: PDF and Keynote are not
 read, the slide text goes to the model on the user's own AWS profile, and a term
 that also is an everyday word can be applied where it does not belong.
 
