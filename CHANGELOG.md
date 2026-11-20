@@ -18,6 +18,7 @@ manifests.
 - SA activity page: a create-customer button on unmapped SFDC accounts and a customer onboarding section that invites the SFDC account team's AM, TAM and SA to the mapped Account, at most 20 per click.
 - SA dashboard onboarding API: an owner-private `sfdc-account-team` sync source, an onboarding read that joins the SFDC account team with the mapped Account's members, and an invite route that invites selected team members (at most 20 per request) through the existing member-add rules.
 - Local intake: a new `sfdc-account-team` step after the SFDC sync collects each assigned account's SFDC team (alias, name, title and roles only; at most 100 per account) for onboarding; `intake options --sfdc-account-team on|off` turns it off.
+- Expand button on the Q&A/reference panel to view it as a large overlay without losing chat history.
 
 ### Changed
 
@@ -26,6 +27,7 @@ manifests.
 
 ### Fixed
 
+- Customer onboarding: one Account that fails to load no longer fails the whole list; the list says how many could not be read. The SFDC team step also stops between result pages at the run deadline and keeps its rotation point when it reached no account.
 - Live Q&A: question detection during a recording returned nothing when the model's reasoning used up the output limit, so only the three generic prompts showed and automatic answers never started. Reasoning is now off for detection, and it adds follow-up questions when few were asked.
 - Local intake: SFDC contacts no longer fail with PARSE_FAILED when AWSentral ends an account with fewer contacts than its total; that account counts as incomplete (no departure inferred) and the step succeeds.
 - Local intake reads SpecReq again: a tool result that spec-req-mcp 0.1.5 nests inside its text block is unwrapped once, so the SpecReq login check no longer fails with IDENTITY_MISMATCH.

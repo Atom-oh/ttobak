@@ -34,7 +34,8 @@ export interface OnboardingSummaryItem {
   roles: Partial<Record<OnboardingCoreRole, OnboardingSummaryStatus>>;
 }
 
-export interface OnboardingSummary { items: OnboardingSummaryItem[]; truncated: boolean }
+/** `unavailable`: mapped Accounts whose read failed (absent from older servers). */
+export interface OnboardingSummary { items: OnboardingSummaryItem[]; truncated: boolean; unavailable?: number }
 
 export type OnboardingInviteOutcome = 'added' | 'invited' | 'already_member' | 'failed' | 'not_attempted';
 
@@ -55,6 +56,7 @@ export const ONBOARDING_COPY = {
   description: 'SFDC 계정 팀의 AM, TAM, SA를 TTOBAK 어카운트에 초대합니다. 이 목록은 나만 볼 수 있습니다.',
   empty: '연결된 SFDC 계정의 팀 정보가 없습니다. Mac에서 SFDC 수집을 실행하면 팀이 표시됩니다.',
   truncated: '연결된 어카운트가 100개를 넘어 앞의 100개만 표시합니다.',
+  unavailable: (count: number) => `어카운트 ${count}개를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.`,
   inviteTeam: '팀 초대',
   createCustomer: '고객 만들기',
   creating: '만드는 중…',
