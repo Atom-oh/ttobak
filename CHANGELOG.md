@@ -29,6 +29,8 @@ manifests.
 
 ### Fixed
 
+- Mac app 0.2.5 caption windows: a window that shows captions lets clicks through to the slides or app under it; only the move handle (top centre), the close button and the resize grip take the pointer, and they are drawn larger. The window is moved by the handle only, no longer by dragging anywhere on it.
+- Mac app 0.2.5 caption windows: opening a caption window no longer leaves the main TTOBAK window behind other apps (focus returns to it when the user was working in it), and a visible caption window is no longer re-ordered to the front on every caption update.
 - Customer onboarding: one Account that fails to load no longer fails the whole list; the list says how many could not be read. The SFDC team step also stops between result pages at the run deadline and keeps its rotation point when it reached no account.
 - Live Q&A: question detection during a recording returned nothing when the model's reasoning used up the output limit, so only the three generic prompts showed and automatic answers never started. Reasoning is now off for detection, and it adds follow-up questions when few were asked.
 - Recording (desktop web): the capture button below the recording card captures a screen, window or tab instead of opening the camera (#1013).

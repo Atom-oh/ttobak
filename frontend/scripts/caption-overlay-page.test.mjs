@@ -118,7 +118,7 @@ const entry = (lang, id, text, isFinal, order = 0) => ({ lang, kind: 'entry', id
 
 test('listens only to events sent to its own window', () => {
   const page = loadPage('en');
-  assert.deepEqual(page.listeners.map((l) => l.event).sort(), ['caption-style', 'caption-update']);
+  assert.deepEqual(page.listeners.map((l) => l.event).sort(), ['caption-hover', 'caption-style', 'caption-update']);
   for (const l of page.listeners) {
     assert.deepEqual(JSON.parse(JSON.stringify(l.options)), { target: { kind: 'WebviewWindow', label: 'caption-en' } });
   }
@@ -228,12 +228,31 @@ test('the grip ignores non-primary buttons and works without the window API', ()
 test('page chrome is a drag handle and a non-drag grip, with no text', () => {
   assert.match(html, /<div id="move" class="chrome" data-tauri-drag-region aria-hidden="true">⠿<\/div>/);
   assert.match(html, /<div id="grip" class="chrome" data-tauri-drag-region="false"/);
-  assert.match(html, /<body data-tauri-drag-region="deep">/);
-  assert.match(html, /html:hover \.chrome/);
+  // Only the handle moves the window: the rest lets clicks through, and
+  // the controls show on Rust's pointer report, not on :hover.
+  assert.match(html, /<body>/);
+  assert.doesNotMatch(html, /data-tauri-drag-region="deep"/);
+  assert.match(html, /html\.hover \.chrome/);
+  assert.doesNotMatch(html, /html:hover/);
   assert.doesNotMatch(html, /console\.|fetch\(|XMLHttpRequest|innerHTML/);
 });
 
 const clear = (lang) => ({ lang, kind: 'clear', id: '', order: 0, text: '', isFinal: false });
+
+test('the controls show while the pointer is over a window with text', () => {
+  const page = loadPage('en');
+  page.emit('caption-hover', { lang: 'en', over: true });
+  assert.ok(page.rootClasses.has('hover'));
+  page.emit('caption-hover', { lang: 'ko', over: false });
+  assert.ok(page.rootClasses.has('hover'), 'another language changes nothing');
+  page.emit('caption-hover', { lang: 'en', over: false });
+  assert.ok(!page.rootClasses.has('hover'));
+  page.emit('caption-hover', { lang: 'en', over: true });
+  page.emit('caption-update', clear('en'));
+  assert.ok(!page.rootClasses.has('hover'), 'an idle window hides its controls');
+  page.emit('caption-hover', { lang: 'en', over: true });
+  assert.ok(!page.rootClasses.has('hover'), 'and stays bare while idle');
+});
 const idleReports = (page) => page.invokes.filter(([cmd]) => cmd === 'caption_overlay_idle').map(([, a]) => a.idle);
 
 test('an idle window reports idle so clicks pass through, and takes them back with text', () => {
