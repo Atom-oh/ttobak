@@ -77,7 +77,7 @@ export default function ReferenceTabs({ qaPanel, referencePanel, activeTab, onTa
           onClick={() => setExpanded((value) => !value)}
           className="flex items-center justify-center w-10 shrink-0 text-slate-500 dark:text-text-muted hover:text-primary transition-colors"
         >
-          <span aria-hidden="true" className="material-symbols-outlined text-lg">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
+          <span aria-hidden="true" className="material-symbols-outlined text-lg">{expanded ? 'close' : 'fullscreen'}</span>
         </button>
       </div>
       <div className={`flex-1 min-h-0 flex flex-col ${tab === 'qa' ? '' : 'hidden'}`}>{qaPanel}</div>
