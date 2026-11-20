@@ -259,7 +259,8 @@ longer exists (`OverconstrainedError`/`NotFoundError`, for example after an app
 rebuild), `lib/micStream.ts` opens the default microphone, the saved choice is
 cleared and an amber notice asks the user to reselect.
 In System Audio mode, `NativeMicSelector` offers automatic (follow the
-meeting app's microphone) or a specific device, remembers the choice per viewer,
+meeting app's microphone), a specific device or, before a capture starts, no
+microphone (only the sound the Mac plays), remembers the choice per viewer,
 and the recording status names the microphone in use. With an app build that
 supports it (ADR-017, #621), the record page also reacts to native events: the
 picker stays available during a recording only when the start response reports

@@ -87,7 +87,14 @@ without a user confirmation.
 - A recording uses the microphone the user picks in System Audio mode, or by
   default the input device the meeting app is capturing from (process
   `Devices`, input scope), else the system default. This keeps multi-microphone
-  and clamshell setups aligned with what Zoom hears. `switch_recording_input`
+  and clamshell setups aligned with what Zoom hears. The request `none`
+(`input_select::NO_MICROPHONE`) starts a capture of system audio only, with no
+microphone and no warning, for a user who wants the meeting app's sound without
+their own voice or the room; it is accepted at start only, and
+`switch_recording_input` refuses it. An older app build would treat `none` as a
+missing device and capture a microphone, so the page offers the choice and sends
+`none` only after the `capture_features` command reports `noMicrophone`, and
+otherwise refuses the start before any capture. `switch_recording_input`
   changes the microphone during a recording by rebuilding only the aggregate;
   the tap, WAV and worker continue. A failed switch restores the previous input,
   else keeps system audio alone on the output device, else capture stops and

@@ -3,6 +3,11 @@
 //! recording hears the same microphone as Zoom/Teams/Meet even with several
 //! microphones or in clamshell mode. Pure, so the rules are unit tested.
 
+/// Requested in place of a device UID: capture system audio only, with no
+/// microphone (for example to interpret a meeting app's sound without the
+/// room). Not a Core Audio UID.
+pub const NO_MICROPHONE: &str = "none";
+
 /// Why a device was chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reason {
@@ -31,6 +36,13 @@ pub fn choose(
 ) -> Choice {
     let usable = |uid: &str| available.iter().any(|a| a == uid);
     let mut warning = None;
+    if requested == Some(NO_MICROPHONE) {
+        return Choice {
+            uid: None,
+            reason: Some(Reason::Requested),
+            warning: None,
+        };
+    }
     if let Some(uid) = requested.filter(|u| !u.is_empty()) {
         if usable(uid) {
             return Choice {
@@ -81,6 +93,19 @@ mod tests {
             Some("builtin"),
         );
         assert_eq!(c.uid.as_deref(), Some("usb"));
+        assert_eq!(c.reason, Some(Reason::Requested));
+        assert!(c.warning.is_none());
+    }
+
+    #[test]
+    fn no_microphone_request_chooses_no_device_without_a_warning() {
+        let c = choose(
+            Some(NO_MICROPHONE),
+            &ids(&["usb", "builtin"]),
+            &[("Zoom".into(), "builtin".into())],
+            Some("builtin"),
+        );
+        assert_eq!(c.uid, None);
         assert_eq!(c.reason, Some(Reason::Requested));
         assert!(c.warning.is_none());
     }

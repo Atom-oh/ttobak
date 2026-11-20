@@ -670,6 +670,14 @@ async fn list_input_devices() -> Result<serde_json::Value, AppError> {
     Ok(serde_json::Value::Array(Vec::new()))
 }
 
+/// What this build's capture supports beyond the first microphone picker,
+/// so the page offers an option only when the app can honour it: an older
+/// build has no such command and would capture a microphone for `none`.
+#[tauri::command]
+fn capture_features() -> serde_json::Value {
+    serde_json::json!({ "noMicrophone": true })
+}
+
 /// Switches the running recording's microphone (ADR-017); `None` follows the
 /// meeting app. The recording continues; returns the new input.
 #[tauri::command]
@@ -1000,6 +1008,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             list_input_devices,
+            capture_features,
             switch_recording_input,
             recording_status,
             upload::upload_recording,

@@ -13,6 +13,7 @@ manifests.
 
 ### Added
 
+- Mac app 0.2.5: the microphone picker on the record and interpretation pages has a "no microphone" choice that captures only the sound the Mac plays (for example a Zoom meeting), leaving out the user's voice and the room. It is chosen before starting; a running capture cannot drop its microphone.
 - Mac app 0.2.4 caption windows: a final caption in the language it was spoken in is corrected by the model in context (for example a misheard word replaced by the similar-sounding one that fits the topic) and replaces the recognizer's text a moment later; translated captions are told to translate what was evidently said. Each corrected sentence is one more model call on the chosen AWS profile, inside the existing limits. The caption settings gain two switches, on by default: recognizer correction and speaker colours (off: every line keeps the chosen font colour).
 - Mac app 0.2.4 caption windows: a presentation (PPTX, TXT or MD) can be loaded in the caption settings; product names and technical terms found in it are used as hints for caption correction and translation during that visit (for example a product name heard as Korean syllables is written "Nginx"). The file is read on the Mac, its text is sent once to the model on the chosen AWS profile, and nothing is stored.
 - Mac app 0.2.4 caption windows: lines break between words instead of inside them and balance their lengths.

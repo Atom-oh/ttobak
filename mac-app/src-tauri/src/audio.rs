@@ -871,10 +871,13 @@ pub mod macos {
                     true,
                 ),
                 _ => {
-                    start_warnings.push(
-                        "No microphone input device is available; recording system audio only."
-                            .into(),
-                    );
+                    // Asked for: not something to warn about.
+                    if requested_input.as_deref() != Some(crate::input_select::NO_MICROPHONE) {
+                        start_warnings.push(
+                            "No microphone input device is available; recording system audio only."
+                                .into(),
+                        );
+                    }
                     let out = default_device(kAudioHardwarePropertyDefaultOutputDevice)
                         .ok_or_else(|| AppError::Backend("no default output device".into()))?;
                     let uid = device_uid(out).ok_or_else(|| {
@@ -957,7 +960,11 @@ pub mod macos {
                 },
                 owner,
             );
-            start_warnings.extend(zoom_warning);
+            // Without a microphone there is no voice for the mute gate to
+            // silence, so its setup note would only confuse.
+            if mic_active {
+                start_warnings.extend(zoom_warning);
+            }
             let ctx = Box::into_raw(Box::new(CallbackCtx {
                 tx: Mutex::new(Some(tx)),
                 layout,
@@ -1041,6 +1048,13 @@ pub mod macos {
         /// are refused, and stop finalizes what was recorded. Blocking Core Audio FFI: call
         /// off the recorder lock, like stop.
         pub fn switch_input(&self, requested: Option<String>) -> Result<SelectedInput, AppError> {
+            if requested.as_deref() == Some(crate::input_select::NO_MICROPHONE) {
+                return Err(AppError::Backend(
+                    "The microphone cannot be turned off while capturing; stop and start again \
+                     without a microphone."
+                        .into(),
+                ));
+            }
             let mut warnings = Vec::new();
             let (input, selected) = choose_input(requested.as_deref(), &mut warnings);
             let (Some((id, uid)), Some(selected)) = (input, selected) else {
