@@ -460,9 +460,10 @@ const (
 	PermissionEdit = "edit"
 )
 
-// Attachment type constants (per API spec: photo, screenshot, diagram, whiteboard, document, video, audio_file)
+// Attachment type constants (per API spec: photo, screenshot, diagram, whiteboard, slide, document, video, audio_file)
 const (
 	AttachTypePhoto      = "photo"
+	AttachTypeSlide      = "slide"
 	AttachTypeScreenshot = "screenshot"
 	AttachTypeDiagram    = "diagram"
 	AttachTypeWhiteboard = "whiteboard"

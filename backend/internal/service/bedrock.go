@@ -619,6 +619,8 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 			if att.Type == model.AttachTypeDiagram {
 				label = "첨부 다이어그램"
 				hasDiagram = true
+			} else if att.Type == model.AttachTypeSlide {
+				label = "발표 슬라이드"
 			}
 			analyses.WriteString(fmt.Sprintf("\n### %s: %s\n%s\n", label, sanitizeMarkdownText(att.FileName), att.ProcessedContent))
 			continue
@@ -1655,10 +1657,14 @@ func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (
 	// Encode image to base64
 	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
 
-	// First, classify the image
-	classification, err := s.classifyImage(ctx, imageBase64, mediaType)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to classify image: %w", err)
+	// Slide auto-capture frames are known presentation content; skip the
+	// classifier call and use the slide extraction prompt directly.
+	classification := model.AttachTypeSlide
+	if !IsSlideCaptureKey(key) {
+		classification, err = s.classifyImage(ctx, imageBase64, mediaType)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to classify image: %w", err)
+		}
 	}
 
 	// Then, analyze based on classification
@@ -1668,6 +1674,32 @@ func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (
 	}
 
 	return classification, analysis, nil
+}
+
+// SlideCaptureFilePrefix marks frames uploaded by the recording screen's
+// automatic slide capture. The prefix only selects an extraction prompt; it
+// grants no access and changes no storage rule.
+const SlideCaptureFilePrefix = "slide_"
+
+// IsSlideCaptureKey reports whether an image object key names an automatic
+// slide capture frame. Upload keys carry sanitizeFileName's millisecond
+// prefix, so the minted base name is "{digits}_slide_{rest}".
+func IsSlideCaptureKey(key string) bool {
+	base := key
+	if i := strings.LastIndex(key, "/"); i >= 0 {
+		base = key[i+1:]
+	}
+	sep := strings.IndexByte(base, '_')
+	if sep <= 0 {
+		return false
+	}
+	for _, r := range base[:sep] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	name := base[sep+1:]
+	return strings.HasPrefix(name, SlideCaptureFilePrefix) && len(name) > len(SlideCaptureFilePrefix)
 }
 
 // classifyImage determines the type of image
@@ -1708,6 +1740,18 @@ Convert this architecture diagram into a Mermaid diagram format.
 Use appropriate Mermaid diagram types (flowchart, sequence, class, etc.) based on the content.
 Output ONLY the Mermaid code, wrapped in markdown code blocks with 'mermaid' language identifier.
 If you cannot accurately represent it in Mermaid, describe the architecture in structured text instead.`
+
+	case model.AttachTypeSlide:
+		systemPrompt = `You are reading a presentation slide captured from a shared meeting screen.
+Extract the slide content into clean Markdown:
+- The slide title as a heading
+- All visible text in reading order, preserving bullet structure and the original language
+- Tables as Markdown tables
+- Charts: chart type, title, axes and units, series, legible data values, and the main trend or comparison. Never invent values that are not legible.
+- Diagrams: components and their relationships as short structured text
+Ignore meeting-app chrome such as participant video tiles, names, toolbars and chat panels.
+If the image contains no presentation content (for example only participant videos), respond with exactly: (no slide content)
+Output only the Markdown.`
 
 	case model.AttachTypeWhiteboard:
 		systemPrompt = `You are an expert at reading handwritten content and whiteboard notes.

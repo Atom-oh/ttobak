@@ -123,7 +123,7 @@ export type TranscriptSegment = TranscriptSegmentBase & (
 export interface Attachment {
   id: string;
   name: string;
-  type: 'image' | 'document' | 'audio' | 'video' | 'photo' | 'screenshot' | 'diagram' | 'whiteboard' | 'audio_file';
+  type: 'image' | 'document' | 'audio' | 'video' | 'photo' | 'screenshot' | 'diagram' | 'whiteboard' | 'slide' | 'audio_file';
   url: string;
   thumbnailUrl?: string;
   originalUrl?: string;

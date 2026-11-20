@@ -86,6 +86,57 @@ func TestImageCallsSendTerraMultimodalRequests(t *testing.T) {
 	}
 }
 
+func TestIsSlideCaptureKey(t *testing.T) {
+	for key, want := range map[string]bool{
+		"images/u/m/1700000000001_slide_001_1700000000000.jpg": true,
+		"1700000000001_slide_002.jpg":                          true,
+		"images/u/m/slide_001.jpg":                             false,
+		"images/u/m/1700000000001_slide_":                      false,
+		"images/u/m/1700000000001_screen_1.jpg":                false,
+		"images/u/1_slide_x/1700000000001_photo.jpg":           false,
+		"images/u/m/abc_slide_001.jpg":                         false,
+		"images/u/m/1700000000001_myslide_001.jpg":             false,
+	} {
+		if got := IsSlideCaptureKey(key); got != want {
+			t.Errorf("IsSlideCaptureKey(%q)=%v want %v", key, got, want)
+		}
+	}
+}
+
+func TestAnalyzeImageSlideCaptureSkipsClassifier(t *testing.T) {
+	t.Setenv("BEDROCK_IMAGE_MODEL_ID", "")
+	s3Client := s3.New(s3.Options{
+		Region: "ap-northeast-2",
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "test-key", SecretAccessKey: "test-secret"}, nil
+		}),
+		HTTPClient: noteSourceHTTPClient(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("jpegbytes"))}, nil
+		}),
+	})
+	calls := 0
+	modelClient := bedrockruntime.New(bedrockruntime.Options{
+		Region: "us-west-2",
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "test-key", SecretAccessKey: "test-secret"}, nil
+		}),
+		HTTPClient: noteSourceHTTPClient(func(req *http.Request) (*http.Response, error) {
+			calls++
+			raw, _ := io.ReadAll(req.Body)
+			if !strings.Contains(string(raw), "presentation slide") {
+				t.Errorf("slide prompt not used")
+			}
+			body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": "# Q3 revenue"}}}})
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		}),
+	})
+	svc := NewBedrockService(modelClient, s3Client, nil)
+	category, text, err := svc.AnalyzeImage(context.Background(), "test-bucket", "images/u/m/1700000000001_slide_001_1700000000000.jpg")
+	if err != nil || category != model.AttachTypeSlide || text != "# Q3 revenue" || calls != 1 {
+		t.Fatalf("category=%q text=%q err=%v calls=%d", category, text, err, calls)
+	}
+}
+
 func TestAnalyzeImageRejectsInvalidSizeBeforeModelInvocation(t *testing.T) {
 	for _, tt := range []struct {
 		name, key string
