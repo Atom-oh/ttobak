@@ -175,6 +175,20 @@
     <script>
       (function () {
         var MAX_LINES = 3;
+
+        // A new sentence starts on a new line: the end of a sentence is the
+        // natural place to break, and a line then seldom ends mid-phrase.
+        // A full stop after an initial, a common abbreviation or a short
+        // number ("Dr. Kim", "e.g. this", "3. next") does not end a sentence.
+        var NOT_AN_END = /(?:^|[\s(])(?:[A-Za-z]|Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Inc|Ltd|Co|Corp|e\.g|i\.e|a\.m|p\.m|U\.S|[0-9]{1,3})$/;
+        function sentenceBreaks(text) {
+          var spaced = text.replace(/([.?!…]+["')\]”’]*)[ \t]+(?=\S)/g, function (match, end, at) {
+            if (end.charAt(0) === '.' && end.length === 1 && NOT_AN_END.test(text.slice(0, at))) return match;
+            return end + '\n';
+          });
+          // Chinese and Japanese put no space after a sentence.
+          return spaced.replace(/([。？！]+[」』”’]*)(?=[^\s。？！」』”’])/g, '$1\n');
+        }
         // Ids already shown as final; bounded, reset by clear and preview.
         var MAX_FINAL_IDS = 200;
         var SAMPLES = {
@@ -283,7 +297,8 @@
           });
           sorted.slice(-MAX_LINES).forEach(function (pair) {
             var e = pair[1];
-            if (e.el.textContent !== e.text) e.el.textContent = e.text;
+            var shown = sentenceBreaks(e.text);
+            if (e.el.textContent !== shown) e.el.textContent = shown;
             box.appendChild(e.el);
           });
           syncIdle();

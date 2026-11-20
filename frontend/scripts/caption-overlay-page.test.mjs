@@ -296,6 +296,23 @@ test('a speaker colours its line; the first voice and drafts keep the chosen col
   assert.deepEqual(page.lineColors().slice(-2), ['#ffd166', ''], 'colours repeat after six; a non-number has none');
 });
 
+test('a new sentence starts on a new line', () => {
+  const shown = (lang, text) => {
+    const page = loadPage(lang);
+    page.emit('caption-update', entry(lang, 'u1', text, true));
+    return page.lines()[0];
+  };
+  assert.equal(shown('ko', '화면 공유되고 있나요? 네, 잘 보입니다. 그럼 시작하겠습니다.'),
+    '화면 공유되고 있나요?\n네, 잘 보입니다.\n그럼 시작하겠습니다.');
+  assert.equal(shown('en', 'It works. "Really?" Yes! Good...'), 'It works.\n"Really?"\nYes!\nGood...');
+  // Not sentence ends: initials, abbreviations, list numbers, decimals, versions.
+  assert.equal(shown('en', 'Dr. Kim uses e.g. Node 3.5 and v1.2.3 in the U.S. market'), 'Dr. Kim uses e.g. Node 3.5 and v1.2.3 in the U.S. market');
+  assert.equal(shown('en', 'Step 2. Install it'), 'Step 2. Install it');
+  assert.equal(shown('en', 'It shipped in 2024. Next'), 'It shipped in 2024.\nNext');
+  assert.equal(shown('ja', 'はい。そうです！では始めます。'), 'はい。\nそうです！\nでは始めます。');
+  assert.equal(shown('en', 'One sentence only.'), 'One sentence only.');
+});
+
 test('captions break between words, left-aligned, without re-balancing lines', () => {
   const rule = html.slice(html.indexOf('.line {'), html.indexOf('}', html.indexOf('.line {')));
   assert.match(rule, /word-break:\s*keep-all/);

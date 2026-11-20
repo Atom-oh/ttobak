@@ -101,7 +101,12 @@ balanced: a draft grows several times a second, and centred or balanced text mov
 every word already read on each update, while left-aligned greedy wrapping only adds
 words at the end. For the same reason a caption window waits 1.2 s
 (`CAPTION_INTERIM_DELAY_MS`) before translating a draft, since each translated draft
-replaces its whole line; finals are not delayed.
+replaces its whole line; finals are not delayed. Inside one caption a new sentence
+starts on a new line (`sentenceBreaks` in the page: after `.`, `?`, `!` or an ellipsis
+followed by a space, and after `。？！`), because the end of a sentence is where a break
+reads best; a full stop after an initial, a common abbreviation or a number of up to
+three digits is not treated as an end. The page changes only what it draws, never the
+caption text.
 
 **Idle and failure display.** A failed translation pushes that entry's id with empty
 text, which removes its line, so expired credentials mid-sentence never leave a stale
