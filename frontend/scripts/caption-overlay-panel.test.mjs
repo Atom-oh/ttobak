@@ -67,6 +67,11 @@ function props({ profile = 'dev', region = 'us-east-1', extraLanguage = null, wi
     setCorrection: noop,
     speakerColors: true,
     setSpeakerColors: noop,
+    glossary: [],
+    glossaryBusy: false,
+    glossaryNote: null,
+    loadGlossary: noop,
+    clearGlossary: noop,
     isRecording: false,
     ...overrides,
   };
@@ -246,4 +251,27 @@ test('caption switches are on unless turned off', () => {
   layoutPrefs.writeCaptionSwitch(layoutPrefs.CAPTION_CORRECTION_KEY, false, storage);
   assert.equal(layoutPrefs.readCaptionSwitch(layoutPrefs.CAPTION_CORRECTION_KEY, storage), false);
   assert.equal(layoutPrefs.readCaptionSwitch(layoutPrefs.CAPTION_SPEAKER_COLORS_KEY, storage), true);
+});
+
+test('slide terms: upload control, applied count with a preview, busy and note states', () => {
+  const inputTag = (html) => html.match(/<input[^>]*id="caption-slides"[^>]*>/)?.[0];
+  const idle = render(props());
+  assert.match(inputTag(idle), /type="file"/);
+  assert.match(inputTag(idle), /accept="\.pptx,\.txt,\.md"/);
+  assert.doesNotMatch(inputTag(idle), / disabled=""/);
+  assert.ok(idle.includes('용어는 저장하지 않고 이 화면을 떠나면 사라져요'));
+  assert.equal(idle.includes('적용 중'), false);
+
+  const terms = Array.from({ length: 15 }, (_, n) => `Term${n}`);
+  const applied = render(props({ glossary: terms }));
+  assert.ok(applied.includes('용어 15개 적용 중'));
+  assert.ok(applied.includes('Term0, Term1'));
+  assert.ok(applied.includes('외 3개'));
+  assert.equal(applied.includes('Term12'), false);
+  assert.ok(applied.includes('지우기'));
+
+  assert.match(inputTag(render(props({ glossaryBusy: true }))), / disabled=""/);
+  assert.ok(render(props({ glossaryBusy: true })).includes('용어를 뽑는 중'));
+  assert.match(inputTag(render(props({ profile: null }))), / disabled=""/, 'needs an AWS profile');
+  assert.ok(render(props({ glossaryNote: '파일에서 글자를 찾지 못했어요.' })).includes('파일에서 글자를 찾지 못했어요.'));
 });

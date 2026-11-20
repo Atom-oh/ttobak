@@ -5,9 +5,11 @@ import { isCommandNotFound, isTauri, onCaptionWindowClosed } from '@/lib/tauri';
 import {
   CaptionOverlayController,
   TIMED_PREVIEW_MS,
+  captionErrorMessage,
   captionLanguages,
   captionPreviewAction,
   closeCaptionWindow,
+  extractCaptionGlossary,
   getCaptionSettings,
   openCaptionWindow,
   setCaptionSettings,
@@ -21,6 +23,7 @@ import {
   type WindowLayout,
 } from '@/lib/captionOverlay';
 import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
+import { slideFileText, slideTextErrorMessage } from '@/lib/slideText';
 import {
   CAPTION_CORRECTION_KEY, CAPTION_SPEAKER_COLORS_KEY, readCaptionSwitch, writeCaptionSwitch,
 } from '@/lib/recordLayoutPrefs';
@@ -55,6 +58,13 @@ export interface CaptionOverlayState {
   /** Per-browser switch: caption windows colour lines by speaker. */
   speakerColors: boolean;
   setSpeakerColors: (on: boolean) => void;
+  /** Terms picked from the speaker's slides, used as hints until cleared or the page is left. */
+  glossary: string[];
+  glossaryBusy: boolean;
+  /** Korean note about the last upload (an error or a cut text), or null. */
+  glossaryNote: string | null;
+  loadGlossary: (file: File) => void;
+  clearGlossary: () => void;
 }
 
 const RECOGNITION_LANGUAGE: Record<'ja' | 'zh', ExtraLiveLanguage> = { ja: 'ja-JP', zh: 'zh-CN' };
@@ -98,7 +108,6 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     const savedColors = readCaptionSwitch(CAPTION_SPEAKER_COLORS_KEY);
     correctionRef.current = savedCorrection;
     speakerColorsRef.current = savedColors;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCorrectionState(savedCorrection);
     setSpeakerColorsState(savedColors);
   }, []);
@@ -111,6 +120,48 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     speakerColorsRef.current = on;
     setSpeakerColorsState(on);
     writeCaptionSwitch(CAPTION_SPEAKER_COLORS_KEY, on);
+  }, []);
+
+  const [glossary, setGlossary] = useState<string[]>([]);
+  const [glossaryBusy, setGlossaryBusy] = useState(false);
+  const [glossaryNote, setGlossaryNote] = useState<string | null>(null);
+  // A newer upload or a clear makes an older answer stale.
+  const glossaryRunRef = useRef(0);
+  // The current terms, for a controller created after an upload.
+  const glossaryRef = useRef<string[]>([]);
+  const loadGlossary = useCallback((file: File) => {
+    const run = ++glossaryRunRef.current;
+    setGlossaryBusy(true);
+    setGlossaryNote(null);
+    void (async () => {
+      try {
+        const { text, truncated } = await slideFileText(file);
+        const { terms } = await extractCaptionGlossary(text);
+        if (run !== glossaryRunRef.current) return;
+        glossaryRef.current = terms;
+        controllerRef.current?.setGlossary(terms);
+        setGlossary(terms);
+        setGlossaryNote(terms.length === 0
+          ? '자료에서 쓸 만한 용어를 찾지 못했어요.'
+          : truncated ? '자료가 길어 앞부분에서만 용어를 뽑았어요.' : null);
+      } catch (err) {
+        if (run !== glossaryRunRef.current) return;
+        const code = (err as { code?: unknown } | null)?.code;
+        setGlossaryNote(typeof code !== 'string'
+          ? '이 Mac 앱 버전은 발표 자료 용어를 지원하지 않아요. 앱을 업데이트해 주세요.'
+          : slideTextErrorMessage(code) || captionErrorMessage(code));
+      } finally {
+        if (run === glossaryRunRef.current) setGlossaryBusy(false);
+      }
+    })();
+  }, []);
+  const clearGlossary = useCallback(() => {
+    glossaryRunRef.current++;
+    glossaryRef.current = [];
+    controllerRef.current?.setGlossary([]);
+    setGlossary([]);
+    setGlossaryBusy(false);
+    setGlossaryNote(null);
   }, []);
 
   const cancelPreviewTimer = useCallback(() => {
@@ -197,6 +248,7 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
       speakerColorsEnabled: () => speakerColorsRef.current,
       onEntry: (lang, entry) => onEntryRef.current?.(lang, entry),
     });
+    controller.setGlossary(glossaryRef.current);
     controllerRef.current = controller;
     getCaptionSettings().then(applyView, handleLoadError);
     return () => {
@@ -355,6 +407,11 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     setCorrection,
     speakerColors,
     setSpeakerColors,
+    glossary,
+    glossaryBusy,
+    glossaryNote,
+    loadGlossary,
+    clearGlossary,
   };
 }
 

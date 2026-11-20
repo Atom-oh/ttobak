@@ -1020,6 +1020,7 @@ pub fn run() {
             caption_translate::caption_settings_set,
             caption_translate::caption_translate,
             caption_translate::caption_correct,
+            caption_translate::caption_glossary,
             caption_overlay::caption_overlay_open,
             caption_overlay::caption_overlay_close,
             caption_overlay::caption_overlay_set_style,

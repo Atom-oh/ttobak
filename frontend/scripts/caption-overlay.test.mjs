@@ -403,6 +403,57 @@ test('the correction wrapper invokes the Mac command', async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(invoked)), [{ cmd: 'caption_correct', args: { text: '가면 공유', lang: 'ko', context: ['앞 문장'] } }]);
 });
 
+test('slide terms ride along with translation and correction until cleared', async () => {
+  const liveTranslation = loadModule('lib/liveTranslation.ts');
+  const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation, './interpretSpeakers': loadModule('lib/interpretSpeakers.ts') });
+  const translated = [];
+  const corrected = [];
+  const controller = new overlay.CaptionOverlayController({
+    translate: async (...args) => { translated.push(args); return { translatedText: 'ok', engine: 'llm' }; },
+    correct: async (...args) => { corrected.push(args); return { correctedText: args[0] }; },
+    push: async () => {},
+    onError: () => {},
+  });
+  controller.setLanguages(['ko', 'en']);
+  controller.update('g1', '엔진엑스를 올립니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(translated.at(-1).length, 5, 'no glossary argument without terms');
+  assert.equal(corrected.at(-1).length, 3);
+
+  controller.setGlossary(['Nginx', 'Java 런타임']);
+  controller.update('g2', '자바 런타임을 올립니다.', true, 'ko-KR');
+  await flush();
+  assert.deepEqual([...translated.at(-1)[5]], ['Nginx', 'Java 런타임']);
+  assert.deepEqual([...corrected.at(-1)[3]], ['Nginx', 'Java 런타임']);
+
+  controller.setGlossary([]);
+  controller.update('g3', '세 번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(translated.at(-1).length, 5);
+  controller.setGlossary(Array.from({ length: 200 }, (_, n) => `t${n}`));
+  controller.update('g4', '네 번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(translated.at(-1)[5].length, overlay.MAX_GLOSSARY_TERMS);
+  controller.stop();
+});
+
+test('glossary wrappers add the terms only when there are some', async () => {
+  const invoked = [];
+  const window = { __TAURI__: { core: { invoke: async (cmd, args) => { invoked.push({ cmd, args }); return {}; } } } };
+  const overlay = loadModule('lib/captionOverlay.ts', {
+    './liveTranslation': loadModule('lib/liveTranslation.ts'), './interpretSpeakers': loadModule('lib/interpretSpeakers.ts'),
+  }, { window });
+  await overlay.translateCaption('a', 'ko', 'en', true, []);
+  await overlay.translateCaption('a', 'ko', 'en', true, [], ['Nginx']);
+  await overlay.correctCaption('a', 'ko', [], []);
+  await overlay.extractCaptionGlossary('슬라이드 글');
+  const plain = JSON.parse(JSON.stringify(invoked));
+  assert.equal('glossary' in plain[0].args, false);
+  assert.deepEqual(plain[1].args.glossary, ['Nginx']);
+  assert.equal('glossary' in plain[2].args, false);
+  assert.deepEqual(plain[3], { cmd: 'caption_glossary', args: { slides: '슬라이드 글' } });
+});
+
 test('slow corrections never hold back later captions', async () => {
   const pending = [];
   const { controller, pushes, asked } = correctionFixture(() => new Promise((resolve) => { pending.push(resolve); }));
