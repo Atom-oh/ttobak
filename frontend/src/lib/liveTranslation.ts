@@ -127,10 +127,14 @@ export function liveLanguageOptions(extra?: ExtraLiveLanguage): string {
   return extra ? `ko-KR,en-US,${extra}` : 'ko-KR,en-US';
 }
 
+/** Corrections of same-language finals in flight at once. */
+const MAX_CORRECTIONS = 3;
+
 export class LiveTranslation {
   private segments = new Map<string, TranslationSegment>();
   private finalQueue: TranslationSegment[] = [];
   private finalRequests = 0;
+  private corrections = 0;
   private interim: TranslationSegment | null = null;
   private interimTimer: ReturnType<typeof setTimeout> | undefined;
   private interimRequest: AbortController | null = null;
@@ -290,20 +294,9 @@ export class LiveTranslation {
         engine: isFinal ? translationEngineBadge(quality, result) : undefined,
       };
       this.publish(segment);
-      if (isFinal && snapshot.sourceLang === snapshot.targetLang && this.options.correct) {
-        try {
-          const corrected = (await Promise.race([
-            this.options.correct(snapshot.original, snapshot.sourceLang, requestOptions.context ?? [], controller.signal),
-            cancellation,
-          ])).trim();
-          if (isCurrent() && !controller.signal.aborted && corrected && corrected !== segment.entry.translated
-            && utf8Length(corrected) <= 30000) {
-            segment.entry = { ...segment.entry, translated: corrected };
-            this.publish(segment);
-          }
-        } catch {
-          // The recognizer's text stays.
-        }
+      if (isFinal && snapshot.sourceLang === snapshot.targetLang) {
+        // Not awaited: the final's slot is free for the next sentence.
+        void this.correct(segment, snapshot.original, revision, requestOptions.context ?? []);
       }
     } catch {
       if (isCurrent()) {
@@ -320,6 +313,40 @@ export class LiveTranslation {
           this.scheduleInterim();
         }
       }
+    }
+  }
+
+  /**
+   * Replaces a published same-language final with its corrected text. Runs
+   * beside the final queue, at most MAX_CORRECTIONS at a time; a sentence
+   * that arrives beyond that keeps the recognizer's text.
+   */
+  private async correct(segment: TranslationSegment, original: string, revision: number, context: string[]): Promise<void> {
+    const correct = this.options.correct;
+    if (!correct || this.corrections >= MAX_CORRECTIONS) return;
+    const generation = this.generation;
+    const controller = new AbortController();
+    this.requests.add(controller);
+    this.corrections++;
+    const timer = setTimeout(() => controller.abort(), TRANSLATION_TIMEOUT_MS);
+    try {
+      const corrected = (await new Promise<string>((resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(new Error('Correction cancelled')), { once: true });
+        correct(original, segment.entry.sourceLang, context, controller.signal).then(resolve, reject);
+      })).trim();
+      const current = !this.stopped && this.options.enabled && generation === this.generation
+        && this.segments.get(segment.entry.id) === segment && segment.revision === revision
+        && segment.entry.status === 'complete';
+      if (current && corrected && corrected !== segment.entry.translated && utf8Length(corrected) <= 30000) {
+        segment.entry = { ...segment.entry, translated: corrected };
+        this.publish(segment);
+      }
+    } catch {
+      // The recognizer's text stays.
+    } finally {
+      clearTimeout(timer);
+      this.requests.delete(controller);
+      this.corrections--;
     }
   }
 

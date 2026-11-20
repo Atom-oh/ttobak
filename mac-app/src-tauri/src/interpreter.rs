@@ -163,7 +163,7 @@ pub fn glossary_term_ok(term: &str) -> bool {
 }
 
 /// Rejects a correction that is not a light edit of `source`: the usual
-/// output checks, a changed share of Hangul, or a length too far from the
+/// output checks, a changed mix of scripts, or a length too far from the
 /// source's.
 pub fn validate_correction(
     source: &str,
@@ -173,21 +173,22 @@ pub fn validate_correction(
     // No target language: speech mixes languages, so the script is compared
     // with the source's below instead of with a fixed language.
     validate(source, output, "")?;
-    let share = |text: &str| {
-        let (hangul, letters) = hangul_share(text);
-        if letters == 0 {
-            0.0
-        } else {
-            hangul as f64 / letters as f64
-        }
-    };
     // A glossary term may replace Hangul with its Latin spelling ("엔진엑스"
-    // to "Nginx"); those terms are left out of the comparison.
-    let mut rest = output.to_lowercase();
-    for term in glossary {
-        rest = rest.replace(&term.to_lowercase(), " ");
-    }
-    if (share(source) - share(&rest)).abs() > 0.3 {
+    // to "Nginx"); those terms are left out of both sides of the comparison.
+    let without_terms = |text: &str| {
+        let mut rest = text.to_lowercase();
+        for term in glossary {
+            rest = rest.replace(&term.to_lowercase(), " ");
+        }
+        rest
+    };
+    let before_mix = script_mix(&without_terms(source));
+    let after_mix = script_mix(&without_terms(output));
+    if before_mix
+        .iter()
+        .zip(after_mix)
+        .any(|(before, after)| (before - after).abs() > 0.3)
+    {
         return Err("changed language");
     }
     let before = source.trim().chars().count();
@@ -325,6 +326,30 @@ fn hangul_share(text: &str) -> (usize, usize) {
         }
     }
     (hangul, letters)
+}
+
+/// Shares of Hangul, Han, kana and Latin letters among all letters (zeros
+/// for text without letters). A correction keeps roughly the source's mix;
+/// a translation into any of the four caption languages does not.
+fn script_mix(text: &str) -> [f64; 4] {
+    let mut counts = [0usize; 4];
+    let mut letters = 0usize;
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        letters += 1;
+        if is_hangul(c) {
+            counts[0] += 1;
+        } else if is_han(c) {
+            counts[1] += 1;
+        } else if is_kana(c) {
+            counts[2] += 1;
+        } else if is_latin(c) {
+            counts[3] += 1;
+        }
+    }
+    if letters == 0 {
+        return [0.0; 4];
+    }
+    counts.map(|count| count as f64 / letters as f64)
 }
 
 /// Han ideographs, matching the ranges of Go's `unicode.Han` used here.
@@ -521,6 +546,49 @@ mod tests {
         let padded = format!("{fixed} 망분리는 내부망과 외부망을 나누는 규제이며 금융권에서 특히 엄격하게 적용됩니다.");
         assert!(validate_correction(source, &padded, &[]).is_err());
         assert!(validate_correction(source, "{\"current_segment\": \"x\"}", &[]).is_err());
+    }
+
+    #[test]
+    fn correction_in_any_caption_language_must_keep_its_script() {
+        let en = "So the cube lit is running on every note in the cluster.";
+        assert!(validate_correction(
+            en,
+            "So the kubelet is running on every node in the cluster.",
+            &[]
+        )
+        .is_ok());
+        assert!(validate_correction(
+            en,
+            "クラスタのすべてのノードで kubelet が動いています、ということです。",
+            &[]
+        )
+        .is_err());
+        assert!(validate_correction(
+            en,
+            "所以 kubelet 正在集群中的每一个节点上运行着,就是这样的一个情况。",
+            &[]
+        )
+        .is_err());
+        let ja = "今日はクラウドの移行について説明します。";
+        assert!(validate_correction(ja, "今日はクラウドの移行について説明します。", &[]).is_ok());
+        assert!(validate_correction(ja, "Today I will explain the cloud migration.", &[]).is_err());
+        assert!(validate_correction(ja, "今天我来说明一下云迁移的相关内容吧。", &[]).is_err());
+        let zh = "今天我们讨论云迁移的计划和时间安排。";
+        assert!(validate_correction(zh, "今天我们讨论云迁移的计划和时间安排。", &[]).is_ok());
+        assert!(
+            validate_correction(zh, "Today we discuss the cloud migration plan.", &[]).is_err()
+        );
+        assert!(
+            validate_correction(zh, "오늘은 클라우드 이전 계획과 일정을 논의합니다.", &[]).is_err()
+        );
+        // Mixed speech keeps its mix.
+        let mixed = "Bedrock PrivateLink 엔드포인트를 망블리 환경에 붙입니다.";
+        assert!(validate_correction(
+            mixed,
+            "Bedrock PrivateLink 엔드포인트를 망분리 환경에 붙입니다.",
+            &[]
+        )
+        .is_ok());
     }
 
     #[test]

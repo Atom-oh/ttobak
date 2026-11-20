@@ -258,7 +258,7 @@ test('slide terms: upload control, applied count with a preview, busy and note s
   const idle = render(props());
   assert.match(inputTag(idle), /type="file"/);
   assert.match(inputTag(idle), /accept="\.pptx,\.txt,\.md"/);
-  assert.doesNotMatch(inputTag(idle), /disabled/);
+  assert.doesNotMatch(inputTag(idle), / disabled=""/);
   assert.ok(idle.includes('용어는 저장하지 않고 이 화면을 떠나면 사라져요'));
   assert.equal(idle.includes('적용 중'), false);
 
@@ -270,8 +270,8 @@ test('slide terms: upload control, applied count with a preview, busy and note s
   assert.equal(applied.includes('Term12'), false);
   assert.ok(applied.includes('지우기'));
 
-  assert.match(inputTag(render(props({ glossaryBusy: true }))), /disabled/);
+  assert.match(inputTag(render(props({ glossaryBusy: true }))), / disabled=""/);
   assert.ok(render(props({ glossaryBusy: true })).includes('용어를 뽑는 중'));
-  assert.match(inputTag(render(props({ profile: null }))), /disabled/, 'needs an AWS profile');
+  assert.match(inputTag(render(props({ profile: null }))), / disabled=""/, 'needs an AWS profile');
   assert.ok(render(props({ glossaryNote: '파일에서 글자를 찾지 못했어요.' })).includes('파일에서 글자를 찾지 못했어요.'));
 });
