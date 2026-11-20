@@ -296,11 +296,32 @@ test('a speaker colours its line; the first voice and drafts keep the chosen col
   assert.deepEqual(page.lineColors().slice(-2), ['#ffd166', ''], 'colours repeat after six; a non-number has none');
 });
 
-test('captions break between words and balance their lines', () => {
+test('a new sentence starts on a new line', () => {
+  const shown = (lang, text) => {
+    const page = loadPage(lang);
+    page.emit('caption-update', entry(lang, 'u1', text, true));
+    return page.lines()[0];
+  };
+  assert.equal(shown('ko', '화면 공유되고 있나요? 네, 잘 보입니다. 그럼 시작하겠습니다.'),
+    '화면 공유되고 있나요?\n네, 잘 보입니다.\n그럼 시작하겠습니다.');
+  assert.equal(shown('en', 'It works. "Really?" Yes! Good...'), 'It works.\n"Really?"\nYes!\nGood...');
+  // Not sentence ends: initials, abbreviations, list numbers, decimals, versions.
+  assert.equal(shown('en', 'Dr. Kim uses e.g. Node 3.5 and v1.2.3 in the U.S. market'), 'Dr. Kim uses e.g. Node 3.5 and v1.2.3 in the U.S. market');
+  assert.equal(shown('en', 'Step 2. Install it'), 'Step 2. Install it');
+  assert.equal(shown('en', 'It shipped in 2024. Next'), 'It shipped in 2024.\nNext');
+  assert.equal(shown('ja', 'はい。そうです！では始めます。'), 'はい。\nそうです！\nでは始めます。');
+  assert.equal(shown('en', 'One sentence only.'), 'One sentence only.');
+});
+
+test('captions break between words, left-aligned, without re-balancing lines', () => {
   const rule = html.slice(html.indexOf('.line {'), html.indexOf('}', html.indexOf('.line {')));
   assert.match(rule, /word-break:\s*keep-all/);
   assert.match(rule, /overflow-wrap:\s*anywhere/, 'a word wider than the window still breaks');
-  assert.match(rule, /text-wrap-style:\s*balance/);
+  // A growing draft must not move the words already shown.
+  assert.match(rule, /text-align:\s*left/);
+  assert.doesNotMatch(html, /text-wrap-style:\s*balance|text-wrap:\s*balance/);
+  const box = html.slice(html.indexOf('#captions {'), html.indexOf('}', html.indexOf('#captions {')));
+  assert.match(box, /align-items:\s*flex-start/);
   // Japanese and Chinese have no spaces, so they keep normal breaking.
   assert.match(html, /:lang\(ja\) \.line,\s*:lang\(zh\) \.line\s*{\s*word-break:\s*normal/);
 });

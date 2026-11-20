@@ -265,6 +265,13 @@ interface ControllerDeps {
   onEntry?: (lang: CaptionLang, entry: TranslationEntry) => void;
 }
 
+/**
+ * Wait before a draft is translated for a caption window. Each translated
+ * draft replaces the whole line, which is hard to read on a projector when
+ * it happens twice a second.
+ */
+export const CAPTION_INTERIM_DELAY_MS = 1200;
+
 /** Runs one LiveTranslation engine per open caption window. */
 export class CaptionOverlayController {
   private engines = new Map<CaptionLang, LiveTranslation>();
@@ -315,6 +322,7 @@ export class CaptionOverlayController {
     return new LiveTranslation({
       enabled: true,
       interim: true,
+      interimDelayMs: CAPTION_INTERIM_DELAY_MS,
       targetLang: lang,
       onUpdate: (entry) => this.publish(lang, entry),
       onReset: () => {},

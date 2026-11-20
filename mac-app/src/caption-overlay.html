@@ -44,7 +44,10 @@
         display: flex;
         flex-direction: column;
         justify-content: flex-end;
-        align-items: center;
+        /* Left-aligned: a growing draft only adds words at its end, so the
+           words already read stay where they are. Centred text moved every
+           word on each update. */
+        align-items: flex-start;
         overflow: hidden;
       }
       /* Hover chrome: shown only while the pointer is over the window (or a
@@ -126,14 +129,13 @@
       .line {
         max-width: 100%;
         margin: 0;
-        text-align: center;
+        text-align: left;
         white-space: pre-wrap;
         /* Break between words (Korean: between eojeol), and inside a word
            only when it is wider than the window. */
         word-break: keep-all;
         overflow-wrap: anywhere;
-        /* Lines of one caption get similar lengths instead of a lone last word. */
-        text-wrap-style: balance;
+        /* No line balancing: it re-breaks every line whenever a word arrives. */
         font-family: var(--font);
         font-size: var(--size);
         line-height: 1.25;
@@ -173,6 +175,20 @@
     <script>
       (function () {
         var MAX_LINES = 3;
+
+        // A new sentence starts on a new line: the end of a sentence is the
+        // natural place to break, and a line then seldom ends mid-phrase.
+        // A full stop after an initial, a common abbreviation or a short
+        // number ("Dr. Kim", "e.g. this", "3. next") does not end a sentence.
+        var NOT_AN_END = /(?:^|[\s(])(?:[A-Za-z]|Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Inc|Ltd|Co|Corp|e\.g|i\.e|a\.m|p\.m|U\.S|[0-9]{1,3})$/;
+        function sentenceBreaks(text) {
+          var spaced = text.replace(/([.?!…]+["')\]”’]*)[ \t]+(?=\S)/g, function (match, end, at) {
+            if (end.charAt(0) === '.' && end.length === 1 && NOT_AN_END.test(text.slice(0, at))) return match;
+            return end + '\n';
+          });
+          // Chinese and Japanese put no space after a sentence.
+          return spaced.replace(/([。？！]+[」』”’]*)(?=[^\s。？！」』”’])/g, '$1\n');
+        }
         // Ids already shown as final; bounded, reset by clear and preview.
         var MAX_FINAL_IDS = 200;
         var SAMPLES = {
@@ -281,7 +297,8 @@
           });
           sorted.slice(-MAX_LINES).forEach(function (pair) {
             var e = pair[1];
-            if (e.el.textContent !== e.text) e.el.textContent = e.text;
+            var shown = sentenceBreaks(e.text);
+            if (e.el.textContent !== shown) e.el.textContent = shown;
             box.appendChild(e.el);
           });
           syncIdle();
