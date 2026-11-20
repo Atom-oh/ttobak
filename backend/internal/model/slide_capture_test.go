@@ -65,3 +65,18 @@ func TestSplitSummarySlidesSamplesEvenlyAndDropsNonEvidence(t *testing.T) {
 		t.Fatal("small decks must keep every slide")
 	}
 }
+
+func TestSlideNamedDocumentsKeepTheirEvidencePath(t *testing.T) {
+	doc := Attachment{AttachmentID: "d", OriginalKey: "files/u/m/1700000000001_slide_notes.pdf", Type: AttachTypeDocument, Status: AttachStatusDone}
+	file := Attachment{AttachmentID: "f", OriginalKey: "files/u/m/1700000000001_slide_deck.zip", Type: AttachTypePhoto, Status: AttachStatusDone}
+	typedDoc := Attachment{AttachmentID: "t", OriginalKey: "images/u/m/1700000000001_slide_001.jpg", Type: AttachTypeDocument, Status: AttachStatusDone}
+	for _, att := range []Attachment{doc, file, typedDoc} {
+		if IsSlideAttachment(&att) {
+			t.Fatalf("%s treated as a slide", att.AttachmentID)
+		}
+	}
+	others, slides := SplitSummarySlides([]Attachment{doc, file, typedDoc}, 0)
+	if len(others) != 3 || len(slides) != 0 {
+		t.Fatalf("others=%d slides=%d", len(others), len(slides))
+	}
+}

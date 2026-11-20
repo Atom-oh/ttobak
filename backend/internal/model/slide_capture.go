@@ -40,8 +40,12 @@ func IsSlideCaptureKey(key string) bool {
 }
 
 // IsSlideAttachment reports whether an attachment row is a slide capture frame,
-// before or after image processing.
+// before or after image processing. Only image uploads qualify: a document or
+// file whose name happens to start with "slide_" keeps its normal evidence path.
 func IsSlideAttachment(att *Attachment) bool {
+	if att.Type == AttachTypeDocument || !strings.HasPrefix(att.OriginalKey, "images/") {
+		return false
+	}
 	return att.Type == AttachTypeSlide || IsSlideCaptureKey(att.OriginalKey)
 }
 

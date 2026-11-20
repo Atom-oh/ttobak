@@ -90,7 +90,8 @@ export async function captureScreenFrame(): Promise<File> {
   let video: HTMLVideoElement | null = null;
   try {
     video = await attachVideo(stream);
-    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    // A short timer, not requestAnimationFrame: rAF never fires in a hidden tab.
+    await new Promise((r) => window.setTimeout(r, 100));
     return await encodeFrame(video, null, 0.92, `screen_${Date.now()}.jpg`);
   } finally {
     stream.getTracks().forEach((t) => t.stop());
