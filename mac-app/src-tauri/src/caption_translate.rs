@@ -672,6 +672,32 @@ async fn run_llm(
     Ok(translated)
 }
 
+async fn run_correction(
+    clients: &Clients,
+    text: &str,
+    lang: &str,
+    context: &[String],
+) -> Result<String, &'static str> {
+    let body = interpreter::build_correction_request(text, lang, context);
+    let call = clients
+        .bedrock
+        .invoke_model()
+        .model_id(MODEL_ID)
+        .content_type("application/json")
+        .accept("application/json")
+        .body(Blob::new(body))
+        .send();
+    let out = match tokio::time::timeout(LLM_TIMEOUT, call).await {
+        Err(_) => return Err("timeout"),
+        Ok(Err(e)) => return Err(sdk_code(&e)),
+        Ok(Ok(o)) => o,
+    };
+    let corrected =
+        interpreter::parse_response(out.body().as_ref()).map_err(|_| "invalid-output")?;
+    interpreter::validate_correction(text, &corrected).map_err(|_| "invalid-output")?;
+    Ok(corrected)
+}
+
 async fn run_translate(
     clients: &Clients,
     text: &str,
@@ -771,6 +797,84 @@ pub async fn caption_translate(
     }
 }
 
+/// Validates a correction request and returns the context to send. Only a
+/// final sentence short enough for the model is corrected.
+pub fn check_correction_input(
+    text: &str,
+    lang: &str,
+    context: &[String],
+) -> Result<Vec<String>, CaptionError> {
+    if !LANGS.contains(&lang) {
+        return Err(CaptionError::invalid("Unsupported language."));
+    }
+    if text.trim().is_empty() {
+        return Err(CaptionError::invalid("Text is empty."));
+    }
+    if text.len() > LLM_MAX_BYTES {
+        return Err(CaptionError::invalid("Text is too long."));
+    }
+    let skip = context.len().saturating_sub(MAX_CONTEXT);
+    Ok(context[skip..]
+        .iter()
+        .map(|c| truncate_bytes(c, LLM_MAX_BYTES).to_string())
+        .collect())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectResult {
+    corrected_text: String,
+}
+
+/// Fixes recognizer errors in a final caption shown in the language it was
+/// spoken in. Same gates as `caption_translate`: an open window for that
+/// language, the request rate, the byte budget and the chosen profile. The
+/// caller keeps the recognizer's text when this fails.
+#[tauri::command]
+pub async fn caption_correct(
+    app: AppHandle,
+    state: State<'_, CaptionState>,
+    text: String,
+    lang: String,
+    context: Vec<String>,
+) -> Result<CorrectResult, CaptionError> {
+    state.require_available()?;
+    if !state.rate.lock().allow(Instant::now()) {
+        return Err(CaptionError::from_code("rate-limited"));
+    }
+    require_open_window(&lang, |label| app.get_webview_window(label).is_some())?;
+    let context = check_correction_input(&text, &lang, &context)?;
+    if !state
+        .budget
+        .lock()
+        .allow(Instant::now(), request_bytes(&text, &context))
+    {
+        return Err(CaptionError::from_code("rate-limited"));
+    }
+    let (profile, region) = {
+        let s = state.settings.lock();
+        (s.profile.clone(), s.region.clone())
+    };
+    let profile = profile.ok_or_else(|| CaptionError::from_code("profile-missing"))?;
+    if !crate::aws_profiles::list().contains(&profile) {
+        return Err(CaptionError::from_code("profile-missing"));
+    }
+    let clients = state.clients(&profile, &region).await;
+    match run_correction(&clients, &text, &lang, &context).await {
+        Ok(corrected_text) => {
+            log::debug!("caption correct ok: bytes={}", text.len());
+            Ok(CorrectResult { corrected_text })
+        }
+        Err(code) => {
+            if code == "credentials-expired" {
+                state.drop_client(&profile, &region);
+            }
+            log::warn!("caption correct failed: code={code} bytes={}", text.len());
+            Err(CaptionError::from_code(code))
+        }
+    }
+}
+
 /// Registers the managed state. Without an app config directory captions
 /// disable themselves (every command returns `unavailable`) and the rest of
 /// the app keeps working.
@@ -788,6 +892,17 @@ pub fn manage(app: &tauri::App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn correction_input_is_one_short_sentence_in_a_caption_language() {
+        let ctx: Vec<String> = (0..8).map(|n| format!("문장 {n}")).collect();
+        let kept = check_correction_input("가면 공유되고 있나요?", "ko", &ctx).unwrap();
+        assert_eq!(kept.len(), MAX_CONTEXT);
+        assert_eq!(kept.last().unwrap(), "문장 7");
+        assert!(check_correction_input("hello", "fr", &[]).is_err());
+        assert!(check_correction_input("   ", "ko", &[]).is_err());
+        assert!(check_correction_input(&"가".repeat(LLM_MAX_BYTES), "ko", &[]).is_err());
+    }
     use std::time::{Duration, Instant};
 
     #[test]

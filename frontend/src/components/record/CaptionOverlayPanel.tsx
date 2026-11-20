@@ -50,6 +50,10 @@ export function CaptionOverlayPanel({
   toggleWindow,
   updateStyle,
   retry,
+  correction,
+  setCorrection,
+  speakerColors,
+  setSpeakerColors,
   isRecording,
   defaultExpanded,
   onExpandedChange,
@@ -181,6 +185,32 @@ export function CaptionOverlayPanel({
             </select>
           </div>
           <p className={NOTE_CLASS}>인식 언어는 녹음을 시작하기 전에만 바꿀 수 있어요.</p>
+
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+            <label className={`flex items-center gap-1.5 ${LABEL_CLASS}`}>
+              <input
+                id="caption-correction"
+                type="checkbox"
+                checked={correction}
+                onChange={(e) => setCorrection(e.target.checked)}
+                className="accent-primary"
+              />
+              오인식 교정
+            </label>
+            <label className={`flex items-center gap-1.5 ${LABEL_CLASS}`}>
+              <input
+                id="caption-speaker-colors"
+                type="checkbox"
+                checked={speakerColors}
+                onChange={(e) => setSpeakerColors(e.target.checked)}
+                className="accent-primary"
+              />
+              화자별 색
+            </label>
+          </div>
+          <p className={NOTE_CLASS}>
+            오인식 교정은 말한 언어의 자막을 문맥에 맞게 고쳐요. 문장마다 선택한 AWS 계정으로 모델을 한 번 더 불러요. 화자별 색을 끄면 모든 자막이 고른 글자색으로 나와요.
+          </p>
 
           {openLangs.map((lang) => {
             const style = settings.windows[lang]?.style;

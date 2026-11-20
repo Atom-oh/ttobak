@@ -147,6 +147,14 @@ export function translateCaption(
   return invoke<CaptionTranslateResult>('caption_translate', { text, sourceLang, targetLang, isFinal, context });
 }
 
+/**
+ * Asks the Mac app to fix recognizer errors in a final caption. A Mac app
+ * older than 0.2.4 has no such command and rejects without a `code`.
+ */
+export function correctCaption(text: string, lang: string, context: string[]): Promise<{ correctedText: string }> {
+  return invoke<{ correctedText: string }>('caption_correct', { text, lang, context });
+}
+
 /** Caption windows allowed by the settings: ko and en, plus at most one of ja/zh. */
 export function captionLanguages(extraLanguage: CaptionSettings['extraLanguage']): CaptionLang[] {
   return extraLanguage ? ['ko', 'en', extraLanguage] : ['ko', 'en'];
@@ -228,6 +236,10 @@ interface ControllerDeps {
     text: string, sourceLang: string, targetLang: string, isFinal: boolean, context: string[],
   ) => Promise<TranslateResponse>;
   push: typeof pushCaption;
+  correct: typeof correctCaption;
+  /** Read per caption, so the panel's switches apply to the next line. */
+  correctionEnabled: () => boolean;
+  speakerColorsEnabled: () => boolean;
   onError: (code: string) => void;
   /** Every caption update of an open window, before it is sent there (for an in-app copy). */
   onEntry?: (lang: CaptionLang, entry: TranslationEntry) => void;
@@ -245,10 +257,17 @@ export class CaptionOverlayController {
    * sent with when this changes.
    */
   private main: number | undefined;
+  /** Slot each final was first sent with, by segment ID; in memory only, the oldest are dropped. */
+  private slots = new Map<string, number | undefined>();
+  /** Set when the Mac app has no correction command; nothing is asked again. */
+  private correctionMissing = false;
   private deps: ControllerDeps;
 
   constructor(deps: Partial<ControllerDeps> & Pick<ControllerDeps, 'onError'>) {
-    this.deps = { translate: translateCaption, push: pushCaption, ...deps };
+    this.deps = {
+      translate: translateCaption, push: pushCaption, correct: correctCaption,
+      correctionEnabled: () => true, speakerColorsEnabled: () => true, ...deps,
+    };
   }
 
   /** Creates engines for newly open languages and stops those no longer open. */
@@ -284,6 +303,17 @@ export class CaptionOverlayController {
           throw err;
         }
       },
+      // Failures are not reported: the caption keeps the recognizer's text,
+      // and the translation path already reports account problems.
+      correct: async (text, sourceLang, context) => {
+        if (this.correctionMissing || !this.deps.correctionEnabled()) throw new Error('Correction is off');
+        try {
+          return (await this.deps.correct(text, sourceLang, context)).correctedText;
+        } catch (err) {
+          if (!rejectionCode(err)) this.correctionMissing = true;
+          throw err;
+        }
+      },
     });
   }
 
@@ -298,9 +328,25 @@ export class CaptionOverlayController {
     if (!entry.translated) return;
     // The window shows the end of a long sentence; the Mac app rejects longer text.
     const text = utf8Tail(entry.translated, MAX_PUSH_TEXT_BYTES);
+    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal, this.slotFor(entry));
+  }
+
+  /**
+   * Colour slot of a line. A final keeps the slot it was first sent with, so
+   * a corrected or re-sent line does not change colour when the main speaker
+   * or the colour switch changed in between.
+   */
+  private slotFor(entry: TranslationEntry): number | undefined {
+    if (entry.isFinal && this.slots.has(entry.id)) return this.slots.get(entry.id);
     const speaker = this.speakers.get(entry.id);
-    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal,
-      speaker === undefined ? undefined : windowSpeakerSlot(speaker, this.main));
+    const slot = speaker === undefined || !this.deps.speakerColorsEnabled()
+      ? undefined
+      : windowSpeakerSlot(speaker, this.main);
+    if (entry.isFinal) {
+      this.slots.set(entry.id, slot);
+      if (this.slots.size > MAX_SPEAKER_ENTRIES) this.slots.delete(this.slots.keys().next().value!);
+    }
+    return slot;
   }
 
   private send(
@@ -345,6 +391,7 @@ export class CaptionOverlayController {
     for (const engine of this.engines.values()) engine.stop();
     this.engines.clear();
     this.speakers.clear();
+    this.slots.clear();
     this.main = undefined;
   }
 }

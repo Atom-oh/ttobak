@@ -52,6 +52,19 @@ export function writeCaptionPanelExpanded(expanded: boolean, storage?: StorageLi
   write(CAPTION_PANEL_KEY, expanded ? '1' : '0', storage);
 }
 
+// Caption window choices kept per browser: fixing recognizer errors with the
+// model, and colouring lines by speaker. Both are on unless turned off.
+export const CAPTION_CORRECTION_KEY = 'ttobak-caption-correction';
+export const CAPTION_SPEAKER_COLORS_KEY = 'ttobak-caption-speaker-colors';
+
+export function readCaptionSwitch(key: string, storage?: StorageLike | null): boolean {
+  return read(key, storage) !== '0';
+}
+
+export function writeCaptionSwitch(key: string, on: boolean, storage?: StorageLike | null): void {
+  write(key, on ? '1' : '0', storage);
+}
+
 // Desktop recording cards. The Q&A/reference aside keeps its own key above
 // (SIDE_PANEL_KEY) so the menu and the aside buttons share one source of truth.
 export const RECORD_CARDS_KEY = 'ttobak-record-cards';
