@@ -257,6 +257,8 @@ export class CaptionOverlayController {
    * sent with when this changes.
    */
   private main: number | undefined;
+  /** Slot each final was first sent with, by segment ID; in memory only, the oldest are dropped. */
+  private slots = new Map<string, number | undefined>();
   /** Set when the Mac app has no correction command; nothing is asked again. */
   private correctionMissing = false;
   private deps: ControllerDeps;
@@ -326,9 +328,25 @@ export class CaptionOverlayController {
     if (!entry.translated) return;
     // The window shows the end of a long sentence; the Mac app rejects longer text.
     const text = utf8Tail(entry.translated, MAX_PUSH_TEXT_BYTES);
+    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal, this.slotFor(entry));
+  }
+
+  /**
+   * Colour slot of a line. A final keeps the slot it was first sent with, so
+   * a corrected or re-sent line does not change colour when the main speaker
+   * or the colour switch changed in between.
+   */
+  private slotFor(entry: TranslationEntry): number | undefined {
+    if (entry.isFinal && this.slots.has(entry.id)) return this.slots.get(entry.id);
     const speaker = this.speakers.get(entry.id);
-    void this.send(lang, 'entry', entry.id, entry.order, text, entry.isFinal,
-      speaker === undefined || !this.deps.speakerColorsEnabled() ? undefined : windowSpeakerSlot(speaker, this.main));
+    const slot = speaker === undefined || !this.deps.speakerColorsEnabled()
+      ? undefined
+      : windowSpeakerSlot(speaker, this.main);
+    if (entry.isFinal) {
+      this.slots.set(entry.id, slot);
+      if (this.slots.size > MAX_SPEAKER_ENTRIES) this.slots.delete(this.slots.keys().next().value!);
+    }
+    return slot;
   }
 
   private send(
@@ -373,6 +391,7 @@ export class CaptionOverlayController {
     for (const engine of this.engines.values()) engine.stop();
     this.engines.clear();
     this.speakers.clear();
+    this.slots.clear();
     this.main = undefined;
   }
 }

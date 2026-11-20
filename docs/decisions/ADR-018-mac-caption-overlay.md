@@ -65,7 +65,11 @@ and replaces the line when the answer differs. The model gets the previous final
 context and is told to fix only clearly misheard words, never to translate, summarise
 or polish. Rust refuses an answer that is not a light edit: the usual output checks, a
 length below half or above one and a half times the source plus eight characters, or
-a share of Hangul that moved by more than 0.3. Any failure keeps the recognizer's
+a share of Hangul, Han, kana or Latin letters that moved by more than 0.3 (so an answer
+in another caption language is refused for every spoken language). Corrections run
+beside the final queue, at most three at once, so a slow one never delays the next
+caption; a sentence that arrives beyond that keeps the recognizer's text. A final
+keeps the colour slot it was first sent with when its corrected text is re-sent. Any failure keeps the recognizer's
 text and is not reported; a Mac app older than 0.2.4 has no command and is asked
 once per session. For translated captions the Mac app appends one sentence to the
 shared interpreter prompt telling the model to translate what was evidently said;

@@ -402,3 +402,40 @@ test('the correction wrapper invokes the Mac command', async () => {
   await overlay.correctCaption('가면 공유', 'ko', ['앞 문장']);
   assert.deepEqual(JSON.parse(JSON.stringify(invoked)), [{ cmd: 'caption_correct', args: { text: '가면 공유', lang: 'ko', context: ['앞 문장'] } }]);
 });
+
+test('slow corrections never hold back later captions', async () => {
+  const pending = [];
+  const { controller, pushes, asked } = correctionFixture(() => new Promise((resolve) => { pending.push(resolve); }));
+  controller.setLanguages(['ko']);
+  for (let n = 1; n <= 6; n++) controller.update(`q${n}`, `${n}번째 문장입니다.`, true, 'ko-KR');
+  await flush();
+  // Every recognizer text is in the window although no correction has answered.
+  assert.deepEqual(entryPushes(pushes, 'ko').filter((p) => p.isFinal).map((p) => p.id), ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']);
+  // At most three corrections run at once; the rest keep the recognizer text.
+  assert.equal(asked.length, 3);
+  pending[0]({ correctedText: '고친 첫 문장입니다.' });
+  await flush();
+  assert.equal(entryPushes(pushes, 'ko').at(-1).text, '고친 첫 문장입니다.');
+  controller.update('q7', '7번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 4, 'a finished correction frees its place');
+  controller.stop();
+});
+
+test('a corrected line keeps the colour slot it was first sent with', async () => {
+  const pending = [];
+  const { controller, pushes } = correctionFixture(() => new Promise((resolve) => { pending.push(resolve); }));
+  controller.setLanguages(['ko']);
+  controller.update('k1', '첫 화자의 문장입니다.', true, 'ko-KR', '1');
+  await flush();
+  assert.equal(entryPushes(pushes, 'ko').at(-1).speaker, 0);
+  // Another speaker takes over as the main speaker before the correction answers.
+  for (let n = 0; n < 5; n++) controller.update(`o${n}`, `다른 화자의 ${n}번 문장입니다.`, true, 'ko-KR', '0');
+  await flush();
+  pending[0]({ correctedText: '첫 화자의 고친 문장입니다.' });
+  await flush();
+  const corrected = entryPushes(pushes, 'ko').at(-1);
+  assert.equal(corrected.id, 'k1');
+  assert.equal(corrected.speaker, 0, 'unchanged although speaker 1 is no longer the main speaker');
+  controller.stop();
+});
