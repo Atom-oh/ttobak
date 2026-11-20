@@ -125,7 +125,12 @@
         margin: 0;
         text-align: center;
         white-space: pre-wrap;
+        /* Break between words (Korean: between eojeol), and inside a word
+           only when it is wider than the window. */
+        word-break: keep-all;
         overflow-wrap: anywhere;
+        /* Lines of one caption get similar lengths instead of a lone last word. */
+        text-wrap-style: balance;
         font-family: var(--font);
         font-size: var(--size);
         line-height: 1.25;
@@ -133,6 +138,11 @@
         color: var(--color);
         -webkit-text-stroke: var(--stroke);
         paint-order: stroke fill;
+      }
+      /* Japanese and Chinese have no spaces to break at. */
+      :lang(ja) .line,
+      :lang(zh) .line {
+        word-break: normal;
       }
       .line.moving {
         transition: transform 150ms ease-out;

@@ -276,3 +276,12 @@ test('a speaker colours its line; the first voice and drafts keep the chosen col
   assert.deepEqual(page.lines().slice(-2), ['Third', 'Fourth']);
   assert.deepEqual(page.lineColors().slice(-2), ['#ffd166', ''], 'colours repeat after six; a non-number has none');
 });
+
+test('captions break between words and balance their lines', () => {
+  const rule = html.slice(html.indexOf('.line {'), html.indexOf('}', html.indexOf('.line {')));
+  assert.match(rule, /word-break:\s*keep-all/);
+  assert.match(rule, /overflow-wrap:\s*anywhere/, 'a word wider than the window still breaks');
+  assert.match(rule, /text-wrap-style:\s*balance/);
+  // Japanese and Chinese have no spaces, so they keep normal breaking.
+  assert.match(html, /:lang\(ja\) \.line,\s*:lang\(zh\) \.line\s*{\s*word-break:\s*normal/);
+});

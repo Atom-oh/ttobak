@@ -21,6 +21,9 @@ import {
   type WindowLayout,
 } from '@/lib/captionOverlay';
 import type { ExtraLiveLanguage, TranslationEntry } from '@/lib/liveTranslation';
+import {
+  CAPTION_CORRECTION_KEY, CAPTION_SPEAKER_COLORS_KEY, readCaptionSwitch, writeCaptionSwitch,
+} from '@/lib/recordLayoutPrefs';
 
 // Mac app only: drives the floating caption windows. Outside the Mac app the
 // hook makes no calls and reports `supported: false`. Caption text is never logged.
@@ -46,6 +49,12 @@ export interface CaptionOverlayState {
   retry: () => void;
   /** Reports whether the panel's settings section is expanded (the user is arranging windows). */
   setArranging: (expanded: boolean) => void;
+  /** Per-browser switch: the model fixes recognizer errors in same-language captions. */
+  correction: boolean;
+  setCorrection: (on: boolean) => void;
+  /** Per-browser switch: caption windows colour lines by speaker. */
+  speakerColors: boolean;
+  setSpeakerColors: (on: boolean) => void;
 }
 
 const RECOGNITION_LANGUAGE: Record<'ja' | 'zh', ExtraLiveLanguage> = { ja: 'ja-JP', zh: 'zh-CN' };
@@ -77,6 +86,32 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
   useEffect(() => {
     onEntryRef.current = onEntry;
   }, [onEntry]);
+
+  // Both switches default to on; the saved choice is read after mount so
+  // static rendering stays stable.
+  const [correction, setCorrectionState] = useState(true);
+  const [speakerColors, setSpeakerColorsState] = useState(true);
+  const correctionRef = useRef(true);
+  const speakerColorsRef = useRef(true);
+  useEffect(() => {
+    const savedCorrection = readCaptionSwitch(CAPTION_CORRECTION_KEY);
+    const savedColors = readCaptionSwitch(CAPTION_SPEAKER_COLORS_KEY);
+    correctionRef.current = savedCorrection;
+    speakerColorsRef.current = savedColors;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCorrectionState(savedCorrection);
+    setSpeakerColorsState(savedColors);
+  }, []);
+  const setCorrection = useCallback((on: boolean) => {
+    correctionRef.current = on;
+    setCorrectionState(on);
+    writeCaptionSwitch(CAPTION_CORRECTION_KEY, on);
+  }, []);
+  const setSpeakerColors = useCallback((on: boolean) => {
+    speakerColorsRef.current = on;
+    setSpeakerColorsState(on);
+    writeCaptionSwitch(CAPTION_SPEAKER_COLORS_KEY, on);
+  }, []);
 
   const cancelPreviewTimer = useCallback(() => {
     if (previewTimerRef.current === null) return;
@@ -158,6 +193,8 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     if (!isTauri()) return;
     const controller = new CaptionOverlayController({
       onError: setError,
+      correctionEnabled: () => correctionRef.current,
+      speakerColorsEnabled: () => speakerColorsRef.current,
       onEntry: (lang, entry) => onEntryRef.current?.(lang, entry),
     });
     controllerRef.current = controller;
@@ -314,6 +351,10 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     updateStyle,
     retry,
     setArranging,
+    correction,
+    setCorrection,
+    speakerColors,
+    setSpeakerColors,
   };
 }
 

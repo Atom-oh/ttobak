@@ -58,6 +58,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | caption_settings_get | returns {settings {profile, region, extraLanguage, windows}, profiles (names only), fonts} (ADR-018) |
 | caption_settings_set | profile?, region, extraLanguage ja/zh/null; profile must be in the local AWS profile list; choosing or changing the profile or region first shows a native confirmation sheet from Rust (cancel: `confirmation-declined`, settings unchanged; for 30 s after a cancel such a change returns `confirmation-cooldown` with no sheet; a call while one runs: `invalid-input`); clears cached AWS clients |
 | caption_translate | text, sourceLang, targetLang, isFinal, context[]; returns translatedText, engine llm/translate; SigV4 credentials only from the selected profile, never the default credentials chain (other SDK settings still load via `aws_config::defaults`); Bedrock is pinned to SigV4, so `AWS_BEARER_TOKEN_BEDROCK` is ignored (`bedrock_config`); upstream throttling returns `rate-limited`; only while that language's overlay window is open; 600 requests and 600,000 input bytes (text plus context) per sliding minute; text at most 9,000 bytes, context at most five items |
+| caption_correct | text (at most 3,000 bytes), lang, context[] (at most five); returns correctedText: a final caption in its spoken language with clearly misheard words fixed by the model; same profile, open-window, rate and byte-budget gates and error codes as `caption_translate`; an answer that is not a light edit of the text returns `invalid-output`; the caller keeps the recognizer's text on any error |
 | caption_overlay_open | lang ko/en/ja/zh (ja/zh only as the extra language); opens or reuses the window, returns its saved layout |
 | caption_overlay_close | lang; closes the window and saves it closed |
 | caption_overlay_set_style | lang, style {fontFamily, fontSize 16-160, fontColor, outlineColor, outlineWidth 0-12, backgroundOpacity 0-1}; saved and sent to the window |
@@ -111,7 +112,8 @@ listen to broadcast events such as native-pcm-chunk (accepted, ADR-018). Overlay
 use level 1000, all Spaces and full-screen-auxiliary behavior, are destroyed (keeping
 their saved `open` flags) when the main window is destroyed, and need
 `macOSPrivateApi` for transparency. `interpreter.rs` mirrors
-`backend/internal/service/translate.go`; keep them aligned.
+`backend/internal/service/translate.go`; keep them aligned. The caption path appends
+`RECOGNIZER_RULE` to that prompt and has its own correction prompt; neither has a server counterpart.
 native-mic-muted ({muted, app Zoom|Google Meet, reason muted}) reports
 the mute gate; a silent system tap while other apps play posts a notification; native-system-wake follows a system wake. native-listening-stopped ({reason system-sleep|recording}) goes to the main window only when something other than `stop_listening` ended a listening session. Remote event capability grants must
 match the actual loaded origin; do not add speculative origins. Tauri checks the

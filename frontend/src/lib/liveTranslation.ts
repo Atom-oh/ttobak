@@ -70,6 +70,12 @@ interface TranslationOptions {
   translate: (
     text: string, sourceLang: string, targetLang: string, signal: AbortSignal, options: TranslateRequestOptions,
   ) => Promise<TranslateResponse>;
+  /**
+   * Fixes recognizer errors in a final shown in the language it was spoken
+   * in. The recognizer's text is published first and replaced when this
+   * resolves; a rejection keeps it.
+   */
+  correct?: (text: string, lang: string, context: string[], signal: AbortSignal) => Promise<string>;
 }
 
 // Pure hesitation sounds only, including repeats ("어어", "umm"). Short words
@@ -284,6 +290,21 @@ export class LiveTranslation {
         engine: isFinal ? translationEngineBadge(quality, result) : undefined,
       };
       this.publish(segment);
+      if (isFinal && snapshot.sourceLang === snapshot.targetLang && this.options.correct) {
+        try {
+          const corrected = (await Promise.race([
+            this.options.correct(snapshot.original, snapshot.sourceLang, requestOptions.context ?? [], controller.signal),
+            cancellation,
+          ])).trim();
+          if (isCurrent() && !controller.signal.aborted && corrected && corrected !== segment.entry.translated
+            && utf8Length(corrected) <= 30000) {
+            segment.entry = { ...segment.entry, translated: corrected };
+            this.publish(segment);
+          }
+        } catch {
+          // The recognizer's text stays.
+        }
+      }
     } catch {
       if (isCurrent()) {
         segment.entry = { ...segment.entry, translated: '', status: 'error' };
