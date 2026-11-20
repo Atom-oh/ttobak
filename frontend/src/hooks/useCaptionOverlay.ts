@@ -108,7 +108,6 @@ export function useCaptionOverlay({ isRecording, onEntry }: CaptionOverlayOption
     const savedColors = readCaptionSwitch(CAPTION_SPEAKER_COLORS_KEY);
     correctionRef.current = savedCorrection;
     speakerColorsRef.current = savedColors;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCorrectionState(savedCorrection);
     setSpeakerColorsState(savedColors);
   }, []);

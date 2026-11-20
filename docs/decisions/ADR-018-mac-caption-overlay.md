@@ -78,6 +78,22 @@ speaker colours each have a per-browser switch in the panel (`ttobak-caption-cor
 `ttobak-caption-speaker-colors`, both on by default); with colours off no speaker is
 sent and every line keeps the chosen colour.
 
+**Slide terms.** The panel takes a presentation (PPTX, TXT or MD). The page reads
+the file itself (`lib/slideText.ts`: slide XML text runs only, no notes, at most 60,000
+bytes of text) and sends that text once to `caption_glossary`, which asks the same
+model for terms a recognizer is likely to mishear. Rust keeps only strings that
+occur in the slide text (case-insensitive), are 2 characters to 80 bytes on one
+line and are not repeats, at most 80, so the model cannot add text of its own and an
+instruction written on a slide is not followed. The terms live in the page's memory
+for that visit; they are not stored or logged, and neither is the slide text. Later
+`caption_translate` and `caption_correct` requests carry them as `glossary` (refused
+when over the same bounds, counted in the byte budget) with one more prompt
+sentence: write a word that sounds like a term as the slides spell it. For the
+light-edit check the terms are left out of both texts before the scripts are
+compared, so "엔진엑스" may become "Nginx". Accepted limits: PDF and Keynote are not
+read, the slide text goes to the model on the user's own AWS profile, and a term
+that also is an everyday word can be applied where it does not belong.
+
 **Line breaking.** Caption lines break between words (`word-break: keep-all`, so
 Korean breaks between eojeol), inside a word only when it is wider than the window,
 and balance their line lengths (`text-wrap-style: balance`, ignored by a WebKit that
