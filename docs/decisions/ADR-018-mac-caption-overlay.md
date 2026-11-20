@@ -57,6 +57,32 @@ not re-sent. Drafts and lines
 with no number keep the chosen colour. Rust drops a number above 29 instead of
 rejecting the push, and a Mac app older than 0.2.2 ignores the field.
 
+**Recognizer corrections.** A final caption shown in the language it was spoken in
+is not translated, so recognizer errors used to reach the window as heard. The page
+publishes the recognizer's text first, then asks `caption_correct` (same model, same
+gates as `caption_translate`: open window, request rate, byte budget, chosen profile)
+and replaces the line when the answer differs. The model gets the previous finals as
+context and is told to fix only clearly misheard words, never to translate, summarise
+or polish. Rust refuses an answer that is not a light edit: the usual output checks, a
+length below half or above one and a half times the source plus eight characters, or
+a share of Hangul, Han, kana or Latin letters that moved by more than 0.3 (so an answer
+in another caption language is refused for every spoken language). Corrections run
+beside the final queue, at most three at once, so a slow one never delays the next
+caption; a sentence that arrives beyond that keeps the recognizer's text. A final
+keeps the colour slot it was first sent with when its corrected text is re-sent. Any failure keeps the recognizer's
+text and is not reported; a Mac app older than 0.2.4 has no command and is asked
+once per session. For translated captions the Mac app appends one sentence to the
+shared interpreter prompt telling the model to translate what was evidently said;
+the server prompt is unchanged because it also translates documents. Correction and
+speaker colours each have a per-browser switch in the panel (`ttobak-caption-correction`,
+`ttobak-caption-speaker-colors`, both on by default); with colours off no speaker is
+sent and every line keeps the chosen colour.
+
+**Line breaking.** Caption lines break between words (`word-break: keep-all`, so
+Korean breaks between eojeol), inside a word only when it is wider than the window,
+and balance their line lengths (`text-wrap-style: balance`, ignored by a WebKit that
+lacks it). Japanese and Chinese windows keep normal breaking.
+
 **Idle and failure display.** A failed translation pushes that entry's id with empty
 text, which removes its line, so expired credentials mid-sentence never leave a stale
 draft on the projector. Text longer than the 4,000-byte push cap is cut to its tail

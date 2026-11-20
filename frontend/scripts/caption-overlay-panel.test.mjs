@@ -63,6 +63,10 @@ function props({ profile = 'dev', region = 'us-east-1', extraLanguage = null, wi
     toggleWindow: noop,
     updateStyle: noop,
     retry: noop,
+    correction: true,
+    setCorrection: noop,
+    speakerColors: true,
+    setSpeakerColors: noop,
     isRecording: false,
     ...overrides,
   };
@@ -219,4 +223,27 @@ test('a declined profile change has its own message and re-reads settings', () =
   assert.match(handler, /getCaptionSettings\(\)/);
   assert.match(hook, /save\(profile, settings\.region, settings\.extraLanguage\)\.catch\(saveFailed\)/);
   assert.match(hook, /save\(settings\.profile, trimmed, settings\.extraLanguage\)\.catch\(saveFailed\)/);
+});
+
+test('settings offer the correction and speaker colour switches with their state', () => {
+  const inputTag = (html, id) => html.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`))?.[0];
+  const on = render(props());
+  assert.match(inputTag(on, 'caption-correction'), /checked=""/);
+  assert.match(inputTag(on, 'caption-speaker-colors'), /checked=""/);
+  assert.ok(on.includes('오인식 교정'));
+  assert.ok(on.includes('화자별 색'));
+  assert.ok(on.includes('선택한 AWS 계정으로 모델을 한 번 더 불러요'), 'the cost is stated');
+  const off = render(props({ correction: false, speakerColors: false }));
+  assert.doesNotMatch(inputTag(off, 'caption-correction'), /checked/);
+  assert.doesNotMatch(inputTag(off, 'caption-speaker-colors'), /checked/);
+  assert.equal(renderCollapsed(props()).includes('caption-correction'), false);
+});
+
+test('caption switches are on unless turned off', () => {
+  const store = new Map();
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  assert.equal(layoutPrefs.readCaptionSwitch(layoutPrefs.CAPTION_CORRECTION_KEY, storage), true);
+  layoutPrefs.writeCaptionSwitch(layoutPrefs.CAPTION_CORRECTION_KEY, false, storage);
+  assert.equal(layoutPrefs.readCaptionSwitch(layoutPrefs.CAPTION_CORRECTION_KEY, storage), false);
+  assert.equal(layoutPrefs.readCaptionSwitch(layoutPrefs.CAPTION_SPEAKER_COLORS_KEY, storage), true);
 });

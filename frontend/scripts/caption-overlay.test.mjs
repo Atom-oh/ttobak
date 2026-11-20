@@ -294,3 +294,148 @@ test('the main speaker is pushed as slot 0 and trades slots with label 0', async
   assert.equal(await say('c1', '4'), 4);
   assert.equal(pushes.filter((push) => push.id === 'a1').length, 1, 'no re-send of earlier lines');
 });
+
+function correctionFixture(correct, switches = {}) {
+  const liveTranslation = loadModule('lib/liveTranslation.ts');
+  const overlay = loadModule('lib/captionOverlay.ts', { './liveTranslation': liveTranslation, './interpretSpeakers': loadModule('lib/interpretSpeakers.ts') });
+  const pushes = [];
+  const errors = [];
+  const asked = [];
+  const controller = new overlay.CaptionOverlayController({
+    translate: async (text, _source, targetLang) => ({ translatedText: `[${targetLang}] ${text}`, engine: 'llm' }),
+    push: async (lang, kind, id, order, text, isFinal, ...rest) => {
+      pushes.push({ lang, kind, id, order, text, isFinal, ...(rest.length ? { speaker: rest[0] } : {}) });
+    },
+    correct: async (text, lang, context) => {
+      asked.push({ text, lang, context });
+      return correct(text, lang, context);
+    },
+    onError: (code) => errors.push(code),
+    ...switches,
+  });
+  return { controller, pushes, errors, asked };
+}
+
+test('a same-language final shows the recognizer text, then the corrected text', async () => {
+  const { controller, pushes, asked } = correctionFixture(async () => ({ correctedText: '화면 공유되고 있나요?' }));
+  controller.setLanguages(['ko', 'en']);
+  controller.update('c1', '가면 공유되고 있나요?', true, 'ko-KR');
+  await flush();
+  const ko = entryPushes(pushes, 'ko').filter((p) => p.isFinal).map((p) => p.text);
+  assert.deepEqual(ko, ['가면 공유되고 있나요?', '화면 공유되고 있나요?']);
+  // Only the window in the spoken language asks; the other window translates.
+  assert.deepEqual(asked.map((a) => a.lang), ['ko']);
+  assert.equal(entryPushes(pushes, 'en').at(-1).text, '[en] 가면 공유되고 있나요?');
+  controller.stop();
+});
+
+test('drafts and an unchanged correction push nothing extra', async () => {
+  const { controller, pushes, asked } = correctionFixture(async (text) => ({ correctedText: text }));
+  controller.setLanguages(['ko']);
+  controller.update('c1', '회의는 세 시에', false, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 0, 'a draft is never corrected');
+  controller.update('c1', '회의는 세 시에 시작합니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 1);
+  assert.equal(entryPushes(pushes, 'ko').filter((p) => p.isFinal).length, 1);
+  controller.stop();
+});
+
+test('a failed correction keeps the recognizer text and reports no error', async () => {
+  const { controller, pushes, errors } = correctionFixture(async () => {
+    throw Object.assign(new Error('x'), { code: 'timeout' });
+  });
+  controller.setLanguages(['ko']);
+  controller.update('c1', '망블리 환경입니다.', true, 'ko-KR');
+  await flush();
+  assert.deepEqual(entryPushes(pushes, 'ko').filter((p) => p.isFinal).map((p) => p.text), ['망블리 환경입니다.']);
+  assert.deepEqual(errors, []);
+  controller.stop();
+});
+
+test('a Mac app without the correction command is asked once', async () => {
+  const { controller, asked } = correctionFixture(async () => {
+    throw 'Command caption_correct not found';
+  });
+  controller.setLanguages(['ko']);
+  controller.update('c1', '첫 번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  controller.update('c2', '두 번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 1);
+  controller.stop();
+});
+
+test('the correction switch is read per caption', async () => {
+  let on = false;
+  const { controller, asked } = correctionFixture(async (text) => ({ correctedText: text }), { correctionEnabled: () => on });
+  controller.setLanguages(['ko']);
+  controller.update('c1', '첫 번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 0);
+  on = true;
+  controller.update('c2', '두 번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 1);
+  controller.stop();
+});
+
+test('with speaker colours off no speaker reaches the window', async () => {
+  const { controller, pushes } = correctionFixture(async (text) => ({ correctedText: text }), { speakerColorsEnabled: () => false });
+  controller.setLanguages(['en']);
+  controller.update('s1', '안녕하세요 여러분 반갑습니다', true, 'ko-KR', '0');
+  controller.update('s2', '오늘 회의를 시작하겠습니다', true, 'ko-KR', '1');
+  await flush();
+  const finals = entryPushes(pushes, 'en').filter((p) => p.isFinal);
+  assert.equal(finals.length, 2);
+  assert.ok(finals.every((p) => !('speaker' in p)));
+  controller.stop();
+});
+
+test('the correction wrapper invokes the Mac command', async () => {
+  const invoked = [];
+  const window = { __TAURI__: { core: { invoke: async (cmd, args) => { invoked.push({ cmd, args }); return { correctedText: 'x' }; } } } };
+  const overlay = loadModule('lib/captionOverlay.ts', {
+    './liveTranslation': loadModule('lib/liveTranslation.ts'), './interpretSpeakers': loadModule('lib/interpretSpeakers.ts'),
+  }, { window });
+  await overlay.correctCaption('가면 공유', 'ko', ['앞 문장']);
+  assert.deepEqual(JSON.parse(JSON.stringify(invoked)), [{ cmd: 'caption_correct', args: { text: '가면 공유', lang: 'ko', context: ['앞 문장'] } }]);
+});
+
+test('slow corrections never hold back later captions', async () => {
+  const pending = [];
+  const { controller, pushes, asked } = correctionFixture(() => new Promise((resolve) => { pending.push(resolve); }));
+  controller.setLanguages(['ko']);
+  for (let n = 1; n <= 6; n++) controller.update(`q${n}`, `${n}번째 문장입니다.`, true, 'ko-KR');
+  await flush();
+  // Every recognizer text is in the window although no correction has answered.
+  assert.deepEqual(entryPushes(pushes, 'ko').filter((p) => p.isFinal).map((p) => p.id), ['q1', 'q2', 'q3', 'q4', 'q5', 'q6']);
+  // At most three corrections run at once; the rest keep the recognizer text.
+  assert.equal(asked.length, 3);
+  pending[0]({ correctedText: '고친 첫 문장입니다.' });
+  await flush();
+  assert.equal(entryPushes(pushes, 'ko').at(-1).text, '고친 첫 문장입니다.');
+  controller.update('q7', '7번째 문장입니다.', true, 'ko-KR');
+  await flush();
+  assert.equal(asked.length, 4, 'a finished correction frees its place');
+  controller.stop();
+});
+
+test('a corrected line keeps the colour slot it was first sent with', async () => {
+  const pending = [];
+  const { controller, pushes } = correctionFixture(() => new Promise((resolve) => { pending.push(resolve); }));
+  controller.setLanguages(['ko']);
+  controller.update('k1', '첫 화자의 문장입니다.', true, 'ko-KR', '1');
+  await flush();
+  assert.equal(entryPushes(pushes, 'ko').at(-1).speaker, 0);
+  // Another speaker takes over as the main speaker before the correction answers.
+  for (let n = 0; n < 5; n++) controller.update(`o${n}`, `다른 화자의 ${n}번 문장입니다.`, true, 'ko-KR', '0');
+  await flush();
+  pending[0]({ correctedText: '첫 화자의 고친 문장입니다.' });
+  await flush();
+  const corrected = entryPushes(pushes, 'ko').at(-1);
+  assert.equal(corrected.id, 'k1');
+  assert.equal(corrected.speaker, 0, 'unchanged although speaker 1 is no longer the main speaker');
+  controller.stop();
+});
