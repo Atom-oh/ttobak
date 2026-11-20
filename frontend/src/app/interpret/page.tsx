@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CaptionOverlayPanel } from '@/components/record/CaptionOverlayPanel';
-import { NativeMicSelector, readNativeInputPreference } from '@/components/record/NativeMicSelector';
+import { NativeMicSelector, NO_MICROPHONE, readNativeInputPreference } from '@/components/record/NativeMicSelector';
 import { useCaptionOverlay, type CaptionOverlayState, type CaptionSegmentHandler } from '@/hooks/useCaptionOverlay';
 import { useInterpretSession } from '@/hooks/useInterpretSession';
 import { captionLanguages, type CaptionLang } from '@/lib/captionOverlay';
@@ -255,9 +255,12 @@ function Interpreter() {
       {!idle && session.input && (
         <p className="text-xs text-slate-500 dark:text-text-muted">마이크: {session.input.name} · Mac에서 나는 소리도 함께 듣습니다.</p>
       )}
+      {!idle && !session.input && inputUid === NO_MICROPHONE && (
+        <p className="text-xs text-slate-500 dark:text-text-muted">마이크 없이 Mac에서 나는 소리만 듣습니다.</p>
+      )}
       {idle && (
         <p className="text-sm text-slate-500 dark:text-text-muted">
-          마이크와 Mac에서 나는 소리를 함께 듣고 통역합니다. {INTERPRET_MESSAGES.notSaved}
+          {inputUid === NO_MICROPHONE ? 'Mac에서 나는 소리만 듣고 통역합니다.' : '마이크와 Mac에서 나는 소리를 함께 듣고 통역합니다.'} {INTERPRET_MESSAGES.notSaved}
         </p>
       )}
 

@@ -38,7 +38,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 
 | Command | Contract |
 |---|---|
-| start_recording | meeting_id, input_device_uid?; returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
+| start_recording | meeting_id, input_device_uid? (`none` captures system audio only, with no microphone and no warning; `switch_recording_input` refuses `none`); returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
 | list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-017) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, capture_lost (a failed mic switch stopped capture), optional warnings once that path finalized (covers stops that timed out) |
@@ -46,7 +46,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 | cleanup_recording | Validated inactive/finalized path; removes WAV and adopted entry |
 | release_recording_power | Releases only the path's idle-sleep protection, preserving recovery data |
 | list_leftover_recordings | Startup-adopted inactive WAVs, newest first; not current-session recordings |
-| start_listening | input_device_uid?; live interpretation capture with no file; returns optional warnings and input; AlreadyRunning while a recording or another start holds the slot |
+| start_listening | input_device_uid? (`none` as in start_recording); live interpretation capture with no file; returns optional warnings and input; AlreadyRunning while a recording or another start holds the slot |
 | stop_listening | returns stopped (false when nothing was listening), stop_timed_out; idempotent, never stops a recording |
 | control_ready | info {loggedIn, mounted?}; SPA bridge readiness (mounted:false on unload clears it) |
 | control_reply | requestId, result {ok, data?/error{code,message}}; answers one native-control-request |
