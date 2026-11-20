@@ -58,3 +58,7 @@ test('inviteResultText maps outcomes and codes', () => {
 test('statusText covers every status', () => {
   assert.deepEqual(['member', 'pending', 'none', 'unknown'].map(onboarding.statusText), ['멤버', '초대 대기', '미초대', '확인 불가']);
 });
+
+test('unavailable accounts are counted in the summary notice', () => {
+  assert.equal(onboarding.ONBOARDING_COPY.unavailable(2), '어카운트 2개를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.');
+});

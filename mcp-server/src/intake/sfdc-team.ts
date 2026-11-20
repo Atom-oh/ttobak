@@ -8,7 +8,7 @@
 import type { TtobakApi } from '../api.js';
 import { IntakeError, intakeCode, type IntakeCode } from './errors.js';
 import {
-  deliver, fingerprint, forgottenTeamPath, loadSfdcState, parseFailed, readAll, record, send, serverRevisions, text,
+  deliver, fingerprint, forgottenTeamPath, loadSfdcState, parseFailed, readAll, ReadStopped, record, send, serverRevisions, text,
   type ForgottenTeamAccounts, type Ledger, type Mutation, type SFDCTeamMember, type SfdcSource, type SfdcState, type SourcePlan,
 } from './sfdc.js';
 import type { ToolExpectation } from './mcp-client.js';
@@ -210,19 +210,28 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
     } catch { after = null; }
   }
   let last: string | null = null;
+  const outOfTime = () => clock() - started > SFDC_TEAM_BUDGET_MS || (options.deadline !== undefined && clock() >= options.deadline);
   for (const accountId of rotatedAccounts(options.accountIds, after)) {
-    if (clock() - started > SFDC_TEAM_BUDGET_MS || (options.deadline !== undefined && clock() >= options.deadline)) {
+    if (outOfTime()) {
       kept.add(accountId);
       counts.skippedBudget++;
       continue;
     }
     // Every attempted account advances the resume point, failed ones too, so a
     // run of timeouts cannot pin the rotation to the same prefix.
+    const previous: string | null = last;
     last = accountId;
     let records: Record<string, unknown>[];
     try {
-      records = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: 'Account', id: accountId });
+      records = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: 'Account', id: accountId }, outOfTime);
     } catch (error) {
+      if (error instanceof ReadStopped) {
+        // Stopped between pages: kept like a budget skip, and read first next run.
+        last = previous;
+        kept.add(accountId);
+        counts.skippedBudget++;
+        continue;
+      }
       const code = intakeCode(error);
       // Midway expiry ends the step; nothing partial is sent.
       if (code === 'AUTH_EXPIRED_MIDWAY') throw error;
@@ -253,8 +262,9 @@ export async function runSfdcTeam(options: SfdcTeamRunOptions): Promise<SfdcTeam
   counts.unchanged = planned.unchanged;
   if (!dryRun && state) {
     await deliver(options.api!, store, state, planned.plan);
-    // A finished pass clears the resume point; a budget-limited one records where it stopped.
-    const point: TeamResumePoint = { version: 1, after: counts.skippedBudget ? last : null };
+    // A finished pass clears the resume point; a budget-limited one records where it
+    // stopped, and one that attempted nothing keeps the stored point.
+    const point: TeamResumePoint = { version: 1, after: counts.skippedBudget ? last ?? after : null };
     store.write(point, ...resumePath(sourceId, options.scope!));
   }
   const result: 'ok' | IntakeCode = failures.length === 0 ? 'ok'
