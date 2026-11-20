@@ -7,12 +7,14 @@ export function OnboardingList({ summary, onInvite }: {
   summary: OnboardingSummary;
   onInvite: (sfdcAccountId: string, name: string) => void;
 }) {
-  if (!summary.items.length && !summary.truncated) {
+  const unavailable = summary.unavailable ?? 0;
+  if (!summary.items.length && !summary.truncated && !unavailable) {
     return <p className="rounded-lg bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:bg-white/5 dark:text-text-muted">{ONBOARDING_COPY.empty}</p>;
   }
   return (
     <div className="space-y-2">
       {summary.truncated && <p className="text-xs text-amber-700 dark:text-amber-400">{ONBOARDING_COPY.truncated}</p>}
+      {unavailable > 0 && <p role="alert" className="text-xs text-amber-700 dark:text-amber-400">{ONBOARDING_COPY.unavailable(unavailable)}</p>}
       <ul className="divide-y divide-slate-100 dark:divide-white/5">
         {summary.items.map(item => {
           const text = summaryText(item.roles);

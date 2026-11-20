@@ -322,11 +322,22 @@ export interface SfdcSource {
 }
 
 /** Follows `cursor` pages to the end; a capped, cursorless or short read fails. */
-export async function readAll(source: SfdcSource, tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+/** Thrown by `readAll` when its `shouldStop` check ends a multi-page read; nothing partial is returned. */
+export class ReadStopped extends Error {
+  constructor(tool: string) { super(`${tool} read stopped at the run deadline`); }
+}
+
+/**
+ * Reads every page. `shouldStop`, when given, is checked before each page after the
+ * first, so a long read cannot run past the caller's deadline.
+ */
+export async function readAll(source: SfdcSource, tool: string, args: Record<string, unknown>,
+  shouldStop?: () => boolean): Promise<Record<string, unknown>[]> {
   const records: Record<string, unknown>[] = [];
   const seen = new Set<string>();
   let after: string | undefined;
   for (let index = 0; index < MAX_PAGES; index++) {
+    if (index > 0 && shouldStop?.()) throw new ReadStopped(tool);
     const page = parsePage(await source.call(tool, { ...args, limit: PAGE_LIMIT, ...(after ? { after } : {}) }), tool);
     for (const { id } of page.records) {
       if (typeof id === 'string' && seen.size === seen.add(id).size) throw parseFailed(`${tool} repeated a record ID`);
