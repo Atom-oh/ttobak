@@ -31644,7 +31644,7 @@ async function setup(args, environment, store) {
   let sync;
   let schedule = "none";
   const stop = (code, message) => {
-    if (code === "AUTH_EXPIRED_MIDWAY") say("Midway \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD130\uBBF8\uB110\uC5D0\uC11C `mwinit -o`\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.");
+    if (code === "AUTH_EXPIRED_MIDWAY") say("Midway \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD130\uBBF8\uB110\uC5D0\uC11C `mwinit -f`\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.");
     return { ok: false, code, message, connectors, dryRun, synced, schedule, ...sync ? { sync } : {} };
   };
   const before = store.readText("selection.json");
@@ -32626,7 +32626,7 @@ async function runConnectors(options2, environment, store) {
   return code ? {
     ok: false,
     code,
-    message: code === "AUTH_EXPIRED_MIDWAY" ? "run mwinit -o, then retry" : "a connector failed",
+    message: code === "AUTH_EXPIRED_MIDWAY" ? "run mwinit -f, then retry" : "a connector failed",
     results
   } : { ok: true, results };
 }

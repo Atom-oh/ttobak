@@ -191,7 +191,7 @@ test('setup stops on AUTH_EXPIRED_MIDWAY', async t => {
   assert.equal(output.connectors.slack, undefined, 'setup stops before the next connector');
   assert.equal(context.api.calls.length, 0, 'no dry run or sync after the stop');
   assert.equal(existsSync(plistPath(home)), false);
-  assert.ok(context.errors.some(line => line.includes('mwinit -o')));
+  assert.ok(context.errors.some(line => line.includes('mwinit -f')));
   assertNoSecrets(context, home);
 });
 
