@@ -284,3 +284,35 @@ test('the run deadline stops new accounts before the step budget does', async t 
   const late = await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B', '001C'], { clock: () => now, deadline: now - 1 }));
   assert.deepEqual([late.counts.accounts, late.counts.skippedBudget, late.result], [0, 3, 'ok']);
 });
+
+test('the deadline is checked between pages, and the stopped account goes first next run', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')], [member('b2')]], '001C': [[member('c1')]] };
+  await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B', '001C']));
+  let now = 1_000_000;
+  const session = teamSession(teams);
+  const call = session.call;
+  session.call = async (tool, args) => { now += 60_000; return call(tool, args); };
+  // 001A uses one minute; 001B's first page lands past the deadline, so its second page is never read.
+  const result = await runSfdcTeam(base(store, session, api, ['001A', '001B', '001C'], { clock: () => now, deadline: now + 90_000 }));
+  assert.deepEqual(session.calls.map(item => [item.id, item.after]), [['001A', undefined], ['001B', undefined]]);
+  assert.deepEqual([result.counts.accounts, result.counts.failedAccounts, result.counts.skippedBudget, result.result], [1, 0, 2, 'ok']);
+  assert.ok(!mutations(api).some(item => item.op === 'remove'), 'a stopped account keeps its members');
+  const next = teamSession(teams);
+  await runSfdcTeam(base(store, next, api, ['001A', '001B', '001C']));
+  assert.equal(next.calls[0].id, '001B', 'the stopped account is read first');
+});
+
+test('a pass that attempts nothing keeps the stored resume point', async t => {
+  const store = tempStore(t);
+  const api = teamApi();
+  const teams = { '001A': [[member('a1')]], '001B': [[member('b1')]], '001C': [[member('c1')]] };
+  store.write({ version: 1, after: '001A' }, 'sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.resume.json');
+  const late = await runSfdcTeam(base(store, teamSession(teams), api, ['001A', '001B', '001C'], { clock: () => 0, deadline: -1 }));
+  assert.equal(late.counts.skippedBudget, 3);
+  assert.deepEqual(store.read('sfdc', SOURCE_ID, SCOPE, 'sfdc-account-team.resume.json'), { version: 1, after: '001A' });
+  const next = teamSession(teams);
+  await runSfdcTeam(base(store, next, api, ['001A', '001B', '001C']));
+  assert.equal(next.calls[0].id, '001B');
+});

@@ -20,10 +20,14 @@ type onboardingAccountsFake struct {
 	addErr   map[string]error // email -> error
 	pending  map[string]bool  // email -> pending outcome
 	getCalls int
+	getErr   map[string]error // accountID -> GetAccount error
 }
 
 func (fake *onboardingAccountsFake) GetAccount(_ context.Context, _, accountID string) (*model.AccountResponse, error) {
 	fake.getCalls++
+	if err := fake.getErr[accountID]; err != nil {
+		return nil, err
+	}
 	if fake.denied[accountID] {
 		return nil, ErrForbidden
 	}
@@ -376,5 +380,26 @@ func TestRemovedAssignmentDeletesTeam(test *testing.T) {
 	}
 	if len(store.teamDeleted) != 1 || store.teamDeleted[0] != "001A" {
 		test.Fatalf("removed assignment must delete its team: %v", store.teamDeleted)
+	}
+}
+
+func TestListOnboardingCountsFailedAccountsInsteadOfFailing(test *testing.T) {
+	store := &performanceStoreFake{assignments: map[string][]model.SFDCAssignment{}, mappings: map[string][]model.AccountMapping{}}
+	for _, id := range []string{"S1", "S2", "S3"} {
+		store.assignments["owner"] = append(store.assignments["owner"], model.SFDCAssignment{SFDCAccountID: id})
+		store.mappings["owner"] = append(store.mappings["owner"], model.AccountMapping{SFDCAccountID: id, AccountID: "acc" + id})
+	}
+	accounts := &onboardingAccountsFake{members: map[string][]model.AccountMemberDTO{"accS1": nil, "accS3": nil},
+		getErr: map[string]error{"accS2": errors.New("throttled")}}
+	summary, err := performanceTestService(store, accounts).ListOnboarding(test.Context(), "owner")
+	if err != nil || summary.Unavailable != 1 || len(summary.Items) != 2 || summary.Items[0].SFDCAccountID != "S1" || summary.Items[1].SFDCAccountID != "S3" {
+		test.Fatalf("summary %+v err %v", summary, err)
+	}
+
+	ctx, cancel := context.WithCancel(test.Context())
+	cancel()
+	cancelled := &onboardingAccountsFake{getErr: map[string]error{"accS1": context.Canceled}}
+	if _, err := performanceTestService(store, cancelled).ListOnboarding(ctx, "owner"); !errors.Is(err, context.Canceled) {
+		test.Fatalf("a cancelled request must fail, got %v", err)
 	}
 }
