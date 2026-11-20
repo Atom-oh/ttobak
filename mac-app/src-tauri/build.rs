@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &[
     "start_recording",
     "stop_recording",
     "list_input_devices",
+    "capture_features",
     "switch_recording_input",
     "recording_status",
     "upload_recording",

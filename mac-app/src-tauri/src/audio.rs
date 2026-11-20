@@ -960,7 +960,11 @@ pub mod macos {
                 },
                 owner,
             );
-            start_warnings.extend(zoom_warning);
+            // Without a microphone there is no voice for the mute gate to
+            // silence, so its setup note would only confuse.
+            if mic_active {
+                start_warnings.extend(zoom_warning);
+            }
             let ctx = Box::into_raw(Box::new(CallbackCtx {
                 tx: Mutex::new(Some(tx)),
                 layout,

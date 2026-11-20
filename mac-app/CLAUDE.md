@@ -40,6 +40,7 @@ stub compiler for objc2's build script; that proves types, not runtime behavior.
 |---|---|
 | start_recording | meeting_id, input_device_uid? (`none` captures system audio only, with no microphone and no warning; `switch_recording_input` refuses `none`); returns temp_path, optional warnings (e.g. no microphone), input {uid, name, reason requested/meeting/default, app?} |
 | list_input_devices | input-capable non-virtual devices {uid, name, channels, is_default, used_by meeting apps} (ADR-017) |
+| capture_features | returns {noMicrophone: true}; the page offers and sends `none` only when this command exists and says so (an older build would capture a microphone) |
 | stop_recording | returns temp_path, duration_ms, byte_size, stop_timed_out, optional warnings (silent source, dropped buffers) |
 | recording_status | path; recording, temp_path, elapsed_ms, finalizing_for_path, capture_lost (a failed mic switch stopped capture), optional warnings once that path finalized (covers stops that timed out) |
 | upload_recording | path, uploadUrl, contentType; returns HTTP status code |
