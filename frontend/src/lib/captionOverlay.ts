@@ -141,18 +141,38 @@ export function pushCaption(
   return invoke<void>('caption_overlay_push', speaker === undefined ? args : { ...args, speaker });
 }
 
+/** Adds the slide terms only when there are some, so the usual request is unchanged. */
+function withGlossary<T extends Record<string, unknown>>(args: T, glossary?: string[]): T & { glossary?: string[] } {
+  return glossary?.length ? { ...args, glossary } : args;
+}
+
 export function translateCaption(
-  text: string, sourceLang: string, targetLang: string, isFinal: boolean, context: string[],
+  text: string, sourceLang: string, targetLang: string, isFinal: boolean, context: string[], glossary?: string[],
 ): Promise<CaptionTranslateResult> {
-  return invoke<CaptionTranslateResult>('caption_translate', { text, sourceLang, targetLang, isFinal, context });
+  return invoke<CaptionTranslateResult>(
+    'caption_translate', withGlossary({ text, sourceLang, targetLang, isFinal, context }, glossary),
+  );
+}
+
+/** Most slide terms kept; matches `MAX_GLOSSARY_TERMS` in the Mac app. */
+export const MAX_GLOSSARY_TERMS = 80;
+
+/**
+ * Asks the Mac app to pick caption terms out of slide text with the model
+ * (one request on the chosen AWS profile). Mac app 0.2.4 or later.
+ */
+export function extractCaptionGlossary(slides: string): Promise<{ terms: string[] }> {
+  return invoke<{ terms: string[] }>('caption_glossary', { slides });
 }
 
 /**
  * Asks the Mac app to fix recognizer errors in a final caption. A Mac app
  * older than 0.2.4 has no such command and rejects without a `code`.
  */
-export function correctCaption(text: string, lang: string, context: string[]): Promise<{ correctedText: string }> {
-  return invoke<{ correctedText: string }>('caption_correct', { text, lang, context });
+export function correctCaption(
+  text: string, lang: string, context: string[], glossary?: string[],
+): Promise<{ correctedText: string }> {
+  return invoke<{ correctedText: string }>('caption_correct', withGlossary({ text, lang, context }, glossary));
 }
 
 /** Caption windows allowed by the settings: ko and en, plus at most one of ja/zh. */
@@ -233,7 +253,7 @@ export const MAX_PUSH_SPEAKER = 29;
 
 interface ControllerDeps {
   translate: (
-    text: string, sourceLang: string, targetLang: string, isFinal: boolean, context: string[],
+    text: string, sourceLang: string, targetLang: string, isFinal: boolean, context: string[], glossary?: string[],
   ) => Promise<TranslateResponse>;
   push: typeof pushCaption;
   correct: typeof correctCaption;
@@ -259,6 +279,8 @@ export class CaptionOverlayController {
   private main: number | undefined;
   /** Set when the Mac app has no correction command; nothing is asked again. */
   private correctionMissing = false;
+  /** Terms from the speaker's slides, sent as hints; in memory only. */
+  private glossary: string[] = [];
   private deps: ControllerDeps;
 
   constructor(deps: Partial<ControllerDeps> & Pick<ControllerDeps, 'onError'>) {
@@ -266,6 +288,11 @@ export class CaptionOverlayController {
       translate: translateCaption, push: pushCaption, correct: correctCaption,
       correctionEnabled: () => true, speakerColorsEnabled: () => true, ...deps,
     };
+  }
+
+  /** Replaces the slide terms sent with later captions; an empty list sends none. */
+  setGlossary(terms: string[]): void {
+    this.glossary = terms.slice(0, MAX_GLOSSARY_TERMS);
   }
 
   /** Creates engines for newly open languages and stops those no longer open. */
@@ -291,7 +318,9 @@ export class CaptionOverlayController {
       onReset: () => {},
       translate: async (text, sourceLang, targetLang, _signal, options: TranslateRequestOptions) => {
         try {
-          return await this.deps.translate(text, sourceLang, targetLang, options.quality === 'high', options.context ?? []);
+          return await (this.glossary.length
+            ? this.deps.translate(text, sourceLang, targetLang, options.quality === 'high', options.context ?? [], this.glossary)
+            : this.deps.translate(text, sourceLang, targetLang, options.quality === 'high', options.context ?? []));
         } catch (err) {
           const code = rejectionCode(err);
           if (code && !this.reported.has(code)) {
@@ -306,7 +335,9 @@ export class CaptionOverlayController {
       correct: async (text, sourceLang, context) => {
         if (this.correctionMissing || !this.deps.correctionEnabled()) throw new Error('Correction is off');
         try {
-          return (await this.deps.correct(text, sourceLang, context)).correctedText;
+          return (await (this.glossary.length
+            ? this.deps.correct(text, sourceLang, context, this.glossary)
+            : this.deps.correct(text, sourceLang, context))).correctedText;
         } catch (err) {
           if (!rejectionCode(err)) this.correctionMissing = true;
           throw err;

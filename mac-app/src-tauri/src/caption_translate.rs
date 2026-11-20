@@ -5,7 +5,10 @@
 //! text is never logged (only codes, byte lengths and engine names).
 
 use crate::caption_model::{self, CaptionSettings, FONTS, LANGS};
-use crate::interpreter::{self, LLM_MAX_BYTES, MAX_CONTEXT, MAX_TEXT_BYTES, MODEL_ID};
+use crate::interpreter::{
+    self, LLM_MAX_BYTES, MAX_CONTEXT, MAX_GLOSSARY_TERMS, MAX_SLIDES_BYTES, MAX_TEXT_BYTES,
+    MODEL_ID,
+};
 use aws_config::profile::ProfileFileCredentialsProvider;
 use aws_config::provider_config::ProviderConfig;
 use aws_config::{BehaviorVersion, Region};
@@ -28,6 +31,8 @@ const RATE_PER_MINUTE: u32 = 600;
 const BYTES_PER_MINUTE: usize = 600_000;
 const LLM_TIMEOUT: Duration = Duration::from_secs(6);
 const TRANSLATE_TIMEOUT: Duration = Duration::from_secs(6);
+/// One request per uploaded deck, with up to 60,000 bytes of input.
+const GLOSSARY_TIMEOUT: Duration = Duration::from_secs(40);
 /// After a declined confirmation, further changes that need one are refused
 /// for this long without showing a sheet, so a page cannot wear the user
 /// down with repeated prompts.
@@ -157,9 +162,22 @@ impl ByteBudget {
     }
 }
 
-/// Input bytes a request sends: the text plus every context entry.
-pub fn request_bytes(text: &str, context: &[String]) -> usize {
-    text.len() + context.iter().map(String::len).sum::<usize>()
+/// Input bytes a request sends: the text plus every context entry and
+/// glossary term.
+pub fn request_bytes(text: &str, context: &[String], glossary: &[String]) -> usize {
+    text.len()
+        + context.iter().map(String::len).sum::<usize>()
+        + glossary.iter().map(String::len).sum::<usize>()
+}
+
+/// Slide terms sent with a request: at most `MAX_GLOSSARY_TERMS`, each a
+/// short single line; anything else is refused, never silently cut.
+pub fn check_glossary(glossary: Option<Vec<String>>) -> Result<Vec<String>, CaptionError> {
+    let terms = glossary.unwrap_or_default();
+    if terms.len() > MAX_GLOSSARY_TERMS || !terms.iter().all(|t| interpreter::glossary_term_ok(t)) {
+        return Err(CaptionError::invalid("Glossary is not valid."));
+    }
+    Ok(terms)
 }
 
 /// Rejects a translation into `target` unless its overlay window is open
@@ -651,8 +669,9 @@ async fn run_llm(
     source: &str,
     target: &str,
     context: &[String],
+    glossary: &[String],
 ) -> Result<String, &'static str> {
-    let body = interpreter::build_request(text, source, target, context);
+    let body = interpreter::build_request(text, source, target, context, glossary);
     let call = clients
         .bedrock
         .invoke_model()
@@ -677,8 +696,9 @@ async fn run_correction(
     text: &str,
     lang: &str,
     context: &[String],
+    glossary: &[String],
 ) -> Result<String, &'static str> {
-    let body = interpreter::build_correction_request(text, lang, context);
+    let body = interpreter::build_correction_request(text, lang, context, glossary);
     let call = clients
         .bedrock
         .invoke_model()
@@ -694,7 +714,7 @@ async fn run_correction(
     };
     let corrected =
         interpreter::parse_response(out.body().as_ref()).map_err(|_| "invalid-output")?;
-    interpreter::validate_correction(text, &corrected).map_err(|_| "invalid-output")?;
+    interpreter::validate_correction(text, &corrected, glossary).map_err(|_| "invalid-output")?;
     Ok(corrected)
 }
 
@@ -723,6 +743,8 @@ async fn run_translate(
     Ok(translated)
 }
 
+// Tauri passes each argument by name; a struct would change the wire shape.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn caption_translate(
     app: AppHandle,
@@ -732,6 +754,7 @@ pub async fn caption_translate(
     target_lang: String,
     is_final: bool,
     context: Vec<String>,
+    glossary: Option<Vec<String>>,
 ) -> Result<TranslateResult, CaptionError> {
     state.require_available()?;
     if !state.rate.lock().allow(Instant::now()) {
@@ -741,10 +764,11 @@ pub async fn caption_translate(
         app.get_webview_window(label).is_some()
     })?;
     let context = check_input(&text, &source_lang, &target_lang, &context)?;
+    let glossary = check_glossary(glossary)?;
     if !state
         .budget
         .lock()
-        .allow(Instant::now(), request_bytes(&text, &context))
+        .allow(Instant::now(), request_bytes(&text, &context, &glossary))
     {
         return Err(CaptionError::from_code("rate-limited"));
     }
@@ -768,7 +792,16 @@ pub async fn caption_translate(
     };
 
     if engine == Engine::Llm {
-        match run_llm(&clients, &text, &source_lang, &target_lang, &context).await {
+        match run_llm(
+            &clients,
+            &text,
+            &source_lang,
+            &target_lang,
+            &context,
+            &glossary,
+        )
+        .await
+        {
             Ok(translated_text) => {
                 log::debug!("caption translate ok: engine=llm bytes={}", text.len());
                 return Ok(TranslateResult {
@@ -837,6 +870,7 @@ pub async fn caption_correct(
     text: String,
     lang: String,
     context: Vec<String>,
+    glossary: Option<Vec<String>>,
 ) -> Result<CorrectResult, CaptionError> {
     state.require_available()?;
     if !state.rate.lock().allow(Instant::now()) {
@@ -844,10 +878,11 @@ pub async fn caption_correct(
     }
     require_open_window(&lang, |label| app.get_webview_window(label).is_some())?;
     let context = check_correction_input(&text, &lang, &context)?;
+    let glossary = check_glossary(glossary)?;
     if !state
         .budget
         .lock()
-        .allow(Instant::now(), request_bytes(&text, &context))
+        .allow(Instant::now(), request_bytes(&text, &context, &glossary))
     {
         return Err(CaptionError::from_code("rate-limited"));
     }
@@ -860,7 +895,7 @@ pub async fn caption_correct(
         return Err(CaptionError::from_code("profile-missing"));
     }
     let clients = state.clients(&profile, &region).await;
-    match run_correction(&clients, &text, &lang, &context).await {
+    match run_correction(&clients, &text, &lang, &context, &glossary).await {
         Ok(corrected_text) => {
             log::debug!("caption correct ok: bytes={}", text.len());
             Ok(CorrectResult { corrected_text })
@@ -870,6 +905,81 @@ pub async fn caption_correct(
                 state.drop_client(&profile, &region);
             }
             log::warn!("caption correct failed: code={code} bytes={}", text.len());
+            Err(CaptionError::from_code(code))
+        }
+    }
+}
+
+async fn run_glossary(clients: &Clients, slides: &str) -> Result<Vec<String>, &'static str> {
+    let call = clients
+        .bedrock
+        .invoke_model()
+        .model_id(MODEL_ID)
+        .content_type("application/json")
+        .accept("application/json")
+        .body(Blob::new(interpreter::build_glossary_request(slides)))
+        .send();
+    let out = match tokio::time::timeout(GLOSSARY_TIMEOUT, call).await {
+        Err(_) => return Err("timeout"),
+        Ok(Err(e)) => return Err(sdk_code(&e)),
+        Ok(Ok(o)) => o,
+    };
+    let answer = interpreter::parse_response(out.body().as_ref()).map_err(|_| "invalid-output")?;
+    interpreter::parse_glossary(&answer, slides).map_err(|_| "invalid-output")
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlossaryResult {
+    terms: Vec<String>,
+}
+
+/// Picks caption terms out of the speaker's slide text with the model, on
+/// the chosen profile. The text is used for this one request and is neither
+/// stored nor logged; only terms that occur in it are returned.
+#[tauri::command]
+pub async fn caption_glossary(
+    state: State<'_, CaptionState>,
+    slides: String,
+) -> Result<GlossaryResult, CaptionError> {
+    state.require_available()?;
+    if slides.trim().is_empty() {
+        return Err(CaptionError::invalid("Text is empty."));
+    }
+    if slides.len() > MAX_SLIDES_BYTES {
+        return Err(CaptionError::invalid("Text is too long."));
+    }
+    if !state.rate.lock().allow(Instant::now())
+        || !state.budget.lock().allow(Instant::now(), slides.len())
+    {
+        return Err(CaptionError::from_code("rate-limited"));
+    }
+    let (profile, region) = {
+        let s = state.settings.lock();
+        (s.profile.clone(), s.region.clone())
+    };
+    let profile = profile.ok_or_else(|| CaptionError::from_code("profile-missing"))?;
+    if !crate::aws_profiles::list().contains(&profile) {
+        return Err(CaptionError::from_code("profile-missing"));
+    }
+    let clients = state.clients(&profile, &region).await;
+    match run_glossary(&clients, &slides).await {
+        Ok(terms) => {
+            log::debug!(
+                "caption glossary ok: bytes={} terms={}",
+                slides.len(),
+                terms.len()
+            );
+            Ok(GlossaryResult { terms })
+        }
+        Err(code) => {
+            if code == "credentials-expired" {
+                state.drop_client(&profile, &region);
+            }
+            log::warn!(
+                "caption glossary failed: code={code} bytes={}",
+                slides.len()
+            );
             Err(CaptionError::from_code(code))
         }
     }
@@ -892,6 +1002,20 @@ pub fn manage(app: &tauri::App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glossary_is_bounded_and_counts_toward_the_budget() {
+        assert_eq!(check_glossary(None).unwrap(), Vec::<String>::new());
+        let ok = vec!["Nginx".to_string(), "Java 런타임".to_string()];
+        assert_eq!(check_glossary(Some(ok.clone())).unwrap(), ok);
+        assert!(check_glossary(Some(vec!["x".repeat(81)])).is_err());
+        assert!(check_glossary(Some(vec!["a\nb".into()])).is_err());
+        assert!(check_glossary(Some(vec!["term".to_string(); MAX_GLOSSARY_TERMS + 1])).is_err());
+        assert_eq!(
+            request_bytes("abc", &["de".into()], &ok),
+            3 + 2 + ok[0].len() + ok[1].len()
+        );
+    }
 
     #[test]
     fn correction_input_is_one_short_sentence_in_a_caption_language() {
@@ -941,10 +1065,10 @@ mod tests {
     #[test]
     fn request_bytes_count_text_and_context() {
         assert_eq!(
-            request_bytes("가나", &["ab".to_string(), "c".to_string()]),
+            request_bytes("가나", &["ab".to_string(), "c".to_string()], &[]),
             9
         );
-        assert_eq!(request_bytes("x", &[]), 1);
+        assert_eq!(request_bytes("x", &[], &[]), 1);
     }
 
     #[test]

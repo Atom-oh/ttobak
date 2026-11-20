@@ -34,6 +34,7 @@
     "allow-caption-settings-set",
     "allow-caption-translate",
     "allow-caption-correct",
+    "allow-caption-glossary",
     "allow-caption-overlay-open",
     "allow-caption-overlay-close",
     "allow-caption-overlay-set-style",

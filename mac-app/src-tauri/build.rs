@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "caption_settings_set",
     "caption_translate",
     "caption_correct",
+    "caption_glossary",
     "caption_overlay_open",
     "caption_overlay_close",
     "caption_overlay_set_style",

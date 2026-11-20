@@ -30,6 +30,9 @@ const NOTE_CLASS = 'text-xs text-slate-500 dark:text-text-muted';
 
 const DETAILS_ID = 'caption-panel-details';
 
+/** Slide terms listed in the panel before "and N more". */
+const GLOSSARY_PREVIEW = 12;
+
 export type CaptionOverlayPanelProps = CaptionOverlayState & {
   isRecording: boolean;
   // Initial expanded state. When omitted the saved per-browser choice is read
@@ -54,6 +57,11 @@ export function CaptionOverlayPanel({
   setCorrection,
   speakerColors,
   setSpeakerColors,
+  glossary,
+  glossaryBusy,
+  glossaryNote,
+  loadGlossary,
+  clearGlossary,
   isRecording,
   defaultExpanded,
   onExpandedChange,
@@ -210,6 +218,46 @@ export function CaptionOverlayPanel({
           </div>
           <p className={NOTE_CLASS}>
             오인식 교정은 말한 언어의 자막을 문맥에 맞게 고쳐요. 문장마다 선택한 AWS 계정으로 모델을 한 번 더 불러요. 화자별 색을 끄면 모든 자막이 고른 글자색으로 나와요.
+          </p>
+
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2">
+            <label htmlFor="caption-slides" className={LABEL_CLASS}>발표 자료 용어</label>
+            <input
+              id="caption-slides"
+              type="file"
+              accept=".pptx,.txt,.md"
+              disabled={!hasProfile || glossaryBusy}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                // Cleared so the same file can be chosen again.
+                e.target.value = '';
+                if (file) loadGlossary(file);
+              }}
+              className="max-w-56 text-xs text-slate-600 dark:text-gray-400 disabled:opacity-50"
+            />
+            {glossaryBusy && <span role="status" className={LABEL_CLASS}>용어를 뽑는 중…</span>}
+            {glossary.length > 0 && (
+              <>
+                <span role="status" className={LABEL_CLASS}>용어 {glossary.length}개 적용 중</span>
+                <button
+                  type="button"
+                  onClick={clearGlossary}
+                  className="px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
+                >
+                  지우기
+                </button>
+              </>
+            )}
+          </div>
+          {glossary.length > 0 && (
+            <p className={`${NOTE_CLASS} max-w-2xl text-center break-words`}>
+              {glossary.slice(0, GLOSSARY_PREVIEW).join(', ')}
+              {glossary.length > GLOSSARY_PREVIEW && ` 외 ${glossary.length - GLOSSARY_PREVIEW}개`}
+            </p>
+          )}
+          {glossaryNote && <p role="status" className="text-xs text-amber-700 dark:text-amber-400">{glossaryNote}</p>}
+          <p className={NOTE_CLASS}>
+            발표 자료(PPTX, TXT, MD)를 올리면 자료에 나온 제품명·전문 용어를 자막 교정과 번역에 힌트로 써요. 파일은 이 Mac에서만 읽고, 뽑은 글자를 선택한 AWS 계정의 모델에 한 번 보내요. 용어는 저장하지 않고 이 화면을 떠나면 사라져요.
           </p>
 
           {openLangs.map((lang) => {
