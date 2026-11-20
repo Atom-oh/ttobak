@@ -1260,6 +1260,19 @@ class TestDetectQuestionsCall(unittest.TestCase):
         self.assertEqual(kw['modelId'], handler.DETECT_MODEL_ID)
         self.assertNotIn('temperature', kw['inferenceConfig'])
         self.assertEqual(json.loads(resp['body'])['questions'], ['Karpenter Spot 중단 처리는?'])
+        # Reasoning shares the output budget and left the answer empty.
+        self.assertEqual(kw['additionalModelRequestFields'], {'thinking': {'type': 'disabled'}})
+        self.assertGreaterEqual(kw['inferenceConfig']['maxTokens'], 2048)
+
+    @mock.patch.object(handler, 'bedrock_runtime')
+    def test_cut_output_yields_no_questions_and_a_warning(self, mock_bedrock):
+        mock_bedrock.converse.return_value = {'stopReason': 'max_tokens', 'output': {'message': {'content': [
+            {'text': '[{"q": "Karpenter Spot'}]}}}
+        with self.assertLogs(handler.logger, level='WARNING') as logs:
+            resp = handler.handle_detect_questions({'transcript': '고객: Karpenter로 Spot을 쓰고 싶어요.'})
+        self.assertEqual(json.loads(resp['body']), {'questions': [], 'proactive': [], 'automatic': []})
+        self.assertTrue(any('token limit' in line for line in logs.output))
+        self.assertFalse(any('Karpenter' in line for line in logs.output))
 
 
 class TestWebSearchTool(unittest.TestCase):
