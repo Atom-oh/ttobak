@@ -119,6 +119,30 @@ one. Different windows do not wait for each other. An idle window cannot be drag
 acceptable because it is invisible; windows are never closed automatically, so the
 user's layout choice survives.
 
+**Clicks under a window with text.** A large caption window covers the slides or the
+app the speaker works in, so a window that shows text also lets clicks through,
+except on its controls: the move handle (top centre), the close button (top right)
+and the resize grip (bottom right). A window either ignores the pointer or takes it
+whole, so Rust follows the pointer instead (`start_pointer_tracking`): every 50 ms,
+for each window that reported text, it reads the pointer and the window frame on the
+main thread (both in screen points, so displays of different density agree), and
+turns pointer handling on only while the pointer is in a control's hit area
+(`pointer_zone`, a little larger than the drawn control). Nothing changes while a
+mouse button is down, so a move or resize drag that leaves the control continues and
+a drag passing over a control is not captured. Because the page gets no hover of its
+own, Rust sends `caption-hover` ({lang, over}) to that window when the pointer
+enters or leaves it, and the page shows its controls on that. The body is no longer
+a drag region: only the handle moves the window.
+
+**Focus.** macOS decides at creation whether a window can join another app's
+full-screen Space, so an overlay is created while the app is an accessory. That
+deactivates the app, and returning to a regular app does not reactivate it, which
+left the main window behind other apps after opening a caption window. Creation now
+ends by focusing the main window when it was focused before (or was given focus back
+within the last three seconds, for windows reopened together); it never pulls the
+app in front of another app the user switched to. A visible window is not re-ordered
+to the front on later caption updates.
+
 **Transparency.** `tauri.conf.json` sets `macOSPrivateApi: true` and Cargo enables
 the `macos-private-api` feature of `tauri`; windows are built `transparent`. This
 fits the app's existing non-App-Store distribution. It is an app-wide config

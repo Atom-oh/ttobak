@@ -48,20 +48,23 @@
         overflow: hidden;
       }
       /* Hover chrome: shown only while the pointer is over the window (or a
-         resize is in progress), so a projected view shows only subtitles. */
+         resize is in progress), so a projected view shows only subtitles.
+         The window lets clicks through except on these controls, so the page
+         gets no :hover of its own: Rust follows the pointer and reports it
+         (`caption-hover`). */
       .chrome {
         position: fixed;
         opacity: 0;
         transition: opacity 180ms ease-out;
         pointer-events: none;
       }
-      html:hover .chrome,
+      html.hover .chrome,
       html.resizing .chrome {
         opacity: 1;
       }
-      html:hover #move,
-      html:hover #grip,
-      html:hover #close,
+      html.hover #move,
+      html.hover #grip,
+      html.hover #close,
       html.resizing #grip {
         pointer-events: auto;
       }
@@ -74,14 +77,14 @@
       #close {
         top: 4px;
         right: 4px;
-        width: 16px;
-        height: 16px;
+        width: 20px;
+        height: 20px;
         padding: 0;
         border: 0;
-        border-radius: 5px;
+        border-radius: 6px;
         background: rgba(0, 0, 0, 0.55);
         color: rgba(255, 255, 255, 0.9);
-        font: 12px/16px system-ui, sans-serif;
+        font: 14px/20px system-ui, sans-serif;
         text-align: center;
         cursor: pointer;
       }
@@ -91,13 +94,13 @@
       #move {
         top: 2px;
         left: 50%;
-        width: 40px;
-        height: 10px;
-        margin-left: -20px;
-        border-radius: 5px;
+        width: 64px;
+        height: 14px;
+        margin-left: -32px;
+        border-radius: 7px;
         background: rgba(0, 0, 0, 0.55);
         color: rgba(255, 255, 255, 0.9);
-        font: 9px/10px system-ui, sans-serif;
+        font: 11px/14px system-ui, sans-serif;
         letter-spacing: 2px;
         text-align: center;
         overflow: hidden;
@@ -106,8 +109,8 @@
       #grip {
         right: 2px;
         bottom: 2px;
-        width: 14px;
-        height: 14px;
+        width: 20px;
+        height: 20px;
         cursor: nwse-resize;
         background: linear-gradient(
           135deg,
@@ -149,7 +152,7 @@
       }
     </style>
   </head>
-  <body data-tauri-drag-region="deep">
+  <body>
     <div id="frame"><div id="captions"></div></div>
     <div id="outline" class="chrome" aria-hidden="true"></div>
     <div id="move" class="chrome" data-tauri-drag-region aria-hidden="true">⠿</div>
@@ -228,6 +231,8 @@
         function syncIdle() {
           var frame = document.getElementById('frame');
           if (frame && frame.classList) frame.classList.toggle('idle', entries.size === 0);
+          // Rust stops following the pointer for an idle window.
+          if (entries.size === 0) document.documentElement.classList.remove('hover');
         }
 
         // Removes every line but keeps the ids already final, so a late
@@ -378,6 +383,14 @@
           events.listen('caption-update', function (e) { onUpdate(e.payload); }, scope);
           events.listen('caption-style', function (e) {
             if (ours(e.payload)) applyStyle(e.payload);
+          }, scope);
+          // The pointer is over this window (clicks still pass through
+          // except on the controls): show the controls.
+          events.listen('caption-hover', function (e) {
+            if (!ours(e.payload)) return;
+            // An idle window shows nothing, controls included.
+            var show = e.payload.over === true && entries.size > 0;
+            document.documentElement.classList[show ? 'add' : 'remove']('hover');
           }, scope);
         }
 

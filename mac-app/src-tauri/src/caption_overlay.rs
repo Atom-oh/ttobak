@@ -153,12 +153,198 @@ impl PushLanes {
     }
 }
 
-/// Managed state for layout write throttling and push ordering.
+/// Managed state for layout write throttling, push ordering and pointer
+/// tracking.
 #[derive(Default)]
 pub struct OverlayState {
     throttle: Mutex<SaveThrottle>,
     pushes: PushLanes,
+    pointer: PointerTracking,
 }
+
+/// Where the pointer is relative to a caption window that shows text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerZone {
+    Outside = 0,
+    /// Over the window, but not on a control: clicks go to what is under it.
+    Over = 1,
+    /// On the move handle, the close button or the resize grip.
+    Control = 2,
+}
+
+/// Half the width and the height of the strip around the move handle, and
+/// the side of the corner squares around the close button and the grip
+/// (points). Larger than the drawn controls, so they are easy to hit.
+const MOVE_HALF_WIDTH: f64 = 48.0;
+const MOVE_HEIGHT: f64 = 24.0;
+const CORNER: f64 = 28.0;
+
+/// The zone of a pointer at (`x`, `y`) from the top-left corner of a
+/// `width` x `height` window (points). A window with text takes the pointer
+/// only on its controls, so the slides or app under the captions stay
+/// clickable.
+pub fn pointer_zone(x: f64, y: f64, width: f64, height: f64) -> PointerZone {
+    let inside = x >= 0.0 && y >= 0.0 && x < width && y < height;
+    if !(inside && [x, y, width, height].iter().all(|v| v.is_finite())) {
+        return PointerZone::Outside;
+    }
+    let on_move = (x - width / 2.0).abs() <= MOVE_HALF_WIDTH && y <= MOVE_HEIGHT;
+    let on_close = x >= width - CORNER && y <= CORNER;
+    let on_grip = x >= width - CORNER && y >= height - CORNER;
+    if on_move || on_close || on_grip {
+        PointerZone::Control
+    } else {
+        PointerZone::Over
+    }
+}
+
+/// What a pointer check changes for one window: `None` leaves everything as
+/// it is. Nothing changes while a mouse button is down, so a move or resize
+/// drag that leaves the control keeps going.
+pub fn pointer_change(
+    last: Option<PointerZone>,
+    now: PointerZone,
+    button_down: bool,
+) -> Option<PointerZone> {
+    (!button_down && last != Some(now)).then_some(now)
+}
+
+const ZONE_UNKNOWN: u8 = u8::MAX;
+
+/// Per-window pointer state, indexed like `caption_model::LANGS`.
+#[derive(Default)]
+struct PointerTracking {
+    /// The window shows caption text, so its controls can take the pointer.
+    showing: [std::sync::atomic::AtomicBool; 4],
+    /// Last applied `PointerZone`, or `ZONE_UNKNOWN`.
+    zone: [std::sync::atomic::AtomicU8; 4],
+    started: std::sync::atomic::AtomicBool,
+}
+
+fn lang_index(label: &str) -> Option<usize> {
+    caption_model::LANGS
+        .iter()
+        .position(|lang| caption_model::window_label(lang) == Some(label))
+}
+
+impl PointerTracking {
+    fn set_showing(&self, label: &str, showing: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if let Some(i) = lang_index(label) {
+            self.showing[i].store(showing, SeqCst);
+            self.zone[i].store(ZONE_UNKNOWN, SeqCst);
+        }
+    }
+
+    fn last(&self, i: usize) -> Option<PointerZone> {
+        match self.zone[i].load(std::sync::atomic::Ordering::SeqCst) {
+            0 => Some(PointerZone::Outside),
+            1 => Some(PointerZone::Over),
+            2 => Some(PointerZone::Control),
+            _ => None,
+        }
+    }
+}
+
+/// `caption-hover` payload: whether the pointer is over the window, so the
+/// page shows its controls even though the window lets clicks through.
+#[derive(Clone, Serialize)]
+struct HoverUpdate<'a> {
+    lang: &'a str,
+    over: bool,
+}
+
+const POINTER_POLL: Duration = Duration::from_millis(50);
+const POINTER_POLL_IDLE: Duration = Duration::from_millis(300);
+
+/// Starts (once) the task that follows the pointer for windows showing text.
+fn start_pointer_tracking(app: &AppHandle) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let state = app.state::<OverlayState>();
+    if state.pointer.started.swap(true, SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let mut any = false;
+            for (i, lang) in caption_model::LANGS.iter().enumerate() {
+                let state = app.state::<OverlayState>();
+                if !state.pointer.showing[i].load(SeqCst) {
+                    continue;
+                }
+                let Some(window) =
+                    caption_model::window_label(lang).and_then(|l| app.get_webview_window(l))
+                else {
+                    continue;
+                };
+                any = true;
+                check_pointer(&app, &window, i, lang);
+            }
+            tokio::time::sleep(if any { POINTER_POLL } else { POINTER_POLL_IDLE }).await;
+        }
+    });
+}
+
+/// Reads the pointer and the window frame on the main thread (both in
+/// screen points, so mixed-density displays agree) and applies the zone.
+#[cfg(target_os = "macos")]
+fn check_pointer(app: &AppHandle, window: &WebviewWindow, i: usize, lang: &'static str) {
+    use objc2_core_foundation::{CGPoint, CGRect};
+    use std::sync::atomic::Ordering::SeqCst;
+    let target = window.clone();
+    let app = app.clone();
+    let result = window.run_on_main_thread(move || {
+        let state = app.state::<OverlayState>();
+        // The window may have gone idle since this check was queued.
+        if !state.pointer.showing[i].load(SeqCst) {
+            return;
+        }
+        let Ok(ns_window) = target.ns_window() else {
+            return;
+        };
+        let ns_window = ns_window.cast::<objc2::runtime::AnyObject>();
+        if ns_window.is_null() {
+            return;
+        }
+        // SAFETY: on the main thread. `mouseLocation` and
+        // `pressedMouseButtons` are NSEvent class methods without arguments
+        // returning an NSPoint and an NSUInteger; `frame` returns the live
+        // window's NSRect; `setIgnoresMouseEvents:` takes a BOOL.
+        unsafe {
+            let event = objc2::class!(NSEvent);
+            let mouse: CGPoint = objc2::msg_send![event, mouseLocation];
+            let buttons: usize = objc2::msg_send![event, pressedMouseButtons];
+            let frame: CGRect = objc2::msg_send![ns_window, frame];
+            // Screen points grow upwards; the page counts from the top.
+            let x = mouse.x - frame.origin.x;
+            let y = frame.origin.y + frame.size.height - mouse.y;
+            let now = pointer_zone(x, y, frame.size.width, frame.size.height);
+            let last = state.pointer.last(i);
+            let Some(next) = pointer_change(last, now, buttons != 0) else {
+                return;
+            };
+            let ignore = next != PointerZone::Control;
+            let _: () = objc2::msg_send![ns_window, setIgnoresMouseEvents: ignore];
+            state.pointer.zone[i].store(next as u8, SeqCst);
+            let over = next != PointerZone::Outside;
+            if last.map(|z| z != PointerZone::Outside) != Some(over) {
+                let payload = HoverUpdate { lang, over };
+                let _ = app.emit_to(
+                    EventTarget::webview_window(target.label()),
+                    "caption-hover",
+                    payload,
+                );
+            }
+        }
+    });
+    if let Err(e) = result {
+        log::warn!("caption overlay pointer check failed: {e}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_pointer(_app: &AppHandle, _window: &WebviewWindow, _i: usize, _lang: &'static str) {}
 
 /// `caption-update` payload.
 #[derive(Clone, Serialize)]
@@ -282,17 +468,45 @@ fn created_as_accessory<T>(app: &AppHandle, create: impl FnOnce() -> T) -> T {
     };
     // One creation at a time: saved windows reopen concurrently at launch,
     // and another call's return to regular must not land before this build.
-    static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _one = CREATING.lock().unwrap_or_else(|e| e.into_inner());
+    // Guards the time focus was last handed back to the main window.
+    static CREATING: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let mut restored = CREATING.lock().unwrap_or_else(|e| e.into_inner());
+    let main = app.get_webview_window("main");
+    let focused = main
+        .as_ref()
+        .is_some_and(|w| w.is_focused().unwrap_or(false));
+    let now = Instant::now();
+    let give_back = gives_focus_back(focused, restored.map(|at| now.duration_since(at)));
     set(tauri::ActivationPolicy::Accessory);
     let created = create();
     set(tauri::ActivationPolicy::Regular);
+    // Becoming an accessory deactivates the app and returning to regular
+    // does not undo that, so the window the user was working in would stay
+    // behind other apps.
+    if let (true, Some(main)) = (give_back, main) {
+        if let Err(e) = main.set_focus() {
+            log::warn!("caption overlay: main window focus not restored: {e}");
+        }
+        *restored = Some(now);
+    }
     created
 }
 
 #[cfg(not(target_os = "macos"))]
 fn created_as_accessory<T>(_app: &AppHandle, create: impl FnOnce() -> T) -> T {
     create()
+}
+
+/// How long after focus was handed back another creation still counts the
+/// main window as focused: saved windows reopen together, and the app may
+/// not be active again when the next one starts.
+const FOCUS_RESTORE_WINDOW: Duration = Duration::from_secs(3);
+
+/// Whether creating an overlay should end by focusing the main window:
+/// only when the user was in it (or it was just given focus back), never
+/// to pull the app in front of another one the user switched to.
+pub fn gives_focus_back(main_focused: bool, since_restore: Option<Duration>) -> bool {
+    main_focused || since_restore.is_some_and(|d| d < FOCUS_RESTORE_WINDOW)
 }
 
 /// Lifts the window above full-screen apps on every Space.
@@ -369,11 +583,17 @@ fn set_shown(window: &WebviewWindow, shown: bool) {
             return;
         }
         // SAFETY: `ns_window` is the live NSWindow of `target`, used on the
-        // main thread; `orderFrontRegardless` takes no argument and
-        // `orderOut:` takes a nullable sender, and both return void.
+        // main thread; `isVisible` takes no argument and returns BOOL,
+        // `orderFrontRegardless` takes no argument and `orderOut:` takes a
+        // nullable sender, and both return void.
         unsafe {
             if shown {
-                let _: () = objc2::msg_send![ns_window, orderFrontRegardless];
+                // Captions arrive several times a second; reordering an
+                // already visible window each time is needless window churn.
+                let visible: bool = objc2::msg_send![ns_window, isVisible];
+                if !visible {
+                    let _: () = objc2::msg_send![ns_window, orderFrontRegardless];
+                }
             } else {
                 let nil: *const objc2::runtime::AnyObject = std::ptr::null();
                 let _: () = objc2::msg_send![ns_window, orderOut: nil];
@@ -633,6 +853,7 @@ pub async fn caption_overlay_push(
     // A clear lets clicks through at once, before the page hears of it, so
     // a later line's report from the page cannot be overtaken by this one.
     if kind == "clear" {
+        overlays.pointer.set_showing(label, false);
         set_pass_through(&window, true)?;
     }
     let update = CaptionUpdate::new(&lang, &kind, &id, order, &text, is_final, speaker);
@@ -645,14 +866,27 @@ pub async fn caption_overlay_push(
 }
 
 /// Called by an overlay page whenever it gains or loses its last caption
-/// line: an idle window lets clicks through to what is under it, and takes
-/// them again (drag, resize) once it shows text. It acts only on the calling
-/// window and is granted only to the overlay capability, not the remote SPA.
-/// Synchronous, so it runs on the main thread in the order the page sent its
-/// reports; it takes no lock.
+/// line. An idle window lets every click through to what is under it. A
+/// window with text also lets clicks through, except on its controls (move
+/// handle, close button, resize grip): the pointer tracking task turns the
+/// pointer on for the window only while it is over one of them. It acts only
+/// on the calling window and is granted only to the overlay capability, not
+/// the remote SPA. Synchronous, so it runs on the main thread in the order
+/// the page sent its reports; it takes no lock.
 #[tauri::command]
-pub fn caption_overlay_idle(window: WebviewWindow, idle: bool) -> Result<(), CaptionError> {
-    set_pass_through(&window, idle)
+pub fn caption_overlay_idle(
+    app: AppHandle,
+    overlays: State<'_, OverlayState>,
+    window: WebviewWindow,
+    idle: bool,
+) -> Result<(), CaptionError> {
+    pass_through(window.label(), idle)?;
+    overlays.pointer.set_showing(window.label(), !idle);
+    if !idle {
+        start_pointer_tracking(&app);
+    }
+    // Clicks pass until the tracker finds the pointer on a control.
+    set_pass_through(&window, true)
 }
 
 /// The caption language of an overlay window label, or `None` for any other
@@ -752,6 +986,61 @@ mod tests {
         let first = &log[0][..1];
         assert!(log[..3].iter().all(|s| s.starts_with(first)), "{log:?}");
         assert!(log[3..].iter().all(|s| !s.starts_with(first)), "{log:?}");
+    }
+
+    #[test]
+    fn focus_returns_only_to_a_main_window_the_user_was_in() {
+        assert!(gives_focus_back(true, None));
+        assert!(!gives_focus_back(false, None));
+        // A second window opened right after the first handed focus back.
+        assert!(gives_focus_back(false, Some(Duration::from_millis(500))));
+        assert!(!gives_focus_back(false, Some(FOCUS_RESTORE_WINDOW)));
+    }
+
+    #[test]
+    fn a_window_with_text_takes_the_pointer_only_on_its_controls() {
+        let (w, h) = (800.0, 200.0);
+        assert_eq!(pointer_zone(400.0, 100.0, w, h), PointerZone::Over);
+        assert_eq!(pointer_zone(10.0, 190.0, w, h), PointerZone::Over);
+        assert_eq!(pointer_zone(400.0, 5.0, w, h), PointerZone::Control);
+        assert_eq!(pointer_zone(440.0, 20.0, w, h), PointerZone::Control);
+        assert_eq!(pointer_zone(460.0, 5.0, w, h), PointerZone::Over);
+        assert_eq!(pointer_zone(400.0, 30.0, w, h), PointerZone::Over);
+        assert_eq!(pointer_zone(790.0, 10.0, w, h), PointerZone::Control);
+        assert_eq!(pointer_zone(790.0, 190.0, w, h), PointerZone::Control);
+        assert_eq!(pointer_zone(-1.0, 100.0, w, h), PointerZone::Outside);
+        assert_eq!(pointer_zone(800.0, 100.0, w, h), PointerZone::Outside);
+        assert_eq!(pointer_zone(400.0, 200.0, w, h), PointerZone::Outside);
+        assert_eq!(pointer_zone(f64::NAN, 5.0, w, h), PointerZone::Outside);
+    }
+
+    #[test]
+    fn pointer_state_changes_only_on_a_new_zone_with_no_button_down() {
+        use PointerZone::{Control, Outside, Over};
+        assert_eq!(pointer_change(None, Over, false), Some(Over));
+        assert_eq!(pointer_change(Some(Over), Over, false), None);
+        assert_eq!(pointer_change(Some(Over), Control, false), Some(Control));
+        // A drag that leaves the control keeps the pointer until release.
+        assert_eq!(pointer_change(Some(Control), Outside, true), None);
+        assert_eq!(pointer_change(Some(Control), Outside, false), Some(Outside));
+        // A press that began elsewhere never arms the control mid-drag.
+        assert_eq!(pointer_change(Some(Over), Control, true), None);
+    }
+
+    #[test]
+    fn pointer_tracking_forgets_the_zone_when_a_window_changes_state() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let tracking = PointerTracking::default();
+        tracking.set_showing("caption-en", true);
+        assert!(tracking.showing[1].load(SeqCst));
+        assert_eq!(tracking.last(1), None);
+        tracking.zone[1].store(PointerZone::Control as u8, SeqCst);
+        assert_eq!(tracking.last(1), Some(PointerZone::Control));
+        tracking.set_showing("caption-en", false);
+        assert!(!tracking.showing[1].load(SeqCst));
+        assert_eq!(tracking.last(1), None);
+        tracking.set_showing("main", true);
+        assert!(tracking.showing.iter().all(|s| !s.load(SeqCst)));
     }
 
     #[test]

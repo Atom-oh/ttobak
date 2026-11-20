@@ -355,6 +355,7 @@ Below the desktop recording card, `record/ScreenCaptureControls` offers two scre
 open window, interims on) over the local AWS profile, never `/api/translate`. The record
 page passes every live segment to it (`onSegment`) and `useRecordingSession` reads the
 extra recognition language through a getter (`getExtraLanguage`) when a recording starts.
+A caption window lets clicks through to what is under it; only its move handle (top centre), close button and resize grip, shown while the pointer is over the window, take the pointer.
 Opening a window while idle shows preview text; when a recording stops the windows are
 cleared and the engines are rebuilt so the next recording's segment IDs cannot collide.
 Closing a window stops its engine first. Each window shows only payloads tagged with its
