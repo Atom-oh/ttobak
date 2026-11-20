@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect, forwardRef, 
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
 import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type NativeSelectedInput, type TauriStatusResponse } from '@/lib/tauri';
-import { CameraCapture } from '@/components/CameraCapture';
+import { ScreenCaptureControls } from '@/components/record/ScreenCaptureControls';
 import { BrowserRecordingBackup } from '@/lib/browserRecordingBackup';
 import { openMicStream } from '@/lib/micStream';
 
@@ -204,7 +204,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const barsContainerRef = useRef<HTMLDivElement>(null);
-  const [showCamera, setShowCamera] = useState(false);
   const nativeTempPathRef = useRef<string | null>(null);
   const nativeStopInFlightRef = useRef(false);
   // Blocks double-starts during startRecording's async window (see the
@@ -1223,25 +1222,8 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
             </button>
           </div>
 
-          {/* PC: Camera button below card */}
-          <div className="hidden lg:flex items-center justify-center gap-4">
-            <button
-              onClick={() => setShowCamera(true)}
-              disabled={state === 'uploading'}
-              className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg hover:bg-primary/20 transition-colors text-primary font-semibold text-sm disabled:opacity-50"
-            >
-              <span className="material-symbols-outlined">add_a_photo</span>
-              Capture Image
-            </button>
-          </div>
-
-          {/* PC Camera Modal */}
-          {showCamera && (
-            <CameraCapture
-              onCapture={(file) => onCaptureImage?.(file)}
-              onClose={() => setShowCamera(false)}
-            />
-          )}
+          {/* PC: screen and automatic slide capture below card */}
+          <ScreenCaptureControls onCaptureImage={onCaptureImage} disabled={state === 'uploading'} />
         </>
       )}
     </div>

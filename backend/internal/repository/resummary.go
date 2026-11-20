@@ -105,7 +105,7 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 			snapshot.Checks = append(snapshot.Checks, checks...)
 		}
 	}
-	attachments, err := r.summaryRows(ctx, meetingID, model.PrefixAttachment, 20)
+	attachments, err := r.summaryRows(ctx, meetingID, model.PrefixAttachment, resummaryMaxAttachmentRows+resummaryMaxSlideRows)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +119,8 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 			stateRows[sk.Value] = item
 		}
 	}
+	rowsBySK := map[string]map[string]types.AttributeValue{}
+	parsed := make([]model.Attachment, 0, len(attachments))
 	for _, item := range attachments {
 		var att model.Attachment
 		if err := attributevalue.UnmarshalMap(item, &att); err != nil {
@@ -127,6 +129,24 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 		if att.MeetingID != meetingID || att.AttachmentID == "" || att.SK != model.PrefixAttachment+att.AttachmentID {
 			return nil, ErrSummaryAccess
 		}
+		rowsBySK[att.SK] = item
+		parsed = append(parsed, att)
+	}
+	// Slide auto-capture frames do not count toward the 20-attachment bound;
+	// an evenly sampled subset of finished slides is fenced and used as
+	// evidence, within the remaining condition budget. Unselected slides are
+	// not model input, so their rows need no condition.
+	others, slides := model.SplitSummarySlides(parsed, model.MaxSummarySlides)
+	if len(others) > resummaryMaxAttachmentRows {
+		return nil, ErrSummaryLimit
+	}
+	selected := others
+	if budget := resummaryMaxCaptureChecks - len(snapshot.Checks) - 2*len(others); len(slides) > budget {
+		_, slides = model.SplitSummarySlides(slides, budget)
+	}
+	selected = append(selected, slides...)
+	for _, att := range selected {
+		item := rowsBySK[att.SK]
 		check, err := summaryCheck(model.PrefixMeeting+meetingID, att.SK, item, summaryAttachmentFields)
 		if err != nil {
 			return nil, err
@@ -163,6 +183,13 @@ func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meet
 // resummaryMaxCaptureChecks keeps queue (checks+1) and completion (checks+3)
 // transactions within DynamoDB's 100-item limit.
 const resummaryMaxCaptureChecks = 96
+
+// resummaryMaxAttachmentRows bounds non-slide attachments, as before slide
+// capture existed; resummaryMaxSlideRows bounds the extra slide rows read.
+const (
+	resummaryMaxAttachmentRows = 20
+	resummaryMaxSlideRows      = 400
+)
 
 func (r *DynamoDBRepository) GetResummary(ctx context.Context, meetingID string) (*model.ResummaryState, error) {
 	return r.getSummaryState(ctx, meetingID, model.ResummarySK)

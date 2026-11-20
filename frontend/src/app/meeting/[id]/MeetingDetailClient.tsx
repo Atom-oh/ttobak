@@ -44,7 +44,7 @@ function normalizeAttachments(raw: unknown): import('@/types/meeting').Attachmen
   return raw.map((att) => ({
     id: att.attachmentId || att.id || '',
     name: att.fileName || att.name || 'Untitled',
-    type: ['photo', 'screenshot', 'diagram', 'whiteboard'].includes(att.type) ? 'image' as const
+    type: ['photo', 'screenshot', 'diagram', 'whiteboard', 'slide'].includes(att.type) ? 'image' as const
       : att.type === 'audio_file' ? 'audio' as const : att.type,
     url: att.url || '',
     processedContent: att.processedContent,
