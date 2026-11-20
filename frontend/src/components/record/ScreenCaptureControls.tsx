@@ -8,6 +8,9 @@ import {
   supportsScreenCapture,
   type SlideCaptureSession,
 } from '@/lib/screenCapture';
+import { MAX_SLIDES_PER_RECORDING } from '@/lib/slideDetect';
+
+const LIMIT_NOTICE = `이번 녹음의 슬라이드 캡처 한도(${MAX_SLIDES_PER_RECORDING}장)에 도달해 자동 캡처를 멈췄습니다.`;
 
 interface ScreenCaptureControlsProps {
   /** Receives each captured image; the parent uploads it as an attachment. */
@@ -28,11 +31,22 @@ export function ScreenCaptureControls({ onCaptureImage, disabled }: ScreenCaptur
   const [notice, setNotice] = useState<string | null>(null);
   const sessionRef = useRef<SlideCaptureSession | null>(null);
   const onCaptureRef = useRef(onCaptureImage);
+  // Uploads so far in this recording, across every auto-capture session.
+  const totalSlidesRef = useRef(0);
+  // False after unmount, so a picker that resolves later is stopped at once.
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     onCaptureRef.current = onCaptureImage;
   }, [onCaptureImage]);
-  useEffect(() => () => sessionRef.current?.stop(), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionRef.current?.stop();
+      sessionRef.current = null;
+    };
+  }, []);
 
   const ensureSupported = () => {
     if (supportsScreenCapture()) return true;
@@ -46,7 +60,8 @@ export function ScreenCaptureControls({ onCaptureImage, disabled }: ScreenCaptur
     if (!ensureSupported()) return;
     setBusy(true);
     try {
-      onCaptureRef.current?.(await captureScreenFrame());
+      const file = await captureScreenFrame();
+      if (mountedRef.current) onCaptureRef.current?.(file);
     } catch (err) {
       if (!(err instanceof ScreenCaptureCancelled)) {
         console.error('Screen capture failed:', err);
@@ -66,22 +81,40 @@ export function ScreenCaptureControls({ onCaptureImage, disabled }: ScreenCaptur
     setError(null);
     setNotice(null);
     if (!ensureSupported()) return;
+    const remaining = MAX_SLIDES_PER_RECORDING - totalSlidesRef.current;
+    if (remaining <= 0) {
+      setNotice(LIMIT_NOTICE);
+      return;
+    }
     setBusy(true);
     try {
-      const session = await startSlideCapture({
-        onSlide: (file, index) => {
-          setSlideCount(index);
-          onCaptureRef.current?.(file);
+      let ended = false;
+      const session = await startSlideCapture(
+        {
+          onSlide: (file) => {
+            totalSlidesRef.current += 1;
+            setSlideCount(totalSlidesRef.current);
+            onCaptureRef.current?.(file);
+          },
+          onEnd: (reason) => {
+            ended = true;
+            sessionRef.current = null;
+            if (!mountedRef.current) return;
+            setAutoActive(false);
+            if (reason === 'limit') setNotice(LIMIT_NOTICE);
+            if (reason === 'error') setError('슬라이드 캡처 중 오류가 발생해 멈췄습니다.');
+          },
         },
-        onEnd: (reason) => {
-          sessionRef.current = null;
-          setAutoActive(false);
-          if (reason === 'limit') setNotice('슬라이드 캡처 한도에 도달해 자동 캡처를 멈췄습니다.');
-          if (reason === 'error') setError('슬라이드 캡처 중 오류가 발생해 멈췄습니다.');
-        },
-      });
+        remaining,
+      );
+      if (!mountedRef.current) {
+        // Recording ended while the picker was open: never keep capturing.
+        session.stop();
+        return;
+      }
+      if (ended) return;
       sessionRef.current = session;
-      setSlideCount(0);
+      setSlideCount(totalSlidesRef.current);
       setAutoActive(true);
     } catch (err) {
       if (!(err instanceof ScreenCaptureCancelled)) {

@@ -114,7 +114,7 @@ export interface SlideCaptureSession {
  * the shown content changes and settles (see SlideChangeDetector). Must be
  * started from a user gesture.
  */
-export async function startSlideCapture(handlers: SlideCaptureHandlers): Promise<SlideCaptureSession> {
+export async function startSlideCapture(handlers: SlideCaptureHandlers, maxCaptures: number): Promise<SlideCaptureSession> {
   const stream = await openDisplayStream();
   let video: HTMLVideoElement;
   try {
@@ -124,7 +124,7 @@ export async function startSlideCapture(handlers: SlideCaptureHandlers): Promise
     throw err;
   }
 
-  const detector = new SlideChangeDetector();
+  const detector = new SlideChangeDetector({ maxCaptures });
   const sampler = document.createElement('canvas');
   sampler.width = GRID_W * SAMPLE_SCALE;
   sampler.height = GRID_H * SAMPLE_SCALE;

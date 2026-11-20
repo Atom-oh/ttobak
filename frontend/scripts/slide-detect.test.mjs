@@ -92,6 +92,12 @@ test('stops with limit once the cap is reached', () => {
   assert.deepEqual(out.filter((x) => x !== 'skip').slice(0, 2), ['new-slide', 'limit']);
 });
 
+test('the cap is reported on the very next sample, without waiting for a new slide', () => {
+  const d = new SlideChangeDetector({ maxCaptures: 1 });
+  const out = feed(d, repeat(slide(10), 4));
+  assert.deepEqual(out, ['skip', 'skip', 'new-slide', 'limit']);
+});
+
 test('signatureFromRgba averages pixels into grid cells', () => {
   const w = GRID_W * 2;
   const h = GRID_H * 2;

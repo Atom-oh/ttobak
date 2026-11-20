@@ -460,7 +460,8 @@ const (
 	PermissionEdit = "edit"
 )
 
-// Attachment type constants (per API spec: photo, screenshot, diagram, whiteboard, slide, document, video, audio_file)
+// Attachment type constants (per API spec: photo, screenshot, diagram, whiteboard, document, video, audio_file).
+// AttachTypeSlide is set only by process-image for slide auto-capture frames.
 const (
 	AttachTypePhoto      = "photo"
 	AttachTypeSlide      = "slide"

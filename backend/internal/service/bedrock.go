@@ -515,6 +515,10 @@ func alignLegacyTranscriptSegments(transcript string, segments []speakerSegment)
 // end of a generated note, so a re-summarize never appends them twice.
 const attachmentSentinel = "<!-- ttobak:attachments -->"
 
+// summarySnapshotCheckLimit mirrors the repository's publication bound: one
+// DynamoDB transaction holds at most 100 conditions.
+const summarySnapshotCheckLimit = 100
+
 // buildAttachmentLinkSections renders the machine-appended tail of a
 // generated note: `## 첨부 이미지` (inline image refs for processed
 // attachments) and `## 첨부 문서` (download links for document attachments).
@@ -767,19 +771,36 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 	if err != nil {
 		return "", err
 	}
-	for i := range attachments {
-		att := &attachments[i]
-		if att.SummaryOmitted || (att.ExtractedText == nil && att.ProcessedContent == "") {
-			continue
-		}
-		if err := s.repo.BindSummaryAttachment(ctx, snapshot, att); err != nil {
-			if !errors.Is(err, repository.ErrConditionFailed) {
-				return "", err
+	// Slide auto-capture can add hundreds of frames; each bound attachment is
+	// one snapshot condition. Bind other attachments first, then an evenly
+	// sampled subset of slides that fits the remaining condition budget.
+	others, slides := model.SplitSummarySlides(attachments, model.MaxSummarySlides)
+	bind := func(list []model.Attachment) error {
+		for i := range list {
+			att := &list[i]
+			if att.SummaryOmitted || (att.ExtractedText == nil && att.ProcessedContent == "") {
+				continue
 			}
-			att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
+			if err := s.repo.BindSummaryAttachment(ctx, snapshot, att); err != nil {
+				if !errors.Is(err, repository.ErrConditionFailed) {
+					return err
+				}
+				att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
+			}
 		}
+		return nil
 	}
-	if len(snapshot.Checks) > 100 {
+	if err := bind(others); err != nil {
+		return "", err
+	}
+	if budget := summarySnapshotCheckLimit - len(snapshot.Checks); len(slides) > budget {
+		_, slides = model.SplitSummarySlides(slides, budget)
+	}
+	if err := bind(slides); err != nil {
+		return "", err
+	}
+	attachments = append(others, slides...)
+	if len(snapshot.Checks) > summarySnapshotCheckLimit {
 		return "", repository.ErrSummaryLimit
 	}
 	if err := s.repo.CheckResummaryObjects(ctx, meetingID, snapshot.Objects); err != nil {
@@ -1660,7 +1681,7 @@ func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (
 	// Slide auto-capture frames are known presentation content; skip the
 	// classifier call and use the slide extraction prompt directly.
 	classification := model.AttachTypeSlide
-	if !IsSlideCaptureKey(key) {
+	if !model.IsSlideCaptureKey(key) {
 		classification, err = s.classifyImage(ctx, imageBase64, mediaType)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to classify image: %w", err)
@@ -1674,32 +1695,6 @@ func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (
 	}
 
 	return classification, analysis, nil
-}
-
-// SlideCaptureFilePrefix marks frames uploaded by the recording screen's
-// automatic slide capture. The prefix only selects an extraction prompt; it
-// grants no access and changes no storage rule.
-const SlideCaptureFilePrefix = "slide_"
-
-// IsSlideCaptureKey reports whether an image object key names an automatic
-// slide capture frame. Upload keys carry sanitizeFileName's millisecond
-// prefix, so the minted base name is "{digits}_slide_{rest}".
-func IsSlideCaptureKey(key string) bool {
-	base := key
-	if i := strings.LastIndex(key, "/"); i >= 0 {
-		base = key[i+1:]
-	}
-	sep := strings.IndexByte(base, '_')
-	if sep <= 0 {
-		return false
-	}
-	for _, r := range base[:sep] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	name := base[sep+1:]
-	return strings.HasPrefix(name, SlideCaptureFilePrefix) && len(name) > len(SlideCaptureFilePrefix)
 }
 
 // classifyImage determines the type of image

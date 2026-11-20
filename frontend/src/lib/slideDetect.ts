@@ -43,8 +43,11 @@ export const DEFAULT_SLIDE_DETECTOR_OPTIONS: SlideDetectorOptions = {
   minStaticFraction: 0.3,
   minContrast: 6,
   minGapMs: 3000,
-  maxCaptures: 300,
+  maxCaptures: 120,
 };
+
+/** Slide uploads allowed per recording, across every auto-capture session. */
+export const MAX_SLIDES_PER_RECORDING = 120;
 
 // Hyphenated so the icon-font scanner never reads a decision as an icon name.
 export type SlideDecision = 'new-slide' | 'skip' | 'limit';
@@ -117,6 +120,8 @@ export class SlideChangeDetector {
   /** Feeds one sample; returns 'new-slide' when it shows a new stable slide. */
   push(sig: Uint8Array, now: number): SlideDecision {
     if (sig.length !== GRID_CELLS) throw new Error('bad signature size');
+    // Report the cap on the next sample so the session ends right away.
+    if (this.captured.length >= this.opts.maxCaptures) return 'limit';
     const prev = this.prev;
     this.prev = sig;
     if (!prev) return 'skip';
@@ -148,7 +153,6 @@ export class SlideChangeDetector {
       }
     }
     if (now - this.lastCaptureAt < this.opts.minGapMs) return 'skip';
-    if (this.captured.length >= this.opts.maxCaptures) return 'limit';
 
     this.current = sig;
     this.captured.push(sig);

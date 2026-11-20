@@ -86,23 +86,6 @@ func TestImageCallsSendTerraMultimodalRequests(t *testing.T) {
 	}
 }
 
-func TestIsSlideCaptureKey(t *testing.T) {
-	for key, want := range map[string]bool{
-		"images/u/m/1700000000001_slide_001_1700000000000.jpg": true,
-		"1700000000001_slide_002.jpg":                          true,
-		"images/u/m/slide_001.jpg":                             false,
-		"images/u/m/1700000000001_slide_":                      false,
-		"images/u/m/1700000000001_screen_1.jpg":                false,
-		"images/u/1_slide_x/1700000000001_photo.jpg":           false,
-		"images/u/m/abc_slide_001.jpg":                         false,
-		"images/u/m/1700000000001_myslide_001.jpg":             false,
-	} {
-		if got := IsSlideCaptureKey(key); got != want {
-			t.Errorf("IsSlideCaptureKey(%q)=%v want %v", key, got, want)
-		}
-	}
-}
-
 func TestAnalyzeImageSlideCaptureSkipsClassifier(t *testing.T) {
 	t.Setenv("BEDROCK_IMAGE_MODEL_ID", "")
 	s3Client := s3.New(s3.Options{
