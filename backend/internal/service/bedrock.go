@@ -515,6 +515,10 @@ func alignLegacyTranscriptSegments(transcript string, segments []speakerSegment)
 // end of a generated note, so a re-summarize never appends them twice.
 const attachmentSentinel = "<!-- ttobak:attachments -->"
 
+// summarySnapshotCheckLimit mirrors the repository's publication bound: one
+// DynamoDB transaction holds at most 100 conditions.
+const summarySnapshotCheckLimit = 100
+
 // buildAttachmentLinkSections renders the machine-appended tail of a
 // generated note: `## 첨부 이미지` (inline image refs for processed
 // attachments) and `## 첨부 문서` (download links for document attachments).
@@ -619,6 +623,8 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 			if att.Type == model.AttachTypeDiagram {
 				label = "첨부 다이어그램"
 				hasDiagram = true
+			} else if att.Type == model.AttachTypeSlide {
+				label = "발표 슬라이드"
 			}
 			analyses.WriteString(fmt.Sprintf("\n### %s: %s\n%s\n", label, sanitizeMarkdownText(att.FileName), att.ProcessedContent))
 			continue
@@ -765,19 +771,36 @@ func (s *BedrockService) summarizeTranscript(ctx context.Context, meetingID, use
 	if err != nil {
 		return "", err
 	}
-	for i := range attachments {
-		att := &attachments[i]
-		if att.SummaryOmitted || (att.ExtractedText == nil && att.ProcessedContent == "") {
-			continue
-		}
-		if err := s.repo.BindSummaryAttachment(ctx, snapshot, att); err != nil {
-			if !errors.Is(err, repository.ErrConditionFailed) {
-				return "", err
+	// Slide auto-capture can add hundreds of frames; each bound attachment is
+	// one snapshot condition. Bind other attachments first, then an evenly
+	// sampled subset of slides that fits the remaining condition budget.
+	others, slides := model.SplitSummarySlides(attachments, model.MaxSummarySlides)
+	bind := func(list []model.Attachment) error {
+		for i := range list {
+			att := &list[i]
+			if att.SummaryOmitted || (att.ExtractedText == nil && att.ProcessedContent == "") {
+				continue
 			}
-			att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
+			if err := s.repo.BindSummaryAttachment(ctx, snapshot, att); err != nil {
+				if !errors.Is(err, repository.ErrConditionFailed) {
+					return err
+				}
+				att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
+			}
 		}
+		return nil
 	}
-	if len(snapshot.Checks) > 100 {
+	if err := bind(others); err != nil {
+		return "", err
+	}
+	if budget := summarySnapshotCheckLimit - len(snapshot.Checks); len(slides) > budget {
+		_, slides = model.SplitSummarySlides(slides, budget)
+	}
+	if err := bind(slides); err != nil {
+		return "", err
+	}
+	attachments = append(others, slides...)
+	if len(snapshot.Checks) > summarySnapshotCheckLimit {
 		return "", repository.ErrSummaryLimit
 	}
 	if err := s.repo.CheckResummaryObjects(ctx, meetingID, snapshot.Objects); err != nil {
@@ -1655,10 +1678,14 @@ func (s *BedrockService) AnalyzeImage(ctx context.Context, bucket, key string) (
 	// Encode image to base64
 	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
 
-	// First, classify the image
-	classification, err := s.classifyImage(ctx, imageBase64, mediaType)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to classify image: %w", err)
+	// Slide auto-capture frames are known presentation content; skip the
+	// classifier call and use the slide extraction prompt directly.
+	classification := model.AttachTypeSlide
+	if !model.IsSlideCaptureKey(key) {
+		classification, err = s.classifyImage(ctx, imageBase64, mediaType)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to classify image: %w", err)
+		}
 	}
 
 	// Then, analyze based on classification
@@ -1708,6 +1735,18 @@ Convert this architecture diagram into a Mermaid diagram format.
 Use appropriate Mermaid diagram types (flowchart, sequence, class, etc.) based on the content.
 Output ONLY the Mermaid code, wrapped in markdown code blocks with 'mermaid' language identifier.
 If you cannot accurately represent it in Mermaid, describe the architecture in structured text instead.`
+
+	case model.AttachTypeSlide:
+		systemPrompt = `You are reading a presentation slide captured from a shared meeting screen.
+Extract the slide content into clean Markdown:
+- The slide title as a heading
+- All visible text in reading order, preserving bullet structure and the original language
+- Tables as Markdown tables
+- Charts: chart type, title, axes and units, series, legible data values, and the main trend or comparison. Never invent values that are not legible.
+- Diagrams: components and their relationships as short structured text
+Ignore meeting-app chrome such as participant video tiles, names, toolbars and chat panels.
+If the image contains no presentation content (for example only participant videos), respond with exactly: (no slide content)
+Output only the Markdown.`
 
 	case model.AttachTypeWhiteboard:
 		systemPrompt = `You are an expert at reading handwritten content and whiteboard notes.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -50,6 +52,52 @@ func TestResummaryTranscriptUsesExactRefIfMatchAndChecksCurrentETag(t *testing.T
 		t.Fatal("cross-meeting source accepted")
 	}
 }
+func TestResummaryCaptureBoundsSlideRowsOutsideAttachmentLimit(t *testing.T) {
+	attachmentItem := func(id, key, kind string) string {
+		return fmt.Sprintf(`{"PK":{"S":"MEETING#meeting"},"SK":{"S":"ATTACH#%s"},"attachmentId":{"S":"%s"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"},"originalKey":{"S":"%s"},"type":{"S":"%s"},"status":{"S":"done"},"processedContent":{"S":"# text"},"createdAt":{"S":"2026-11-20T10:%02d:00Z"}}`, id, id, key, kind, len(id)%60)
+	}
+	capture := func(nonSlides, slides int) (*model.SummarySnapshot, error) {
+		var items []string
+		for i := 0; i < nonSlides; i++ {
+			items = append(items, attachmentItem(fmt.Sprintf("p%02d", i), fmt.Sprintf("images/owner/meeting/1_photo%02d.jpg", i), "photo"))
+		}
+		for i := 0; i < slides; i++ {
+			items = append(items, attachmentItem(fmt.Sprintf("s%03d", i), fmt.Sprintf("images/owner/meeting/1700000000000_slide_%03d.jpg", i), "slide"))
+		}
+		repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
+			raw, _ := io.ReadAll(req.Body)
+			if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".Query") {
+				if strings.Contains(string(raw), "ATTACH#") {
+					return summaryHTTPResponse(200, `{"Items":[`+strings.Join(items, ",")+`]}`, nil), nil
+				}
+				return summaryHTTPResponse(200, `{"Items":[]}`, nil), nil
+			}
+			return summaryHTTPResponse(200, `{"Item":{"PK":{"S":"USER#owner"},"SK":{"S":"MEETING#meeting"},"meetingId":{"S":"meeting"},"userId":{"S":"owner"},"status":{"S":"done"},"content":{"S":"saved"}}}`, nil), nil
+		})
+		return repo.CaptureResummary(context.Background(), "owner", "meeting", "owner")
+	}
+
+	snapshot, err := capture(3, 120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slides := 0
+	for _, att := range snapshot.Attachments {
+		if att.Type == model.AttachTypeSlide {
+			slides++
+		}
+	}
+	if len(snapshot.Attachments) != 3+slides || slides != model.MaxSummarySlides {
+		t.Fatalf("attachments=%d slides=%d", len(snapshot.Attachments), slides)
+	}
+	if len(snapshot.Checks) > resummaryMaxCaptureChecks {
+		t.Fatalf("checks=%d", len(snapshot.Checks))
+	}
+	if _, err := capture(resummaryMaxAttachmentRows+1, 0); !errors.Is(err, ErrSummaryLimit) {
+		t.Fatalf("non-slide bound lost: %v", err)
+	}
+}
+
 func TestResummaryCaptureUsesStrongMetadataAndExactEditGrant(t *testing.T) {
 	gets, queries := 0, 0
 	repo := summarySDKRepo(func(req *http.Request) (*http.Response, error) {
