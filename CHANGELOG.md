@@ -26,6 +26,7 @@ manifests.
 
 ### Fixed
 
+- Live Q&A: question detection during a recording returned nothing when the model's reasoning used up the output limit, so only the three generic prompts showed and automatic answers never started. Reasoning is now off for detection, and it adds follow-up questions when few were asked.
 - Local intake: SFDC contacts no longer fail with PARSE_FAILED when AWSentral ends an account with fewer contacts than its total; that account counts as incomplete (no departure inferred) and the step succeeds.
 - Local intake reads SpecReq again: a tool result that spec-req-mcp 0.1.5 nests inside its text block is unwrapped once, so the SpecReq login check no longer fails with IDENTITY_MISMATCH.
 - The SA performance report can save small tool results in its output folder again: its write permission is an `Edit(...)` rule, the only form Claude Code applies to file writes.

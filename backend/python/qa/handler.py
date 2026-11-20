@@ -53,6 +53,8 @@ TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_ID = os.environ.get('KB_ID', 'BJJLVLFTOR')
 BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-sonnet-5-5')
 DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'global.anthropic.claude-haiku-5-5')
+# Five questions of 200 characters fit several times over.
+DETECT_MAX_TOKENS = 2048
 
 MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
 # Only old cached meeting identities are read for migration compatibility.
@@ -1562,8 +1564,13 @@ def handle_detect_questions(body):
                 {'role': 'user', 'content': [{'text': user_content}]}
             ],
             # no temperature: Claude 5.x models reject it (ValidationException)
-            inferenceConfig={'maxTokens': 1024},
+            inferenceConfig={'maxTokens': DETECT_MAX_TOKENS},
+            # Reasoning shares the output budget: left on, it regularly used
+            # the whole limit and the answer came back empty (no questions).
+            additionalModelRequestFields={'thinking': {'type': 'disabled'}},
         )
+        if resp.get('stopReason') == 'max_tokens':
+            logger.warning('Question detection output was cut at the token limit')
 
         answer = ''
         for block in resp.get('output', {}).get('message', {}).get('content', []):
