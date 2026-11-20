@@ -105,7 +105,7 @@ export async function setup(args: string[], environment: IntakeEnvironment, stor
   let sync: RunOutput['results'] | undefined;
   let schedule = 'none';
   const stop = (code: IntakeCode, message: string) => {
-    if (code === 'AUTH_EXPIRED_MIDWAY') say('Midway 인증이 만료되었습니다. 터미널에서 `mwinit -o`를 실행한 뒤 다시 시도하세요.');
+    if (code === 'AUTH_EXPIRED_MIDWAY') say('Midway 인증이 만료되었습니다. 터미널에서 `mwinit -f`를 실행한 뒤 다시 시도하세요.');
     return { ok: false, code, message, connectors, dryRun, synced, schedule, ...(sync ? { sync } : {}) };
   };
 

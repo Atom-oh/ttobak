@@ -112,7 +112,7 @@ Codes shown in the app, and what to do:
 
 | Code | What to do |
 |---|---|
-| `AUTH_EXPIRED_MIDWAY` | Run `mwinit -o` in a terminal, then collect again. |
+| `AUTH_EXPIRED_MIDWAY` | Run `mwinit -f` in a terminal, then collect again. |
 | `TTOBAK_LOGIN_REQUIRED` | Use the login button. |
 | `RUN_IN_PROGRESS` | Wait for the current run, or cancel it. |
 | `PARTIAL_FAILURE` | Some sources updated; the dashboard reloads. Check the per-source status. |
@@ -157,7 +157,7 @@ name. Server lists are unioned.
 - Without toolbox, aim or claude the work they would do is listed under
   `TOOLBOX_MISSING` (the step is skipped when nothing else ran); a
   missing `~/.midway/cookie` or an authentication failure stops it with
-  `AUTH_EXPIRED_MIDWAY` (`mwinit -o`). Nothing from a package is executed, and
+  `AUTH_EXPIRED_MIDWAY` (`mwinit -f`). Nothing from a package is executed, and
   installed skills or servers are never removed.
 - A report skill whose data-sources name tools the report run does not allow
   produces a warning; the allowlist changes only by code review (ADR-023).
@@ -210,7 +210,7 @@ intake login
    `--yes` alone. Otherwise it is skipped with
    `SENSITIVITY_UNKNOWN`.
 4. `AUTH_EXPIRED_MIDWAY` during a check, dry run or sync stops setup: run
-   `mwinit -o` and rerun. A stop during the checks leaves the saved selection
+   `mwinit -f` and rerun. A stop during the checks leaves the saved selection
    as it was before setup.
 5. Dry-runs the calendar and SFDC connectors selected now and reports the
    counts. Then it asks whether to run the first sync (`--yes` runs it).
@@ -350,7 +350,7 @@ message on save; update the adapter first.
   (events in the window, sent or unchanged), `attendeesUnavailable` and
   `directoryUnavailable` (boolean).
 - **Errors.**
-  - `AUTH_EXPIRED_MIDWAY`: run `mwinit -o`.
+  - `AUTH_EXPIRED_MIDWAY`: run `mwinit -f`.
   - Also `SERVER_START_FAILED`, `SCHEMA_CHANGED`, `PARSE_FAILED`, `LOCKED`
     (another run holds `calendar.lock`) and `TTOBAK_*`. A lock whose process
     is gone is replaced by one run at a time; if the PID was reused by an
@@ -853,7 +853,7 @@ own Slack MCP server and uploads only the public links in them (copy key
 | `SOURCE_TOO_LARGE` | The channel has too many new messages to read in one run even after narrowing. Nothing was uploaded and the cursor is unchanged. |
 | `SOURCE_ERROR` | The channel could not be read (for example, it was left or archived). |
 | `SCHEMA_CHANGED` | The Slack server lacks `list_my_channels` or `get_messages` or returned an unexpected shape. |
-| `AUTH_EXPIRED_MIDWAY` | Stops the whole run; run `mwinit -o`. |
+| `AUTH_EXPIRED_MIDWAY` | Stops the whole run; run `mwinit -f`. |
 | `TTOBAK_CONFLICT` / `TTOBAK_REJECTED` | The channel's TTOBAK source is gone (for example deleted on the web settings page) or refused the batch. The channel fails on every run until the channels are saved again (`intake links select` or the Mac app's save), which registers a missing source again; a re-registered channel starts a new first collection. No UI pauses a Slack source. |
 | `TTOBAK_UNAVAILABLE` | A temporary upload failure; the cursor stays and the next run retries. |
 | `PARTIAL_FAILURE` | Some channels failed with different codes (or some succeeded). |

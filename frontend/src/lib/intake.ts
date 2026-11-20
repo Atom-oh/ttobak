@@ -17,7 +17,7 @@ export const INTAKE_COPY = {
 } as const;
 
 const CODE_LABELS: Record<string, string> = {
-  AUTH_EXPIRED_MIDWAY: 'Midway 인증이 만료됐어요. 터미널에서 `mwinit -o`를 실행한 뒤 다시 시도하세요.',
+  AUTH_EXPIRED_MIDWAY: 'Midway 인증이 만료됐어요. 터미널에서 `mwinit -f`를 실행한 뒤 다시 시도하세요.',
   TTOBAK_LOGIN_REQUIRED: 'TTOBAK 로그인이 필요해요.',
   RUN_IN_PROGRESS: '이미 수집 중이에요.',
   PARTIAL_FAILURE: '일부 소스만 수집됐어요.',

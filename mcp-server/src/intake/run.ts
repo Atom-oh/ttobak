@@ -862,7 +862,7 @@ export async function runConnectors(options: { dryRun: boolean; noninteractive: 
       if (failure === 'AUTH_EXPIRED_MIDWAY') { code = failure; break; }
     }
   }
-  return code ? { ok: false, code, message: code === 'AUTH_EXPIRED_MIDWAY' ? 'run mwinit -o, then retry' : 'a connector failed',
+  return code ? { ok: false, code, message: code === 'AUTH_EXPIRED_MIDWAY' ? 'run mwinit -f, then retry' : 'a connector failed',
     results } : { ok: true, results };
 }
 

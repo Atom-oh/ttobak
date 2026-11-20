@@ -18,7 +18,7 @@ const intake = loadModule('lib/intake.ts');
 const plain = value => JSON.parse(JSON.stringify(value));
 
 test('code labels use the fixed Korean copy', () => {
-  assert.equal(intake.intakeCodeLabel('AUTH_EXPIRED_MIDWAY'), 'Midway 인증이 만료됐어요. 터미널에서 `mwinit -o`를 실행한 뒤 다시 시도하세요.');
+  assert.equal(intake.intakeCodeLabel('AUTH_EXPIRED_MIDWAY'), 'Midway 인증이 만료됐어요. 터미널에서 `mwinit -f`를 실행한 뒤 다시 시도하세요.');
   assert.equal(intake.intakeCodeLabel('TTOBAK_LOGIN_REQUIRED'), 'TTOBAK 로그인이 필요해요.');
   assert.equal(intake.intakeCodeLabel('RUN_IN_PROGRESS'), '이미 수집 중이에요.');
   assert.equal(intake.intakeCodeLabel('PARTIAL_FAILURE'), '일부 소스만 수집됐어요.');
@@ -242,7 +242,7 @@ test('one-click setup steps and statuses have fixed copy', () => {
   assert.deepEqual(['ok', 'current', 'skipped', 'failed', 'needs-approval'].map(status => intake.setupStatusLabel(status)),
     [copy.statusOk, copy.statusCurrent, copy.statusSkipped, copy.statusFailed, copy.statusNeedsApproval]);
   assert.equal(intake.setupCodeText('TOOLBOX_MISSING'), copy.toolboxMissing);
-  assert.ok(intake.setupCodeText('AUTH_EXPIRED_MIDWAY').includes('mwinit -o'));
+  assert.ok(intake.setupCodeText('AUTH_EXPIRED_MIDWAY').includes('mwinit -f'));
   assert.ok(/[가-힣]/.test(intake.setupCodeText('ADAPTER_OUTDATED')));
   assert.ok(/[가-힣]/.test(intake.setupCodeText('SKILL_PATH_UNSAFE')));
   assert.equal(intake.setupCodeText('CANCELLED'), '취소했어요.');

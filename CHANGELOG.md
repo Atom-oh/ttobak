@@ -19,6 +19,7 @@ manifests.
 
 ### Changed
 
+- Local intake: the expired Midway sign-in message, the setup output and the guides now say to run `mwinit -f` (was `mwinit -o`).
 - MCP sign-in: Cognito now accepts local MCP callbacks on ports 9876-9879, so Claude Code, Codex or Kiro can switch to an alternate callback port when 9876 is busy. All registered callbacks stay on localhost.
 
 ### Fixed
