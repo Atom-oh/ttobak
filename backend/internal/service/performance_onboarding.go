@@ -181,7 +181,8 @@ func (svc *PerformanceService) onboardingDetail(ctx context.Context, userID stri
 
 // ListOnboarding summarizes the core roles of each assigned SFDC account
 // whose mapping target the owner can read. At most
-// performanceOnboardingMaxAccounts Accounts are read; Truncated reports more.
+// performanceOnboardingMaxAccounts Accounts are read; Truncated reports more,
+// and Unavailable counts those whose read failed.
 func (svc *PerformanceService) ListOnboarding(ctx context.Context, userID string) (*model.OnboardingSummary, error) {
 	if !performanceUserPattern.MatchString(userID) {
 		return nil, ErrForbidden
@@ -216,7 +217,12 @@ func (svc *PerformanceService) ListOnboarding(ctx context.Context, userID string
 		read++
 		detail, err := svc.onboardingDetail(ctx, userID, assignment, accountID)
 		if err != nil {
-			return nil, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			// One failed Account must not hide the others; the count is shown.
+			summary.Unavailable++
+			continue
 		}
 		if !detail.AccountReadable {
 			continue

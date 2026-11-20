@@ -28983,11 +28983,12 @@ function planSfdc(registry3, tasks, ledgers, now) {
     }
   };
 }
-async function readAll(source, tool, args) {
+async function readAll(source, tool, args, shouldStop) {
   const records2 = [];
   const seen = /* @__PURE__ */ new Set();
   let after;
   for (let index = 0; index < MAX_PAGES2; index++) {
+    if (index > 0 && shouldStop?.()) throw new ReadStopped(tool);
     const page2 = parsePage(await source.call(tool, { ...args, limit: PAGE_LIMIT2, ...after ? { after } : {} }), tool);
     for (const { id } of page2.records) {
       if (typeof id === "string" && seen.size === seen.add(id).size) throw parseFailed(`${tool} repeated a record ID`);
@@ -29183,7 +29184,7 @@ function plannedAssignmentIds(registry3, tasks, now) {
   }
   return [...ids].sort();
 }
-var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_CONTACTS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT2, MAX_ASSIGNMENTS, MAX_PAGES2, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY;
+var SFDC_PERSONAL_TOOL, SFDC_REGISTRY_TOOL, SFDC_TASKS_TOOL, SFDC_CONTACTS_TOOL, SFDC_TOOLS, ACTIVITY_ROLE, SOURCES, PAGE_LIMIT2, MAX_ASSIGNMENTS, MAX_PAGES2, ID, ALIAS, NAME_BYTES, SUBJECT_BYTES, LABEL_BYTES, SALES_HIERARCHY, ReadStopped;
 var init_sfdc = __esm({
   "src/intake/sfdc.ts"() {
     "use strict";
@@ -29209,6 +29210,11 @@ var init_sfdc = __esm({
     SUBJECT_BYTES = 300;
     LABEL_BYTES = 64;
     SALES_HIERARCHY = /^sales\/(\d{4}-\d{2}-\d{2})$/;
+    ReadStopped = class extends Error {
+      constructor(tool) {
+        super(`${tool} read stopped at the run deadline`);
+      }
+    };
   }
 });
 
@@ -29863,17 +29869,25 @@ async function runSfdcTeam(options2) {
     }
   }
   let last = null;
+  const outOfTime = () => clock() - started > SFDC_TEAM_BUDGET_MS || options2.deadline !== void 0 && clock() >= options2.deadline;
   for (const accountId of rotatedAccounts(options2.accountIds, after)) {
-    if (clock() - started > SFDC_TEAM_BUDGET_MS || options2.deadline !== void 0 && clock() >= options2.deadline) {
+    if (outOfTime()) {
       kept.add(accountId);
       counts.skippedBudget++;
       continue;
     }
+    const previous = last;
     last = accountId;
     let records2;
     try {
-      records2 = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: "Account", id: accountId });
+      records2 = await readAll(session, SFDC_TEAM_TOOL.name, { memberType: "Account", id: accountId }, outOfTime);
     } catch (error3) {
+      if (error3 instanceof ReadStopped) {
+        last = previous;
+        kept.add(accountId);
+        counts.skippedBudget++;
+        continue;
+      }
       const code = intakeCode(error3);
       if (code === "AUTH_EXPIRED_MIDWAY") throw error3;
       kept.add(accountId);
@@ -29902,7 +29916,7 @@ async function runSfdcTeam(options2) {
   counts.unchanged = planned.unchanged;
   if (!dryRun && state) {
     await deliver(options2.api, store, state, planned.plan);
-    const point = { version: 1, after: counts.skippedBudget ? last : null };
+    const point = { version: 1, after: counts.skippedBudget ? last ?? after : null };
     store.write(point, ...resumePath2(sourceId, options2.scope));
   }
   const result = failures.length === 0 ? "ok" : failures.every((code) => code === failures[0]) && counts.accounts === 0 ? failures[0] : "PARTIAL_FAILURE";

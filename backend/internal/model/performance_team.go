@@ -122,6 +122,10 @@ type OnboardingSummaryItem struct {
 type OnboardingSummary struct {
 	Items     []OnboardingSummaryItem `json:"items"`
 	Truncated bool                    `json:"truncated"`
+
+	// Unavailable counts mapped Accounts whose read failed; they are left out
+	// of Items instead of failing the whole summary.
+	Unavailable int `json:"unavailable"`
 }
 
 // PrefixPerformanceInvite keys the owner's private record of invitations sent
