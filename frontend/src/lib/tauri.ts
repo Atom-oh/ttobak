@@ -163,10 +163,37 @@ export interface TauriUploadProgress {
   total: number;
 }
 
+/** Sent in place of a device UID: system audio only, no microphone. */
+export const NO_MICROPHONE = 'none';
+
+/** Shown when "no microphone" is chosen on an app build that would capture one anyway. */
+export const NO_MICROPHONE_SKEW_MESSAGE =
+  '설치된 Mac 앱 버전은 마이크 없이 듣기를 지원하지 않습니다 — 앱을 업데이트하거나 다른 마이크를 골라주세요.';
+
+/** Whether the installed app can capture with no microphone; false on a
+ * build without the `capture_features` command. */
+export async function nativeNoMicrophoneSupported(): Promise<boolean> {
+  try {
+    const features = await invoke<{ noMicrophone?: boolean }>('capture_features');
+    return features?.noMicrophone === true;
+  } catch {
+    return false;
+  }
+}
+
+/** An older build treats `none` as a missing device and captures a
+ * microphone, so the start is refused before any capture begins. */
+async function assertInputSupported(inputDeviceUid?: string): Promise<void> {
+  if (inputDeviceUid !== NO_MICROPHONE) return;
+  if (!(await nativeNoMicrophoneSupported())) throw new Error(NO_MICROPHONE_SKEW_MESSAGE);
+}
+
 /** `inputDeviceUid` from `listNativeInputDevices`; omit to follow the
  * meeting app's microphone, else the system default (ADR-017). Older app
- * builds ignore it and record the system default. */
-export function startNativeRecording(meetingId: string, inputDeviceUid?: string): Promise<TauriStartResponse> {
+ * builds ignore it and record the system default. `NO_MICROPHONE` captures
+ * system audio only and rejects on a build that cannot. */
+export async function startNativeRecording(meetingId: string, inputDeviceUid?: string): Promise<TauriStartResponse> {
+  await assertInputSupported(inputDeviceUid);
   return invoke<TauriStartResponse>('start_recording', { meetingId, inputDeviceUid: inputDeviceUid || null });
 }
 
@@ -236,7 +263,8 @@ export interface NativeListenStop {
  * written to disk and no meeting is involved. Rejects while a recording is
  * running. `inputDeviceUid` as in `startNativeRecording`.
  */
-export function startNativeListening(inputDeviceUid?: string): Promise<NativeListenStart> {
+export async function startNativeListening(inputDeviceUid?: string): Promise<NativeListenStart> {
+  await assertInputSupported(inputDeviceUid);
   return invoke<NativeListenStart>('start_listening', { inputDeviceUid: inputDeviceUid || null });
 }
 
