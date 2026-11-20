@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { listNativeInputDevices, type NativeInputDevice } from '@/lib/tauri';
+import { NO_MICROPHONE, listNativeInputDevices, nativeNoMicrophoneSupported, type NativeInputDevice } from '@/lib/tauri';
 
 /** Per-viewer convenience: the last microphone picked in the Mac app. */
 const STORAGE_KEY = 'ttobak.nativeInputDevice';
@@ -31,14 +31,33 @@ interface NativeMicSelectorProps {
   errorId?: string;
   /** `listen` words the control for live interpretation, where nothing is recorded. */
   mode?: 'record' | 'listen';
+  /** Offer "no microphone". Off while capturing: the app cannot drop the microphone mid-capture. */
+  allowNone?: boolean;
 }
 
 /** Mac app System Audio mode: which microphone to mix with system audio
  * (ADR-017). "Automatic" follows the meeting app's microphone, so the
  * recording hears what Zoom/Teams/Meet hears. Hidden on app builds without
  * the device list. */
-export function NativeMicSelector({ value, onChange, disabled, errorId, mode = 'record' }: NativeMicSelectorProps) {
+export function NativeMicSelector({ value, onChange, disabled, errorId, mode = 'record', allowNone = true }: NativeMicSelectorProps) {
   const [devices, setDevices] = useState<NativeInputDevice[] | null>(null);
+  // Offered only once the installed app says it can capture without a
+  // microphone: an older build would capture one anyway.
+  const [noMicSupported, setNoMicSupported] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void nativeNoMicrophoneSupported().then((ok) => {
+      if (!cancelled) setNoMicSupported(ok);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // A remembered "no microphone" on a build that cannot do it returns to automatic.
+  useEffect(() => {
+    // Only before a capture: during one, `onChange` switches the microphone.
+    if (allowNone && noMicSupported === false && value === NO_MICROPHONE) onChange('');
+  }, [allowNone, noMicSupported, value, onChange]);
 
   useEffect(() => {
     if (disabled) return;
@@ -69,7 +88,8 @@ export function NativeMicSelector({ value, onChange, disabled, errorId, mode = '
     : defaultDevice
       ? `회의 앱이 없으면 기본 입력 → ${defaultDevice.name}`
       : '회의 앱의 마이크를 따라갑니다';
-  const selectedMissing = value !== '' && !devices.some((d) => d.uid === value);
+  const none = value === NO_MICROPHONE;
+  const selectedMissing = value !== '' && !none && !devices.some((d) => d.uid === value);
 
   const select = (uid: string) => {
     saveNativeInputPreference(uid);
@@ -91,6 +111,7 @@ export function NativeMicSelector({ value, onChange, disabled, errorId, mode = '
         className="min-h-10 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface px-3 text-sm text-slate-900 dark:text-text-main disabled:opacity-60"
       >
         <option value="">자동 — 회의 앱 마이크 따라가기</option>
+        {noMicSupported === true && (allowNone || none) && <option value={NO_MICROPHONE}>마이크 없이 — Mac에서 나는 소리만</option>}
         {shown.map((d) => {
           const notes = [d.used_by.length ? `${d.used_by.join(', ')} 사용 중` : '', d.is_default ? '기본' : '']
             .filter(Boolean)
@@ -103,7 +124,9 @@ export function NativeMicSelector({ value, onChange, disabled, errorId, mode = '
         })}
       </select>
       <p className="text-xs text-slate-500 dark:text-text-muted">
-        {value === '' || selectedMissing ? autoTarget : mode === 'listen' ? '선택한 마이크를 시스템 소리와 함께 듣습니다.' : '선택한 마이크를 시스템 소리와 함께 녹음합니다.'}
+        {none
+          ? `마이크 없이 Mac에서 나는 소리(Zoom 등)만 ${mode === 'listen' ? '듣습니다' : '녹음합니다'}. 내 목소리와 주변 소리는 들어가지 않아요.`
+          : value === '' || selectedMissing ? autoTarget : mode === 'listen' ? '선택한 마이크를 시스템 소리와 함께 듣습니다.' : '선택한 마이크를 시스템 소리와 함께 녹음합니다.'}
         {selectedMissing && ' (이전에 선택한 마이크가 연결되어 있지 않아 자동으로 고릅니다)'}
       </p>
     </div>

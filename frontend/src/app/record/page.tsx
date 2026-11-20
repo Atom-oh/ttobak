@@ -1611,7 +1611,7 @@ function RecordPageInner() {
         )}
         {audioSource === 'system' && isNativeRecording && nativeCanSwitch && (
           <div className="mb-4 flex flex-col gap-1">
-            <NativeMicSelector value={nativeInputUid} onChange={switchNativeMic} disabled={micSwitch.busy}
+            <NativeMicSelector value={nativeInputUid} onChange={switchNativeMic} disabled={micSwitch.busy} allowNone={false}
               errorId={micSwitch.error ? 'native-mic-switch-error' : undefined} />
             <p role="status" aria-live="polite" className="text-xl leading-relaxed">
               {micSwitch.busy ? '마이크를 바꾸는 중입니다.' : ''}

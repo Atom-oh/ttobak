@@ -195,3 +195,54 @@ test('the wake retry timer is cleared with the page and rechecks the failed uplo
   // The state is read when the timer fires, not when the wake arrives.
   assert.ok(effect.indexOf('setTimeout(') < effect.indexOf('wakeRetryRef.current'));
 });
+
+function loadBridge(invoke) {
+  const source = readFileSync(new URL('../src/lib/tauri.ts', import.meta.url), 'utf8');
+  return load(source, { window: { __TAURI__: { core: { invoke } } } }, { react: { useSyncExternalStore: () => undefined } });
+}
+
+test('"no microphone" never starts a capture on an app build that cannot do it', async () => {
+  const calls = [];
+  const old = loadBridge(async (cmd, args) => {
+    calls.push(cmd);
+    if (cmd === 'capture_features') throw new Error('Command capture_features not found');
+    return { temp_path: '/tmp/x.wav', input: { uid: 'builtin', name: 'MacBook', reason: 'default' }, args };
+  });
+  await assert.rejects(old.startNativeListening(old.NO_MICROPHONE), (err) => err.message === old.NO_MICROPHONE_SKEW_MESSAGE);
+  await assert.rejects(old.startNativeRecording('m1', old.NO_MICROPHONE), (err) => err.message === old.NO_MICROPHONE_SKEW_MESSAGE);
+  assert.deepEqual(calls, ['capture_features', 'capture_features'], 'no start command was sent');
+  // Other choices do not ask.
+  await old.startNativeListening('builtin');
+  await old.startNativeRecording('m1');
+  assert.deepEqual(calls.slice(2), ['start_listening', 'start_recording']);
+
+  const sent = [];
+  const current = loadBridge(async (cmd, args) => {
+    sent.push([cmd, args]);
+    return cmd === 'capture_features' ? { noMicrophone: true } : {};
+  });
+  await current.startNativeListening(current.NO_MICROPHONE);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [['capture_features', null], ['start_listening', { inputDeviceUid: 'none' }]]);
+  const odd = loadBridge(async () => ({ noMicrophone: 'yes' }));
+  assert.equal(await odd.nativeNoMicrophoneSupported(), false);
+});
+
+function renderSelector(supported, props) {
+  const source = readFileSync(new URL('../src/components/record/NativeMicSelector.tsx', import.meta.url), 'utf8');
+  const states = [[{ uid: 'input', name: 'Microphone', is_default: true, used_by: [] }], supported];
+  let at = 0;
+  const { NativeMicSelector } = load(source, {}, {
+    react: { useState: () => [states[at++ % states.length], () => {}], useEffect: () => {} },
+    '@/lib/tauri': { NO_MICROPHONE: 'none', listNativeInputDevices: async () => [], nativeNoMicrophoneSupported: async () => supported },
+  });
+  return renderToStaticMarkup(React.createElement(NativeMicSelector, { value: '', onChange: () => {}, ...props }));
+}
+
+test('the picker offers "no microphone" only when the app supports it and no capture runs', () => {
+  assert.match(renderSelector(true, {}), /<option value="none">마이크 없이/);
+  assert.doesNotMatch(renderSelector(false, {}), /value="none"/);
+  assert.doesNotMatch(renderSelector(null, {}), /value="none"/, 'not before the app answered');
+  assert.doesNotMatch(renderSelector(true, { allowNone: false }), /value="none"/);
+  assert.match(renderSelector(true, { allowNone: false, value: 'none' }), /value="none"/, 'the running choice stays visible');
+  assert.match(page, /onChange=\{switchNativeMic\}[^>]*allowNone=\{false\}/);
+});
