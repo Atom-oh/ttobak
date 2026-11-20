@@ -125,7 +125,11 @@ test('a failed final clears the line that showed its draft', async () => {
   });
   controller.setLanguages(['en']);
   controller.update('u1', '안녕하세요 여러분', false, 'ko-KR');
+  // Drafts are translated after the caption window's wait, not sooner.
   await new Promise((resolve) => setTimeout(resolve, 600));
+  await flush();
+  assert.equal(entryPushes(pushes, 'en').length, 0, 'no translated draft before the wait is over');
+  await new Promise((resolve) => setTimeout(resolve, 700));
   await flush();
   assert.equal(entryPushes(pushes, 'en').at(-1).text, '[en] 안녕하세요 여러분');
   fail = true;

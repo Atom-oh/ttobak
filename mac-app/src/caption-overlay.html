@@ -44,7 +44,10 @@
         display: flex;
         flex-direction: column;
         justify-content: flex-end;
-        align-items: center;
+        /* Left-aligned: a growing draft only adds words at its end, so the
+           words already read stay where they are. Centred text moved every
+           word on each update. */
+        align-items: flex-start;
         overflow: hidden;
       }
       /* Hover chrome: shown only while the pointer is over the window (or a
@@ -126,14 +129,13 @@
       .line {
         max-width: 100%;
         margin: 0;
-        text-align: center;
+        text-align: left;
         white-space: pre-wrap;
         /* Break between words (Korean: between eojeol), and inside a word
            only when it is wider than the window. */
         word-break: keep-all;
         overflow-wrap: anywhere;
-        /* Lines of one caption get similar lengths instead of a lone last word. */
-        text-wrap-style: balance;
+        /* No line balancing: it re-breaks every line whenever a word arrives. */
         font-family: var(--font);
         font-size: var(--size);
         line-height: 1.25;

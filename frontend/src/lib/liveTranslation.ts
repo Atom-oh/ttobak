@@ -65,6 +65,11 @@ interface TranslationOptions {
    * revision is a billed request, while finals alone keep the cost bounded.
    */
   interim?: boolean;
+  /**
+   * Wait before a partial is translated (default 500 ms). A new translation
+   * rewrites the whole draft line, so a longer wait changes it less often.
+   */
+  interimDelayMs?: number;
   onUpdate: (entry: TranslationEntry) => void;
   onReset: () => void;
   translate: (
@@ -239,7 +244,7 @@ export class LiveTranslation {
       const segment = this.interim;
       if (!segment || segment.entry.isFinal) return;
       void this.translate(segment, false);
-    }, 500);
+    }, this.options.interimDelayMs ?? 500);
   }
 
   private drainFinals(): void {

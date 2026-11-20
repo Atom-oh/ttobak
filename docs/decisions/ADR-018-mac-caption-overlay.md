@@ -95,9 +95,13 @@ read, the slide text goes to the model on the user's own AWS profile, and a term
 that also is an everyday word can be applied where it does not belong.
 
 **Line breaking.** Caption lines break between words (`word-break: keep-all`, so
-Korean breaks between eojeol), inside a word only when it is wider than the window,
-and balance their line lengths (`text-wrap-style: balance`, ignored by a WebKit that
-lacks it). Japanese and Chinese windows keep normal breaking.
+Korean breaks between eojeol) and inside a word only when it is wider than the window.
+Japanese and Chinese windows keep normal breaking. Lines are left-aligned and not
+balanced: a draft grows several times a second, and centred or balanced text moved
+every word already read on each update, while left-aligned greedy wrapping only adds
+words at the end. For the same reason a caption window waits 1.2 s
+(`CAPTION_INTERIM_DELAY_MS`) before translating a draft, since each translated draft
+replaces its whole line; finals are not delayed.
 
 **Idle and failure display.** A failed translation pushes that entry's id with empty
 text, which removes its line, so expired credentials mid-sentence never leave a stale
